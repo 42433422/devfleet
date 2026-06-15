@@ -47,6 +47,14 @@ export const TOOL_RUNTIME_LABELS: Record<ToolRuntimeStatus, string> = {
   started: '已启动',
 };
 
+/** 未安装时的提示（不依赖下载链接，用户自行安装即可） */
+export const TOOL_INSTALL_HINTS: Record<DevTool, string> = {
+  trae: '请在本机安装 Trae 并确保可从应用目录或 PATH 启动',
+  codex: '请安装 Codex CLI 并执行 codex login',
+  cursor: '请安装 Cursor 或 Cursor Agent CLI（agent login）',
+  claude_code: '请安装 Claude Code CLI 或桌面客户端',
+};
+
 export function normalizeToolRuntimeStatus(status: string): ToolRuntimeStatus {
   if (status === 'not_installed') return 'not_installed';
   if (status === 'running') return 'started';

@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { db, type SubTask } from '../db/store.js';
 import { authMiddleware } from '../middleware/auth.js';
-import { splitTaskIntoSubs, branchNameFromTask, normalizeDevTool, selectExecutionDevices, type DevTool } from '../lib/utils.js';
+import { splitTaskIntoSubs, branchNameFromTask, normalizeDevTool, selectExecutionDevices } from '../lib/utils.js';
 import { broadcast, hasDevice, sendToDevice } from '../websocket/manager.js';
 
 const router = Router();
@@ -96,11 +96,12 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
   };
   const title = (body.title || '').trim() || '开发任务';
   const description = (body.description || '').trim() || '完成开发';
-  const repo_url = (body.repo_url || '').trim() || '';
+  const repo_url = (body.repo_url || '').trim();
+
   const branch = (body.branch || 'main').trim() || 'main';
 
-  if (!repo_url || !(repo_url.startsWith('https://') || repo_url.startsWith('http://') || repo_url.startsWith('git@'))) {
-    res.status(400).json({ error: '请提供设备可访问且有推送权限的 Git 仓库地址' });
+  if (repo_url && !(repo_url.startsWith('https://') || repo_url.startsWith('http://') || repo_url.startsWith('git@'))) {
+    res.status(400).json({ error: '仓库地址必须是 HTTP(S) 或 SSH Git 地址，或留空使用工作设备本地目录' });
     return;
   }
 
@@ -113,30 +114,6 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
   }
 
   const executionDevices = selectExecutionDevices(onlineDevices);
-  const missingExecutor = executionDevices.filter((device) => {
-    const tools = db.tools.findAllByDeviceId(device.id);
-    if (tools.length === 0) return false;
-    const devTool = normalizeDevTool(device.dev_tool) as DevTool;
-    if (devTool === 'cursor') {
-      const cursor = tools.find((tool) => tool.tool_name === 'cursor');
-      return !cursor || cursor.status === 'not_installed';
-    }
-    const codex = tools.find((tool) => tool.tool_name === 'codex');
-    return !codex || codex.status === 'not_installed';
-  });
-  if (missingExecutor.length > 0) {
-    const detail = missingExecutor
-      .map((device) => {
-        const devTool = normalizeDevTool(device.dev_tool);
-        const need = devTool === 'cursor' ? 'Cursor Agent CLI（agent login）' : 'Codex CLI（codex login）';
-        return `${device.name}：${need}`;
-      })
-      .join('；');
-    res.status(400).json({
-      error: `以下工作设备缺少自动改码执行器：${detail}`,
-    });
-    return;
-  }
 
   const task = db.tasks.create({
     user_id: userId,
@@ -163,9 +140,13 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
   });
 
   createdSubs.forEach((sub) => {
+    const deviceName = db.devices.findById(sub.device_id)?.name || '设备';
+    const repoHint = repo_url
+      ? `仓库：${repo_url}`
+      : '未提供远程仓库，将使用工作设备本地目录';
     db.logs.create({
       sub_task_id: sub.id,
-      content: `子任务已派发至 ${db.devices.findById(sub.device_id)?.name || '设备'}，工具: ${sub.tool_name}，分支: ${sub.branch_name}`,
+      content: `子任务已派发至 ${deviceName}，工具: ${sub.tool_name}，分支: ${sub.branch_name}。${repoHint}。任务开始时会自动尝试启动开发工具。`,
       level: 'info',
     });
     db.tools.upsert(sub.device_id, sub.tool_name, { status: 'running', current_task: task.id });

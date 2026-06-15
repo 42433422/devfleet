@@ -412,42 +412,12 @@ impl AgentState {
         tx: &mpsc::UnboundedSender<Value>,
     ) -> Result<(), String> {
         validate_task(task)?;
-        let task_dir = PathBuf::from(&config.workspace_root).join(safe_component(&task.task_id));
-        if task_dir.exists() {
-            tokio::fs::remove_dir_all(&task_dir)
-                .await
-                .map_err(|error| format!("清理旧工作区失败: {error}"))?;
-        }
-        if let Some(parent) = task_dir.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|error| format!("创建工作区失败: {error}"))?;
-        }
-
-        send_log(tx, task, "正在克隆仓库并准备独立工作分支", "info");
-        send_progress(tx, task, 10, "running");
-        run_command(
-            None,
-            "git",
-            &[
-                "clone",
-                "--branch",
-                &task.base_branch,
-                "--single-branch",
-                &task.repo_url,
-                task_dir.to_string_lossy().as_ref(),
-            ],
-        )
-        .await?;
-        run_command(
-            Some(&task_dir),
-            "git",
-            &["checkout", "-b", &task.work_branch],
-        )
-        .await?;
+        let task_dir = self.prepare_task_workspace(config, task, tx).await?;
         send_progress(tx, task, 25, "running");
 
         let dev_tool = task.tool.as_str();
+        self.auto_start_assigned_tool(dev_tool, &task_dir, tx, task);
+
         let prompt = format!(
             "完成以下分布式子任务。直接在当前仓库修改代码，运行必要检查，不要只给建议。\n任务: {}\n要求: {}\n工作分支: {}\n开发工具: {}\n完成后总结修改和验证结果。",
             task.title, task.description, task.work_branch, dev_tool
@@ -471,17 +441,6 @@ impl AgentState {
                 }
             }
             _ => {
-                if matches!(dev_tool, "trae" | "claude_code") {
-                    match launch_tool(dev_tool, &task_dir) {
-                        Ok(()) => send_log(tx, task, &format!("已使用 {dev_tool} 打开工作区"), "info"),
-                        Err(error) => send_log(
-                            tx,
-                            task,
-                            &format!("{dev_tool} 启动失败，但继续自动编码: {error}"),
-                            "warn",
-                        ),
-                    }
-                }
                 send_log(
                     tx,
                     task,
@@ -520,23 +479,130 @@ impl AgentState {
             &["commit", "-m", &format!("devfleet: {}", task.title)],
         )
         .await?;
-        send_log(tx, task, "本地提交完成，正在推送远程分支", "info");
+        send_log(tx, task, "本地提交完成", "info");
         send_progress(tx, task, 90, "running");
-        run_command(
-            Some(&task_dir),
-            "git",
-            &["push", "-u", "origin", &task.work_branch],
-        )
-        .await?;
+        push_branch_if_remote(&task_dir, &task.work_branch, tx, task).await?;
         let sha = run_command(Some(&task_dir), "git", &["rev-parse", "HEAD"]).await?;
         send_log(
             tx,
             task,
-            &format!("分支已推送，提交: {}", sha.trim()),
+            &format!("分支已就绪，提交: {}", sha.trim()),
             "info",
         );
         send_progress(tx, task, 100, "completed");
         Ok(())
+    }
+
+    async fn prepare_task_workspace(
+        &self,
+        config: &AgentConfig,
+        task: &ExecuteTask,
+        tx: &mpsc::UnboundedSender<Value>,
+    ) -> Result<PathBuf, String> {
+        let repo_url = task.repo_url.trim();
+        let use_local_only = repo_url.is_empty();
+        let task_dir = if use_local_only {
+            PathBuf::from(&config.workspace_root)
+        } else {
+            PathBuf::from(&config.workspace_root).join(safe_component(&task.task_id))
+        };
+
+        if use_local_only {
+            tokio::fs::create_dir_all(&task_dir)
+                .await
+                .map_err(|error| format!("创建工作区失败: {error}"))?;
+            send_log(
+                tx,
+                task,
+                "未提供远程仓库地址，使用本地工作目录",
+                "info",
+            );
+            send_progress(tx, task, 10, "running");
+            if !task_dir.join(".git").exists() {
+                send_log(tx, task, "初始化本地 Git 仓库", "info");
+                run_command(Some(&task_dir), "git", &["init"]).await?;
+            }
+            checkout_work_branch(&task_dir, &task.work_branch, &task.base_branch).await?;
+            return Ok(task_dir);
+        }
+
+        if task_dir.exists() {
+            tokio::fs::remove_dir_all(&task_dir)
+                .await
+                .map_err(|error| format!("清理旧工作区失败: {error}"))?;
+        }
+        if let Some(parent) = task_dir.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|error| format!("创建工作区失败: {error}"))?;
+        }
+
+        send_log(tx, task, "正在克隆仓库并准备独立工作分支", "info");
+        send_progress(tx, task, 10, "running");
+        run_command(
+            None,
+            "git",
+            &[
+                "clone",
+                "--branch",
+                &task.base_branch,
+                "--single-branch",
+                repo_url,
+                task_dir.to_string_lossy().as_ref(),
+            ],
+        )
+        .await?;
+        run_command(
+            Some(&task_dir),
+            "git",
+            &["checkout", "-b", &task.work_branch],
+        )
+        .await?;
+        Ok(task_dir)
+    }
+
+    fn auto_start_assigned_tool(
+        &self,
+        dev_tool: &str,
+        task_dir: &Path,
+        tx: &mpsc::UnboundedSender<Value>,
+        task: &ExecuteTask,
+    ) {
+        if dev_tool == "codex" {
+            return;
+        }
+        if is_tool_process_running(dev_tool) {
+            send_log(
+                tx,
+                task,
+                &format!("{dev_tool} 已在运行，跳过自动启动"),
+                "info",
+            );
+            return;
+        }
+        if !tool_is_available(dev_tool) {
+            send_log(
+                tx,
+                task,
+                &format!("未检测到 {dev_tool} 安装路径，继续 headless 自动改码"),
+                "warn",
+            );
+            return;
+        }
+        match launch_tool_for(dev_tool, task_dir) {
+            Ok(()) => send_log(
+                tx,
+                task,
+                &format!("已自动启动 {dev_tool} 并打开工作区"),
+                "info",
+            ),
+            Err(error) => send_log(
+                tx,
+                task,
+                &format!("{dev_tool} 自动启动失败，继续 headless 改码: {error}"),
+                "warn",
+            ),
+        }
     }
 }
 
@@ -851,7 +917,16 @@ fn find_executable(tool: &str) -> Option<String> {
 }
 
 fn launch_tool(tool: &str, workspace: &Path) -> Result<(), String> {
-    let executable = find_executable(tool).ok_or_else(|| format!("未找到 {tool} 可执行文件"))?;
+    launch_tool_for(tool, workspace)
+}
+
+fn launch_tool_for(tool: &str, workspace: &Path) -> Result<(), String> {
+    let executable = if tool == "cursor" {
+        find_executable("cursor")
+    } else {
+        find_executable(tool)
+    }
+    .ok_or_else(|| format!("未找到 {tool} 可执行文件"))?;
     StdCommand::new(executable)
         .arg(workspace)
         .stdin(Stdio::null())
@@ -860,6 +935,104 @@ fn launch_tool(tool: &str, workspace: &Path) -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|error| error.to_string())
+}
+
+fn tool_is_available(tool: &str) -> bool {
+    if tool == "cursor" {
+        return find_executable("cursor").is_some() || resolve_cursor_agent().is_some();
+    }
+    find_executable(tool).is_some()
+}
+
+fn is_tool_process_running(tool: &str) -> bool {
+    let processes = process_list();
+    let process_names: &[&str] = match tool {
+        "claude_code" => &["claude", "claude.exe"],
+        "trae" => &["trae", "trae.exe"],
+        "cursor" => &["cursor", "cursor.exe", "agent"],
+        _ => &["codex", "codex.exe"],
+    };
+    process_names
+        .iter()
+        .any(|process| processes.contains(&process.to_lowercase()))
+}
+
+async fn checkout_work_branch(
+    task_dir: &Path,
+    work_branch: &str,
+    base_branch: &str,
+) -> Result<(), String> {
+    if run_command(
+        Some(task_dir),
+        "git",
+        &["show-ref", "--verify", &format!("refs/heads/{work_branch}")],
+    )
+    .await
+    .is_ok()
+    {
+        run_command(
+            Some(task_dir),
+            "git",
+            &["checkout", work_branch],
+        )
+        .await?;
+        return Ok(());
+    }
+    if !base_branch.is_empty()
+        && run_command(
+            Some(task_dir),
+            "git",
+            &["show-ref", "--verify", &format!("refs/heads/{base_branch}")],
+        )
+        .await
+        .is_ok()
+    {
+        run_command(
+            Some(task_dir),
+            "git",
+            &["checkout", "-b", work_branch, base_branch],
+        )
+        .await?;
+        return Ok(());
+    }
+    run_command(
+        Some(task_dir),
+        "git",
+        &["checkout", "-b", work_branch],
+    )
+    .await
+    .map(|_| ())?;
+    Ok(())
+}
+
+async fn push_branch_if_remote(
+    task_dir: &Path,
+    branch: &str,
+    tx: &mpsc::UnboundedSender<Value>,
+    task: &ExecuteTask,
+) -> Result<(), String> {
+    match run_command(Some(task_dir), "git", &["remote", "get-url", "origin"]).await {
+        Ok(url) if !url.trim().is_empty() => {
+            send_log(tx, task, "正在推送远程分支", "info");
+            run_command(
+                Some(task_dir),
+                "git",
+                &["push", "-u", "origin", branch],
+            )
+            .await?;
+            send_log(tx, task, "远程分支已推送", "info");
+            Ok(())
+        }
+        _ => {
+            send_log(
+                tx,
+                task,
+                "未配置远程 origin，已完成本地提交（未 push）",
+                "info",
+            );
+            Ok(())
+        }
+    }
 }
 
 /// 解析 Cursor Agent CLI：`agent` 独立二进制，或 `cursor agent` 子命令。
@@ -1057,11 +1230,13 @@ pub async fn agent_merge_task(
 }
 
 fn validate_task(task: &ExecuteTask) -> Result<(), String> {
-    if !(task.repo_url.starts_with("https://")
-        || task.repo_url.starts_with("http://")
-        || task.repo_url.starts_with("git@"))
+    let repo_url = task.repo_url.trim();
+    if !repo_url.is_empty()
+        && !(repo_url.starts_with("https://")
+            || repo_url.starts_with("http://")
+            || repo_url.starts_with("git@"))
     {
-        return Err("仓库地址必须是 HTTP(S) 或 SSH Git 地址".to_string());
+        return Err("仓库地址必须是 HTTP(S) 或 SSH Git 地址，或留空使用本地目录".to_string());
     }
     for branch in [&task.base_branch, &task.work_branch] {
         if branch.is_empty()
@@ -1121,10 +1296,11 @@ mod tests {
     fn accepts_git_repositories_and_safe_branches() {
         assert!(validate_task(&task("https://github.com/example/repo.git", "main")).is_ok());
         assert!(validate_task(&task("git@github.com:example/repo.git", "release/v1.0")).is_ok());
+        assert!(validate_task(&task("", "main")).is_ok());
     }
 
     #[test]
-    fn rejects_local_paths_and_unsafe_branches() {
+    fn rejects_invalid_remote_urls_and_unsafe_branches() {
         assert!(validate_task(&task("C:\\secret", "main")).is_err());
         assert!(validate_task(&task("https://github.com/example/repo.git", "../../main")).is_err());
     }

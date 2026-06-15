@@ -136,14 +136,14 @@ export default function Tasks() {
           </div>
         </div>
         <div className="mb-3">
-          <label className="block text-xs text-zinc-500 mb-1.5">仓库地址 *</label>
+          <label className="block text-xs text-zinc-500 mb-1.5">仓库地址（可选）</label>
           <input
-            required
             value={form.repo_url}
             onChange={(e) => setForm({ ...form, repo_url: e.target.value })}
-            placeholder="https://github.com/org/repo.git"
+            placeholder="留空则使用工作设备「任务工作目录」本地 Git"
             className="w-full px-3 py-2.5 bg-zinc-950 border border-zinc-800 rounded-lg text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-brand/50 focus:ring-1 focus:ring-brand/30"
           />
+          <p className="text-[11px] text-zinc-600 mt-1.5">不填远程地址时，设备在本地目录改码并提交；配置了 origin 时才会 push。</p>
         </div>
         <div className="mb-4">
           <label className="block text-xs text-zinc-500 mb-1.5">描述</label>
@@ -158,7 +158,7 @@ export default function Tasks() {
         <div className="flex justify-end">
           <button
             type="submit"
-            disabled={creating || !form.title.trim() || !form.repo_url.trim() || executionDevices.length === 0}
+            disabled={creating || !form.title.trim() || executionDevices.length === 0}
             className="flex items-center gap-2 px-5 py-2.5 bg-brand hover:bg-brand/90 disabled:opacity-50 text-black font-medium rounded-lg text-sm transition-all duration-200 shadow-lg shadow-brand/20"
           >
             <Plus size={14} strokeWidth={1.5} />

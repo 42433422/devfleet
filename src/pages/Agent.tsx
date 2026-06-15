@@ -7,6 +7,7 @@ import {
   DEV_TOOL_LABELS,
   normalizeDevTool,
   normalizeToolRuntimeStatus,
+  TOOL_INSTALL_HINTS,
   TOOL_RUNTIME_LABELS,
 } from '@/lib/devTools';
 import { getApiBaseUrl } from '@/lib/apiBase';
@@ -233,8 +234,11 @@ export default function Agent() {
                       {assignedTool?.executable && (
                         <p className="text-[10px] text-zinc-600 mt-1 font-mono truncate max-w-md">{assignedTool.executable}</p>
                       )}
+                      {assignedRuntime === 'not_installed' && (
+                        <p className="text-[11px] text-amber-400/90 mt-2">{TOOL_INSTALL_HINTS[assignedToolName]}</p>
+                      )}
                       {assignedToolName === 'codex' && assignedRuntime === 'not_started' && (
-                        <p className="text-[11px] text-zinc-500 mt-2">Codex CLI 在任务执行时自动调用，无需手动启动 IDE。</p>
+                        <p className="text-[11px] text-zinc-500 mt-2">Codex CLI 在任务执行时会自动调用；派发任务时也会尝试 headless 改码。</p>
                       )}
                     </div>
                     {showStart && (
@@ -267,7 +271,11 @@ export default function Agent() {
                     <div key={tool.toolName} className={`p-3 bg-zinc-950/60 border rounded-lg ${assigned ? 'border-brand/40 ring-1 ring-brand/20' : 'border-zinc-800'}`}>
                       <ToolBadge tool={tool.toolName} status={tool.status} />
                       {assigned && <p className="text-[10px] text-brand mt-1">主设备已指定</p>}
-                      <p className="text-[10px] text-zinc-600 mt-2 truncate">{tool.executable || '未检测到安装路径'}</p>
+                      <p className="text-[10px] text-zinc-600 mt-2 truncate">
+                        {tool.executable || (normalizeToolRuntimeStatus(tool.status) === 'not_installed'
+                          ? TOOL_INSTALL_HINTS[normalizeDevTool(tool.toolName)]
+                          : '已检测到安装路径')}
+                      </p>
                       {showStart && (
                         <button
                           type="button"
@@ -295,7 +303,7 @@ export default function Agent() {
                 })}
               </div>
               <p className="text-xs text-zinc-600 mt-4">
-                主设备在「设备管理」指定开发工具。Trae / Cursor / Claude Code 可在此手动启动；Codex CLI 在任务执行时自动调用。
+                任务执行时会自动尝试启动 Trae / Cursor / Claude Code。未提供远程仓库地址时使用本地工作目录；Codex CLI 在改码阶段自动调用。
               </p>
             </div>
           </div>

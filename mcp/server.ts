@@ -58,7 +58,7 @@ server.registerTool('devfleet_dispatch_task', {
   inputSchema: {
     title: z.string().min(1).describe('任务标题'),
     description: z.string().min(1).describe('详细实现要求，建议按句子列出可并行的子任务'),
-    repo_url: z.string().min(1).describe('设备可访问且有推送权限的 Git 仓库地址'),
+    repo_url: z.string().optional().describe('Git 仓库地址（可选；留空则使用工作设备本地任务目录）'),
     branch: z.string().default('main').describe('基础分支'),
   },
 }, async (input) => result(await api('/api/tasks', {
