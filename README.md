@@ -119,8 +119,8 @@ cd src-tauri && cargo test
 - `devfleet-server.zip`。
 
 ```bash
-git tag v1.0.0
-git push origin main --tags
+git tag v1.2.10
+git push public main --tags   # 公开仓库 Actions 免费，CI 在此运行
 ```
 
 ## 配置

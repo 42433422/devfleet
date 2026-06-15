@@ -8,6 +8,7 @@ on:
 
 jobs:
   build:
+    if: github.repository == '42433422/devfleet'
     strategy:
       fail-fast: false
       matrix:

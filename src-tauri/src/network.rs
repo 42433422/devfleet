@@ -159,24 +159,39 @@ pub fn open_external_url(url: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn open_trae_install(deeplink_cn: String, deeplink_intl: String) -> Result<String, String> {
-    // 优先 TRAE SOLO CN
-    if app_installed("TRAE SOLO CN") {
-        open_with_app_dir("TRAE SOLO CN", &deeplink_cn)?;
-        return Ok("TRAE SOLO CN".into());
+    #[cfg(target_os = "macos")]
+    {
+        // 优先 TRAE SOLO CN
+        if app_installed("TRAE SOLO CN") {
+            open_with_app_dir("TRAE SOLO CN", &deeplink_cn)?;
+            return Ok("TRAE SOLO CN".into());
+        }
+        if app_installed("Trae CN") {
+            open_external_url_impl(&deeplink_cn)?;
+            return Ok("Trae CN".into());
+        }
+        if app_installed("TRAE SOLO") {
+            open_with_app_dir("TRAE SOLO", &deeplink_intl)?;
+            return Ok("TRAE SOLO".into());
+        }
+        if app_installed("Trae") {
+            open_external_url_impl(&deeplink_intl)?;
+            return Ok("Trae".into());
+        }
+        return Err("未检测到 Trae / Trae CN，请先安装 Trae 或使用「复制」手动配置 MCP".into());
     }
-    if app_installed("Trae CN") {
-        open_external_url_impl(&deeplink_cn)?;
-        return Ok("Trae CN".into());
-    }
-    if app_installed("TRAE SOLO") {
-        open_with_app_dir("TRAE SOLO", &deeplink_intl)?;
-        return Ok("TRAE SOLO".into());
-    }
-    if app_installed("Trae") {
-        open_external_url_impl(&deeplink_intl)?;
+
+    #[cfg(target_os = "windows")]
+    {
+        open_on_windows(&deeplink_cn).or_else(|_| open_on_windows(&deeplink_intl))?;
         return Ok("Trae".into());
     }
-    Err("未检测到 Trae / Trae CN，请先安装 Trae 或使用「复制」手动配置 MCP".into())
+
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        open_on_linux(&deeplink_cn).or_else(|_| open_on_linux(&deeplink_intl))?;
+        return Ok("Trae".into());
+    }
 }
 
 fn is_internal_webview_host(host: &str) -> bool {

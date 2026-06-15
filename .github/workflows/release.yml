@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   release:
+    if: github.repository == '42433422/devfleet'
     permissions:
       contents: write
     strategy:
