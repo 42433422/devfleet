@@ -1,0 +1,14 @@
+services:
+  devfleet:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      DEVFLEET_DB_FILE: /data/db.json
+    volumes:
+      - devfleet-data:/data
+
+volumes:
+  devfleet-data:

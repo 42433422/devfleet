@@ -1,0 +1,99 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'macos-latest'
+            args: '--target aarch64-apple-darwin'
+          - platform: 'macos-latest'
+            args: '--target x86_64-apple-darwin'
+          - platform: 'ubuntu-22.04'
+            args: ''
+          - platform: 'windows-latest'
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: 'npm'
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-action@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && (contains(matrix.args, 'aarch64') && 'aarch64-apple-darwin' || 'x86_64-apple-darwin') || '' }}
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build MCP package
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          npm run mcp:build
+          Copy-Item README.md dist-mcp\README.md
+          Compress-Archive -Path dist-mcp\* -DestinationPath devfleet-mcp.zip -Force
+          npm run server:build
+          Copy-Item server-package\* dist-server\ -Recurse -Force
+          Compress-Archive -Path dist-server\* -DestinationPath devfleet-server.zip -Force
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'DevFleet v__VERSION__'
+          releaseBody: |
+            ## DevFleet v__VERSION__
+
+            真实多设备协同开发控制平台
+
+            ### 下载安装
+            - **macOS**: 下载 .dmg 文件并拖到 Applications 文件夹
+            - **Windows**: 下载 `.msi` 或 `-setup.exe` 安装包
+            - **Linux**: 下载 .AppImage 或 .deb 包运行
+            - **Trae / Codex MCP**: 下载 `devfleet-mcp.zip`
+            - **自托管服务端**: 下载 `devfleet-server.zip`（Node.js 20.19+）或使用仓库中的 Docker Compose
+
+            ### 新功能
+            - 一次性绑定码和独立设备令牌
+            - 目标设备显示绑定者，检测并默认启动 Trae
+            - Codex CLI 在各设备真实修改、提交、推送分支
+            - Trae / Codex MCP 调度和主设备真实 Git 合并
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}
+
+      - name: Upload MCP package
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" devfleet-mcp.zip devfleet-server.zip --clobber
