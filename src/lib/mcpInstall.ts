@@ -56,6 +56,20 @@ export function buildCursorWebInstallUrl(serverName: string, serverConfig: McpSt
   return `https://cursor.com/en/install-mcp?name=${encodeURIComponent(serverName)}&config=${encodeURIComponent(configB64)}`;
 }
 
+export function buildTraeDeeplink(serverName: string, serverConfig: McpStdioConfig): string {
+  const configB64 = toBase64Json(serverConfig);
+  return `trae://mcp/install?name=${encodeURIComponent(serverName)}&config=${encodeURIComponent(configB64)}`;
+}
+
+export function buildTraeInstallLinks(options: DevfleetMcpOptions) {
+  const config = buildDevfleetStdioConfig(options);
+  return {
+    config,
+    mcpJson: wrapMcpJson(DEVFLEET_MCP_SERVER_NAME, config),
+    deeplink: buildTraeDeeplink(DEVFLEET_MCP_SERVER_NAME, config),
+  };
+}
+
 export function buildCursorInstallLinks(options: DevfleetMcpOptions) {
   const config = buildDevfleetStdioConfig(options);
   return {

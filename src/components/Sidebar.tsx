@@ -15,7 +15,7 @@ export default function Sidebar() {
   const activeLink = '!bg-zinc-800 !text-white';
 
   return (
-    <aside className="w-56 h-screen bg-zinc-950/80 backdrop-blur-sm border-r border-zinc-800/50 flex flex-col">
+    <aside className="fixed left-0 top-0 w-56 h-screen bg-zinc-950/80 backdrop-blur-sm border-r border-zinc-800/50 flex flex-col z-50">
       <div className="px-4 py-5 border-b border-zinc-800/50">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand to-green-400 flex items-center justify-center">

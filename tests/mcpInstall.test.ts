@@ -4,6 +4,7 @@ import {
   buildCodexMcpCommand,
   buildCursorInstallLinks,
   buildDevfleetStdioConfig,
+  buildTraeInstallLinks,
   buildTraeMcpJson,
   DEVFLEET_MCP_SERVER_NAME,
 } from '../src/lib/mcpInstall.ts';
@@ -32,6 +33,12 @@ test('Cursor 一键安装 deeplink 编码 stdio 配置', () => {
   const links = buildCursorInstallLinks(sample);
   assert.match(links.deeplink, /^cursor:\/\/anysphere\.cursor-deeplink\/mcp\/install/);
   assert.match(links.webUrl, /^https:\/\/cursor\.com\/en\/install-mcp/);
+  assert.equal(links.mcpJson, buildTraeMcpJson(sample));
+});
+
+test('Trae 一键安装 deeplink 编码 stdio 配置', () => {
+  const links = buildTraeInstallLinks(sample);
+  assert.match(links.deeplink, /^trae:\/\/mcp\/install/);
   assert.equal(links.mcpJson, buildTraeMcpJson(sample));
 });
 

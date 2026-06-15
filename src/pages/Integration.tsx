@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Check, Clipboard, Code2, PlugZap, ShieldCheck, Sparkles, Terminal, Braces } from 'lucide-react';
 import { useAuthStore } from '@/store/auth';
+import { useDevicesStore } from '@/store/devices';
+import { DEV_TOOL_LABELS, normalizeToolRuntimeStatus, TOOL_RUNTIME_LABELS, type DevTool } from '@/lib/devTools';
 import {
   buildCodexMcpCommand,
   buildCursorInstallLinks,
-  buildTraeMcpJson,
+  buildTraeInstallLinks,
   defaultMcpPath,
 } from '@/lib/mcpInstall';
 import { getApiBaseUrl } from '@/lib/apiBase';
@@ -12,13 +14,15 @@ import ServerAddressPanel from '@/components/ServerAddressPanel';
 
 export default function Integration() {
   const { token } = useAuthStore();
+  const { devices, fetchDevices } = useDevicesStore();
   const [mcpPath, setMcpPath] = useState(defaultMcpPath());
   const [apiUrl, setApiUrl] = useState(getApiBaseUrl());
   const [copied, setCopied] = useState('');
 
   useEffect(() => {
     setApiUrl(getApiBaseUrl());
-  }, []);
+    fetchDevices();
+  }, [fetchDevices]);
 
   const mcpOptions = useMemo(() => ({
     mcpPath,
@@ -26,7 +30,8 @@ export default function Integration() {
     token: token || '',
   }), [apiUrl, mcpPath, token]);
 
-  const traeConfig = useMemo(() => buildTraeMcpJson(mcpOptions), [mcpOptions]);
+  const traeInstall = useMemo(() => buildTraeInstallLinks(mcpOptions), [mcpOptions]);
+  const traeConfig = traeInstall.mcpJson;
   const claudeConfig = traeConfig;
   const codexCommand = useMemo(
     () => buildCodexMcpCommand(mcpOptions, processPlatform()),
@@ -47,6 +52,10 @@ export default function Integration() {
         window.open(cursorInstall.webUrl, '_blank', 'noopener,noreferrer');
       }
     }, 1200);
+  };
+
+  const installTrae = () => {
+    window.location.href = traeInstall.deeplink;
   };
 
   return (
@@ -75,7 +84,21 @@ export default function Integration() {
       </div>
 
       <div className="grid lg:grid-cols-2 xl:grid-cols-4 gap-4 mb-4">
-        <McpCard title="Trae" icon={<Sparkles size={14} />} hint="Trae → MCP → 手动 JSON" copyKey="trae" copied={copied} onCopy={() => copy('trae', traeConfig)} content={traeConfig} />
+        <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-5">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h2 className="text-sm font-medium text-white flex items-center gap-2"><Sparkles size={14} />Trae</h2>
+              <p className="text-xs text-zinc-500 mt-1">一键或复制 JSON</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={installTrae} className="px-3 py-2 bg-brand/90 hover:bg-brand rounded-lg text-xs text-black font-medium">一键</button>
+              <button onClick={() => copy('trae', traeConfig)} className="flex items-center gap-1.5 px-3 py-2 bg-zinc-800 rounded-lg text-xs text-zinc-300 hover:text-white">
+                {copied === 'trae' ? <Check size={13} className="text-green-400" /> : <Clipboard size={13} />}
+              </button>
+            </div>
+          </div>
+          <pre className="p-4 bg-zinc-950 rounded-lg overflow-x-auto text-xs text-zinc-300 font-mono whitespace-pre-wrap max-h-40">{traeConfig}</pre>
+        </div>
         <McpCard title="Codex" icon={<Terminal size={14} />} hint="终端执行一次" copyKey="codex" copied={copied} onCopy={() => copy('codex', codexCommand)} content={codexCommand} accent />
         <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-5">
           <div className="flex items-center justify-between mb-3">
@@ -94,6 +117,46 @@ export default function Integration() {
         </div>
         <McpCard title="Claude Code" icon={<Braces size={14} />} hint="Claude Desktop MCP JSON" copyKey="claude" copied={copied} onCopy={() => copy('claude', claudeConfig)} content={claudeConfig} />
       </div>
+
+      {devices.length > 0 && (
+        <div className="mb-4 bg-zinc-900/60 border border-zinc-800 rounded-xl p-5">
+          <h2 className="text-sm font-medium text-white mb-3">已接入设备的工具状态</h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {(['trae', 'codex', 'cursor', 'claude_code'] as DevTool[]).map((tool) => {
+              const toolDevices = devices.filter((d) =>
+                d.tools.some((t) => t.toolName === tool && t.status !== 'not_installed'),
+              );
+              const bestStatus = toolDevices.length > 0
+                ? toolDevices.some((d) => d.tools.some((t) => t.toolName === tool && t.status === 'running'))
+                  ? 'started'
+                  : 'not_started'
+                : 'not_installed';
+              const styles: Record<string, { bg: string; text: string; indicator: string }> = {
+                not_installed: { bg: 'bg-zinc-800/60', text: 'text-zinc-500', indicator: 'bg-zinc-600' },
+                not_started: { bg: 'bg-amber-500/10', text: 'text-amber-400', indicator: 'bg-amber-500' },
+                started: { bg: 'bg-green-500/10', text: 'text-green-400', indicator: 'bg-green-500' },
+              };
+              const s = styles[bestStatus];
+              const Icon = { trae: Sparkles, codex: Terminal, cursor: Code2, claude_code: Braces }[tool];
+              return (
+                <div key={tool} className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg ${s.bg}`}>
+                  <Icon size={14} strokeWidth={1.5} className={s.text} />
+                  <div className="flex-1 min-w-0">
+                    <span className="text-xs font-medium text-zinc-300">{DEV_TOOL_LABELS[tool]}</span>
+                    <div className="flex items-center gap-1 mt-0.5">
+                      <span className={`w-1.5 h-1.5 rounded-full ${s.indicator} ${bestStatus === 'started' ? 'animate-pulse' : ''}`} />
+                      <span className={`text-[10px] ${s.text}`}>{TOOL_RUNTIME_LABELS[bestStatus]}</span>
+                    </div>
+                  </div>
+                  {toolDevices.length > 0 && (
+                    <span className="text-[10px] text-zinc-600">{toolDevices.length} 台</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="flex items-start gap-3 px-4 py-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
         <ShieldCheck size={16} className="text-amber-400 mt-0.5" />
