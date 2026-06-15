@@ -31,6 +31,7 @@ export default function TaskDetail() {
   const { currentTask, currentTaskLoading, error, fetchTask, deleteTask, mergeTask } = useTasksStore();
   const { devices, fetchDevices } = useDevicesStore();
   const logRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const logTailRef = useRef<Record<string, string>>({});
   const [deleting, setDeleting] = useState(false);
   const [merging, setMerging] = useState(false);
   const [mergeCopied, setMergeCopied] = useState(false);
@@ -40,7 +41,7 @@ export default function TaskDetail() {
   useEffect(() => {
     fetchTask(id);
     fetchDevices();
-    const timer = setInterval(() => fetchTask(id), 3000);
+    const timer = setInterval(() => fetchTask(id), 10000);
     return () => clearInterval(timer);
   }, [fetchDevices, fetchTask, id]);
 
@@ -48,7 +49,17 @@ export default function TaskDetail() {
     if (!currentTask) return;
     currentTask.subTasks.forEach((st) => {
       const el = logRefs.current[st.id];
-      if (el) el.scrollTop = el.scrollHeight;
+      if (!el) return;
+      const tailKey = st.logs.length > 0
+        ? `${st.logs.length}:${st.logs[st.logs.length - 1]?.id ?? ''}`
+        : '0';
+      const prevTail = logTailRef.current[st.id];
+      if (prevTail === tailKey) return;
+      logTailRef.current[st.id] = tailKey;
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (distanceFromBottom < 48) {
+        el.scrollTop = el.scrollHeight;
+      }
     });
   }, [currentTask]);
 
@@ -243,14 +254,13 @@ export default function TaskDetail() {
       <h2 className="text-sm font-semibold text-white mb-4">子任务执行日志</h2>
 
       <div className="space-y-3">
-        {currentTask.subTasks.map((st, idx) => {
+        {currentTask.subTasks.map((st) => {
           const device = devices.find((d) => d.id === st.device_id);
           const stStatus = statusConfig[st.status] || statusConfig.pending;
           return (
             <div
               key={st.id}
-              className="bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-4 animate-slide-in-right"
-              style={{ animationDelay: `${idx * 50}ms` }}
+              className="bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-4"
             >
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-3">

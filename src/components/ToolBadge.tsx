@@ -1,4 +1,9 @@
 import { Code2, Sparkles, Terminal, Braces, type LucideIcon } from 'lucide-react';
+import {
+  normalizeToolRuntimeStatus,
+  TOOL_RUNTIME_LABELS,
+  type ToolRuntimeStatus,
+} from '@/lib/devTools';
 
 const toolIcons: Record<string, LucideIcon> = {
   codex: Terminal,
@@ -14,10 +19,10 @@ const toolNames: Record<string, string> = {
   claude_code: 'Claude Code',
 };
 
-const statusStyles: Record<string, { bg: string; text: string; indicator: string }> = {
-  running: { bg: 'bg-green-500/10', text: 'text-green-400', indicator: 'bg-green-500' },
-  idle: { bg: 'bg-zinc-700/50', text: 'text-zinc-400', indicator: 'bg-zinc-500' },
+const statusStyles: Record<ToolRuntimeStatus, { bg: string; text: string; indicator: string }> = {
   not_installed: { bg: 'bg-red-500/10', text: 'text-red-400', indicator: 'bg-red-500' },
+  not_started: { bg: 'bg-zinc-700/50', text: 'text-zinc-400', indicator: 'bg-zinc-500' },
+  started: { bg: 'bg-green-500/10', text: 'text-green-400', indicator: 'bg-green-500' },
 };
 
 interface ToolBadgeProps {
@@ -27,7 +32,8 @@ interface ToolBadgeProps {
 
 export default function ToolBadge({ tool, status }: ToolBadgeProps) {
   const Icon = toolIcons[tool] || Code2;
-  const styles = statusStyles[status] || statusStyles.idle;
+  const runtime = normalizeToolRuntimeStatus(status);
+  const styles = statusStyles[runtime];
 
   return (
     <div className={`flex items-center gap-2.5 px-3 py-2 rounded-lg ${styles.bg}`}>
@@ -36,9 +42,9 @@ export default function ToolBadge({ tool, status }: ToolBadgeProps) {
         <span className="text-xs font-medium text-zinc-300">{toolNames[tool] || tool}</span>
       </div>
       <div className="flex items-center gap-1">
-        <span className={`w-1.5 h-1.5 rounded-full ${styles.indicator} ${status === 'running' ? 'animate-pulse' : ''}`} />
-        <span className={`text-[10px] font-medium ${styles.text} capitalize`}>
-          {status === 'running' ? '运行中' : status === 'idle' ? '空闲' : '未安装'}
+        <span className={`w-1.5 h-1.5 rounded-full ${styles.indicator} ${runtime === 'started' ? 'animate-pulse' : ''}`} />
+        <span className={`text-[10px] font-medium ${styles.text}`}>
+          {TOOL_RUNTIME_LABELS[runtime]}
         </span>
       </div>
     </div>

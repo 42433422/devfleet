@@ -31,6 +31,7 @@ export default function ServerAddressPanel({ compact = false, showTunnelInput = 
   const [builtin, setBuiltin] = useState<BuiltinTunnelStatus | null>(null);
   const [builtinBusy, setBuiltinBusy] = useState(false);
   const [builtinError, setBuiltinError] = useState('');
+  const [serverOnline, setServerOnline] = useState<boolean | null>(null);
 
   const saveTunnel = useCallback((value: string) => {
     const normalized = normalizeApiBaseUrl(value);
@@ -49,8 +50,14 @@ export default function ServerAddressPanel({ compact = false, showTunnelInput = 
   const refreshBuiltin = useCallback(async () => {
     try {
       syncBuiltinUrl(await tunnelApi.status());
-    } catch {
-      // 服务端未启动或未登录时忽略
+      setServerOnline(true);
+      setBuiltinError('');
+    } catch (error) {
+      setServerOnline(false);
+      setBuiltin(null);
+      if (error instanceof Error && !/未授权|重新登录/.test(error.message)) {
+        setBuiltinError('');
+      }
     }
   }, [syncBuiltinUrl]);
 
@@ -98,7 +105,13 @@ export default function ServerAddressPanel({ compact = false, showTunnelInput = 
         syncBuiltinUrl(await tunnelApi.start('auto'));
       }
     } catch (error) {
-      setBuiltinError(error instanceof Error ? error.message : '内置穿透操作失败');
+      const message = error instanceof Error ? error.message : '内置穿透操作失败';
+      if (/Failed to fetch|NetworkError|Load failed/i.test(message)) {
+        setBuiltinError('无法连接服务端，请先在本机启动 DevFleet 服务端（npm run server 或 devfleet-server.zip）');
+        setServerOnline(false);
+      } else {
+        setBuiltinError(message);
+      }
     } finally {
       setBuiltinBusy(false);
     }
@@ -189,12 +202,12 @@ export default function ServerAddressPanel({ compact = false, showTunnelInput = 
                 内置网穿（一键公网）
               </p>
               <p className="text-[11px] text-zinc-500 mt-1">
-                无需 frp/ngrok，服务端自动映射 3001。优先 Cloudflare Quick Tunnel，否则 Localtunnel。
+                无需 frp/ngrok，服务端自动映射 3001。优先 Cloudflare Quick Tunnel，否则 Localtunnel。首次开启约需 10–60 秒。
               </p>
             </div>
             <button
               type="button"
-              disabled={builtinBusy}
+              disabled={builtinBusy || serverOnline === false}
               onClick={toggleBuiltin}
               className={`shrink-0 px-3 py-2 rounded-lg text-xs font-medium disabled:opacity-50 ${
                 builtin?.active
@@ -202,9 +215,20 @@ export default function ServerAddressPanel({ compact = false, showTunnelInput = 
                   : 'bg-brand text-black hover:bg-brand/90'
               }`}
             >
-              {builtinBusy ? '处理中...' : builtin?.active ? '关闭' : '开启'}
+              {builtinBusy ? '正在开启...' : builtin?.active ? '关闭' : '开启'}
             </button>
           </div>
+          {serverOnline === false && (
+            <p className="text-[11px] text-amber-400 mt-2">
+              服务端未连接。一键公网需先启动本机服务端：开发环境运行 <span className="font-mono">npm run server</span>，或使用 Release 中的 devfleet-server.zip。
+            </p>
+          )}
+          {builtinBusy && !builtin?.active && (
+            <p className="text-[11px] text-zinc-400 mt-2 flex items-center gap-1.5">
+              <Loader2 size={12} className="animate-spin shrink-0" />
+              正在建立公网通道，首次可能较慢，请稍候…
+            </p>
+          )}
           {builtin?.active && builtin.url && (
             <p className="font-mono text-xs text-brand break-all">{builtin.url}</p>
           )}

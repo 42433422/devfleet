@@ -145,13 +145,19 @@ export function attachWebSocket(wss: WSServer) {
 
       ws.on('close', () => {
         if (deviceWS.get(device.id) !== ws) return;
+        const closedSocket = ws;
         deviceWS.delete(device.id);
-        db.devices.update(device.id, { status: 'offline' });
-        broadcast(device.user_id, {
-          type: 'device_status',
-          device_id: device.id,
-          status: 'offline',
-        });
+        setTimeout(() => {
+          const current = deviceWS.get(device.id);
+          if (current && current !== closedSocket && current.readyState === current.OPEN) return;
+          if (current === closedSocket) return;
+          db.devices.update(device.id, { status: 'offline' });
+          broadcast(device.user_id, {
+            type: 'device_status',
+            device_id: device.id,
+            status: 'offline',
+          });
+        }, 8000);
       });
 
       ws.on('error', (err) => {

@@ -124,11 +124,16 @@ export async function probeServerReachability(apiBase: string, timeoutMs = 8000)
     };
   }
 
+  const tunnelHeaders: Record<string, string> = {};
+  if (/\.loca\.lt$/i.test(new URL(base).hostname)) {
+    tunnelHeaders['Bypass-Tunnel-Reminder'] = 'true';
+  }
+
   let apiResult = { ok: false, message: '连接失败' };
   try {
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), timeoutMs);
-    const res = await fetch(`${base}/api/health`, { signal: controller.signal });
+    const res = await fetch(`${base}/api/health`, { signal: controller.signal, headers: tunnelHeaders });
     window.clearTimeout(timer);
     if (res.ok) {
       apiResult = { ok: true, message: 'HTTP API 正常' };

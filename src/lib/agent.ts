@@ -51,6 +51,8 @@ export const agentApi = {
   start: () => invoke<AgentStatus>('agent_start'),
   stop: () => invoke<AgentStatus>('agent_stop'),
   unbind: () => invoke<AgentStatus>('agent_unbind'),
+  /** 启动本机 IDE（Trae / Cursor / Claude Code） */
+  startTool: (tool: string, workspace: string) => invoke<void>('agent_open_tool', { tool, workspace }),
   openTool: (tool: string, workspace: string) => invoke<void>('agent_open_tool', { tool, workspace }),
   mergeTask: (data: { workspacePath: string; branch: string; subtaskBranches: string[]; push?: boolean }) =>
     invoke<MergeTaskResult>('agent_merge_task', {

@@ -35,3 +35,30 @@ export function deviceUsesCursorExecutor(devTool: DevTool): boolean {
 export function executorLabel(devTool: DevTool): string {
   return devTool === 'cursor' ? 'Cursor Agent CLI' : 'Codex CLI';
 }
+
+/** 服务端 / 本机代理上报的工具运行态（idle = 已安装未启动） */
+export type ToolApiStatus = 'not_installed' | 'idle' | 'running';
+
+export type ToolRuntimeStatus = 'not_installed' | 'not_started' | 'started';
+
+export const TOOL_RUNTIME_LABELS: Record<ToolRuntimeStatus, string> = {
+  not_installed: '未安装',
+  not_started: '未启动',
+  started: '已启动',
+};
+
+export function normalizeToolRuntimeStatus(status: string): ToolRuntimeStatus {
+  if (status === 'not_installed') return 'not_installed';
+  if (status === 'running') return 'started';
+  return 'not_started';
+}
+
+export function canStartTool(tool: {
+  toolName: DevTool | string;
+  status: string;
+  installed?: boolean;
+}): boolean {
+  if (!tool.installed) return false;
+  if (normalizeToolRuntimeStatus(tool.status) === 'started') return false;
+  return tool.toolName !== 'codex';
+}

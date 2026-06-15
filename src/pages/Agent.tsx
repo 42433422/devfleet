@@ -2,7 +2,13 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertCircle, ArrowLeft, CheckCircle2, Clipboard, Laptop, Link2, Play, Power, RefreshCw, Square, Unlink } from 'lucide-react';
 import { agentApi, isDesktopApp, type AgentStatus } from '@/lib/agent';
-import { DEV_TOOL_LABELS, normalizeDevTool } from '@/lib/devTools';
+import {
+  canStartTool,
+  DEV_TOOL_LABELS,
+  normalizeDevTool,
+  normalizeToolRuntimeStatus,
+  TOOL_RUNTIME_LABELS,
+} from '@/lib/devTools';
 import { getApiBaseUrl } from '@/lib/apiBase';
 import ToolBadge from '@/components/ToolBadge';
 
@@ -20,6 +26,16 @@ export default function Agent() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [pastedHint, setPastedHint] = useState('');
+  const [displayConnected, setDisplayConnected] = useState(false);
+
+  useEffect(() => {
+    if (status?.connected) {
+      setDisplayConnected(true);
+      return;
+    }
+    const timer = window.setTimeout(() => setDisplayConnected(false), 3000);
+    return () => window.clearTimeout(timer);
+  }, [status?.connected]);
 
   useEffect(() => {
     const saved = localStorage.getItem('devfleet_api_url');
@@ -39,7 +55,7 @@ export default function Agent() {
 
   useEffect(() => {
     refresh();
-    const timer = window.setInterval(refresh, 3000);
+    const timer = window.setInterval(refresh, 5000);
     return () => window.clearInterval(timer);
   }, [refresh]);
 
@@ -86,6 +102,23 @@ export default function Agent() {
       setStatus(await action());
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const startAssignedTool = async () => {
+    if (!status?.config) return;
+    const toolName = normalizeDevTool(status.config.devTool);
+    const tool = status.tools.find((item) => item.toolName === toolName);
+    if (!tool || !canStartTool(tool)) return;
+    setBusy(true);
+    setError('');
+    try {
+      await agentApi.startTool(toolName, status.config.workspaceRoot);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '启动开发工具失败');
     } finally {
       setBusy(false);
     }
@@ -157,9 +190,11 @@ export default function Agent() {
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <div className="flex items-center gap-2 mb-2">
-                    {status.connected ? <CheckCircle2 size={16} className="text-green-400" /> : <RefreshCw size={16} className="text-amber-400" />}
+                    {displayConnected ? <CheckCircle2 size={16} className="text-green-400" /> : <RefreshCw size={16} className={`text-amber-400 ${!status.connected ? 'animate-spin' : ''}`} />}
                     <h2 className="font-medium text-white">{status.config?.deviceName}</h2>
-                    <span className={`text-xs ${status.connected ? 'text-green-400' : 'text-amber-400'}`}>{status.connected ? '已连接' : '正在重连'}</span>
+                    <span className={`text-xs ${displayConnected ? 'text-green-400' : 'text-amber-400'}`}>
+                      {displayConnected ? '已连接' : status.connected ? '连接波动' : '正在重连'}
+                    </span>
                   </div>
                   <p className="text-sm text-zinc-400">绑定控制者：<span className="text-brand">{status.config?.controllerEmail}</span></p>
                   <p className="text-sm text-zinc-400 mt-1">主设备：<span className="text-white">{status.config?.controllerDeviceName || '尚未设置主设备'}</span></p>
@@ -168,8 +203,8 @@ export default function Agent() {
                   <p className="text-xs text-zinc-600 mt-1 font-mono">工作目录：{status.config?.workspaceRoot}</p>
                   {status.runningTask && <p className="text-xs text-green-400 mt-2">当前任务：{status.runningTask}</p>}
                 </div>
-                <div className="flex gap-2">
-                  {status.connected ? (
+                <div className="flex gap-2 shrink-0">
+                  {displayConnected ? (
                     <button disabled={busy} onClick={() => run(agentApi.stop)} className="p-2 bg-zinc-800 rounded-lg text-zinc-400 hover:text-white" title="停止代理"><Square size={15} /></button>
                   ) : (
                     <button disabled={busy} onClick={() => run(agentApi.start)} className="p-2 bg-brand/15 rounded-lg text-brand" title="启动代理"><Play size={15} /></button>
@@ -179,29 +214,88 @@ export default function Agent() {
               </div>
             </div>
 
+            {(() => {
+              const assignedToolName = normalizeDevTool(status.config?.devTool);
+              const assignedTool = status.tools.find((tool) => tool.toolName === assignedToolName);
+              const assignedRuntime = assignedTool
+                ? normalizeToolRuntimeStatus(assignedTool.status)
+                : 'not_installed';
+              const showStart = assignedTool ? canStartTool(assignedTool) : false;
+              return (
+                <div className="bg-zinc-900/70 border border-brand/25 rounded-2xl p-6">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <h2 className="text-sm font-medium text-white mb-1">主设备指定开发工具</h2>
+                      <p className="text-lg font-semibold text-brand">{DEV_TOOL_LABELS[assignedToolName]}</p>
+                      <p className={`text-sm mt-2 ${assignedRuntime === 'started' ? 'text-green-400' : assignedRuntime === 'not_started' ? 'text-zinc-400' : 'text-red-400'}`}>
+                        状态：{TOOL_RUNTIME_LABELS[assignedRuntime]}
+                      </p>
+                      {assignedTool?.executable && (
+                        <p className="text-[10px] text-zinc-600 mt-1 font-mono truncate max-w-md">{assignedTool.executable}</p>
+                      )}
+                      {assignedToolName === 'codex' && assignedRuntime === 'not_started' && (
+                        <p className="text-[11px] text-zinc-500 mt-2">Codex CLI 在任务执行时自动调用，无需手动启动 IDE。</p>
+                      )}
+                    </div>
+                    {showStart && (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={startAssignedTool}
+                        className="shrink-0 flex items-center gap-2 px-4 py-2.5 bg-brand hover:bg-brand/90 disabled:opacity-50 text-black font-medium rounded-lg text-sm"
+                      >
+                        <Power size={14} />
+                        启动
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+
             <div className="bg-zinc-900/70 border border-zinc-800 rounded-2xl p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-sm font-medium text-white">编程工具状态</h2>
-                <button onClick={refresh} className="text-zinc-500 hover:text-white"><RefreshCw size={14} /></button>
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="text-sm font-medium text-white">全部编程工具</h2>
+                <button type="button" onClick={refresh} className="text-zinc-500 hover:text-white"><RefreshCw size={14} /></button>
               </div>
+              <p className="text-[11px] text-zinc-600 mb-4">未安装 · 未启动 · 已启动</p>
               <div className="grid md:grid-cols-2 gap-3">
                 {status.tools.map((tool) => {
                   const assigned = normalizeDevTool(status.config?.devTool) === tool.toolName;
-                  const canOpen = assigned && tool.installed && tool.toolName !== 'codex';
+                  const showStart = assigned && canStartTool(tool);
                   return (
-                  <div key={tool.toolName} className={`p-3 bg-zinc-950/60 border rounded-lg ${assigned ? 'border-brand/40 ring-1 ring-brand/20' : 'border-zinc-800'}`}>
-                    <ToolBadge tool={tool.toolName} status={tool.status} />
-                    {assigned && <p className="text-[10px] text-brand mt-1">主设备已指定</p>}
-                    <p className="text-[10px] text-zinc-600 mt-2 truncate">{tool.executable || '未检测到安装路径'}</p>
-                    {canOpen && (
-                      <button onClick={() => agentApi.openTool(tool.toolName, status.config?.workspaceRoot || '')} className="mt-2 flex items-center gap-1 text-xs text-brand"><Power size={11} />打开 {DEV_TOOL_LABELS[tool.toolName]}</button>
-                    )}
-                  </div>
+                    <div key={tool.toolName} className={`p-3 bg-zinc-950/60 border rounded-lg ${assigned ? 'border-brand/40 ring-1 ring-brand/20' : 'border-zinc-800'}`}>
+                      <ToolBadge tool={tool.toolName} status={tool.status} />
+                      {assigned && <p className="text-[10px] text-brand mt-1">主设备已指定</p>}
+                      <p className="text-[10px] text-zinc-600 mt-2 truncate">{tool.executable || '未检测到安装路径'}</p>
+                      {showStart && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={async () => {
+                            setBusy(true);
+                            setError('');
+                            try {
+                              await agentApi.startTool(tool.toolName, status.config?.workspaceRoot || '');
+                              await refresh();
+                            } catch (err) {
+                              setError(err instanceof Error ? err.message : '启动失败');
+                            } finally {
+                              setBusy(false);
+                            }
+                          }}
+                          className="mt-2 flex items-center gap-1 text-xs text-brand hover:text-brand/80 disabled:opacity-50"
+                        >
+                          <Power size={11} />
+                          启动 {DEV_TOOL_LABELS[normalizeDevTool(tool.toolName)]}
+                        </button>
+                      )}
+                    </div>
                   );
                 })}
               </div>
               <p className="text-xs text-zinc-600 mt-4">
-                主设备在「设备管理」指定开发工具。Cursor 设备由 Cursor Agent CLI（agent -p --force）改码，无需 Codex；Trae / Codex / Claude Code 由 Codex CLI 改码。完成后统一 Git push 分支。
+                主设备在「设备管理」指定开发工具。Trae / Cursor / Claude Code 可在此手动启动；Codex CLI 在任务执行时自动调用。
               </p>
             </div>
           </div>

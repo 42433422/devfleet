@@ -1,7 +1,121 @@
 {
-  "users": [],
-  "devices": [],
-  "tool_statuses": [],
+  "users": [
+    {
+      "id": "ecc6a8f9-21ab-4235-a766-b3f868085b03",
+      "created_at": "2026-06-15T11:29:47.825Z",
+      "email": "guest_1781522987824@devfleet.local",
+      "password_hash": ""
+    },
+    {
+      "id": "d87d8084-2747-43b6-82ae-63c227834b6e",
+      "created_at": "2026-06-15T11:29:47.831Z",
+      "email": "guest_1781522987830@devfleet.local",
+      "password_hash": ""
+    },
+    {
+      "id": "4d050dfc-aa1b-4a9f-9e67-d33a72241c11",
+      "created_at": "2026-06-15T12:10:03.272Z",
+      "email": "guest_1781525403271@devfleet.local",
+      "password_hash": ""
+    },
+    {
+      "id": "d4a3bfa5-b6b0-4bcb-a7e4-f0d40fbe9005",
+      "created_at": "2026-06-15T12:49:21.761Z",
+      "email": "guest_1781527761761@devfleet.local",
+      "password_hash": ""
+    }
+  ],
+  "devices": [
+    {
+      "id": "de387568-8662-4afb-84c9-e2b58f5c9110",
+      "last_seen": "2026-06-15T12:10:14.011Z",
+      "user_id": "4d050dfc-aa1b-4a9f-9e67-d33a72241c11",
+      "name": "我的开发设备",
+      "bind_code": "ECMB6J",
+      "bind_code_expires_at": "2026-06-15T12:20:14.011Z",
+      "status": "offline",
+      "activated": false,
+      "dev_tool": "trae",
+      "is_primary": false
+    },
+    {
+      "id": "b88224c5-a861-4371-8620-5e05e5ff6aec",
+      "last_seen": "2026-06-15T12:34:54.367Z",
+      "user_id": "4d050dfc-aa1b-4a9f-9e67-d33a72241c11",
+      "name": "我的开发设备",
+      "bind_code": "B9JTJ2",
+      "bind_code_expires_at": "2026-06-15T12:44:54.367Z",
+      "status": "offline",
+      "activated": false,
+      "dev_tool": "trae",
+      "is_primary": false
+    },
+    {
+      "id": "85bd9816-a5d5-4ed2-b303-32680a58333a",
+      "last_seen": "2026-06-15T12:35:09.905Z",
+      "user_id": "4d050dfc-aa1b-4a9f-9e67-d33a72241c11",
+      "name": "我的开发设备",
+      "bind_code": "4W5DXG",
+      "bind_code_expires_at": "2026-06-15T12:45:09.905Z",
+      "status": "offline",
+      "activated": false,
+      "dev_tool": "trae",
+      "is_primary": false
+    },
+    {
+      "id": "1b7b133c-c5b6-4e07-9e69-29a386f38d8d",
+      "last_seen": "2026-06-15T12:39:37.342Z",
+      "user_id": "4d050dfc-aa1b-4a9f-9e67-d33a72241c11",
+      "name": "我的开发设备",
+      "bind_code": "X5X33U",
+      "bind_code_expires_at": "2026-06-15T12:49:37.342Z",
+      "status": "offline",
+      "activated": false,
+      "dev_tool": "trae",
+      "is_primary": false
+    },
+    {
+      "id": "cb86be69-9113-4dd5-92c8-405d27e2696a",
+      "last_seen": "2026-06-15T13:31:30.993Z",
+      "user_id": "4d050dfc-aa1b-4a9f-9e67-d33a72241c11",
+      "name": "Win32",
+      "status": "offline",
+      "activated": false,
+      "dev_tool": "cursor",
+      "connection_allowed": true,
+      "is_primary": false
+    }
+  ],
+  "tool_statuses": [
+    {
+      "id": "bb3cae49-0bf3-4f65-92ea-359a2739fe2b",
+      "device_id": "cb86be69-9113-4dd5-92c8-405d27e2696a",
+      "tool_name": "trae",
+      "status": "not_installed",
+      "current_task": null
+    },
+    {
+      "id": "ca314939-bab2-43f2-8493-7563a0d84142",
+      "device_id": "cb86be69-9113-4dd5-92c8-405d27e2696a",
+      "tool_name": "codex",
+      "status": "running",
+      "current_task": null
+    },
+    {
+      "id": "5f49fe7c-d3de-451b-bbcb-1825f3870a99",
+      "device_id": "cb86be69-9113-4dd5-92c8-405d27e2696a",
+      "tool_name": "cursor",
+      "status": "running",
+      "current_task": null
+    },
+    {
+      "id": "d7d3587a-7d5e-4f13-8909-65b9fa67dada",
+      "device_id": "cb86be69-9113-4dd5-92c8-405d27e2696a",
+      "tool_name": "claude_code",
+      "status": "running",
+      "current_task": null
+    }
+  ],
   "tasks": [],
   "sub_tasks": [],
   "log_entries": []

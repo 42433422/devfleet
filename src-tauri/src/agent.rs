@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command as StdCommand, Stdio},
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
 };
@@ -107,6 +107,8 @@ struct AgentInner {
     running_dev_tool: Mutex<Option<String>>,
     last_error: Mutex<Option<String>>,
     generation: AtomicU64,
+    loop_running: AtomicBool,
+    paused: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -134,6 +136,8 @@ impl AgentState {
                 running_dev_tool: Mutex::new(None),
                 last_error: Mutex::new(None),
                 generation: AtomicU64::new(0),
+                loop_running: AtomicBool::new(false),
+                paused: AtomicBool::new(false),
             }),
         }
     }
@@ -177,20 +181,57 @@ impl AgentState {
     }
 
     fn start(&self) {
-        let generation = self.inner.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        if self
+            .inner
+            .config
+            .lock()
+            .ok()
+            .and_then(|value| value.clone())
+            .is_none()
+        {
+            return;
+        }
+        self.inner.paused.store(false, Ordering::SeqCst);
+        self.inner.generation.fetch_add(1, Ordering::SeqCst);
+        if self
+            .inner
+            .loop_running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
         let state = self.clone();
         tauri::async_runtime::spawn(async move {
+            let generation = state.inner.generation.load(Ordering::SeqCst);
             state.run_loop(generation).await;
+            state.inner.loop_running.store(false, Ordering::SeqCst);
+            let latest = state.inner.generation.load(Ordering::SeqCst);
+            let should_restart = !state.inner.paused.load(Ordering::SeqCst)
+                && state
+                    .inner
+                    .config
+                    .lock()
+                    .ok()
+                    .and_then(|value| value.clone())
+                    .is_some()
+                && latest != generation;
+            if should_restart {
+                state.start();
+            }
         });
     }
 
     fn stop(&self) {
+        self.inner.paused.store(true, Ordering::SeqCst);
         self.inner.generation.fetch_add(1, Ordering::SeqCst);
+        self.inner.loop_running.store(false, Ordering::SeqCst);
         set_mutex(&self.inner.connected, false);
         set_mutex(&self.inner.running_task, None);
     }
 
     async fn run_loop(&self, generation: u64) {
+        let mut backoff_secs = 5u64;
         loop {
             if self.inner.generation.load(Ordering::SeqCst) != generation {
                 return;
@@ -217,6 +258,7 @@ impl AgentState {
                 Ok((socket, _)) => {
                     set_mutex(&self.inner.connected, true);
                     set_mutex(&self.inner.last_error, None);
+                    backoff_secs = 5;
                     if let Err(error) = self
                         .run_connection(socket, config.clone(), generation)
                         .await
@@ -233,8 +275,21 @@ impl AgentState {
             if self.inner.generation.load(Ordering::SeqCst) != generation {
                 return;
             }
-            time::sleep(Duration::from_secs(5)).await;
+            if !self.interruptible_sleep(generation, backoff_secs).await {
+                return;
+            }
+            backoff_secs = (backoff_secs * 2).min(60);
         }
+    }
+
+    async fn interruptible_sleep(&self, generation: u64, seconds: u64) -> bool {
+        for _ in 0..seconds * 10 {
+            if self.inner.generation.load(Ordering::SeqCst) != generation {
+                return false;
+            }
+            time::sleep(Duration::from_millis(100)).await;
+        }
+        true
     }
 
     async fn run_connection<S>(
@@ -248,11 +303,21 @@ impl AgentState {
     {
         let (mut writer, mut reader) = socket.split();
         let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<Value>();
-        let mut heartbeat = time::interval(Duration::from_secs(5));
+        let mut heartbeat = time::interval(Duration::from_secs(15));
+        heartbeat.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
+        let mut tool_status = time::interval(Duration::from_secs(30));
+        tool_status.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
 
         loop {
             tokio::select! {
               _ = heartbeat.tick() => {
+                if self.inner.generation.load(Ordering::SeqCst) != generation {
+                  let _ = writer.close().await;
+                  return Ok(());
+                }
+                writer.send(Message::Ping(Vec::new().into())).await.map_err(|error| error.to_string())?;
+              }
+              _ = tool_status.tick() => {
                 if self.inner.generation.load(Ordering::SeqCst) != generation {
                   let _ = writer.close().await;
                   return Ok(());
@@ -874,7 +939,15 @@ fn find_binary_in_path(binary: &str) -> Option<String> {
 
 async fn run_command(cwd: Option<&Path>, program: &str, args: &[&str]) -> Result<String, String> {
     let mut command = Command::new(program);
-    command.args(args).kill_on_drop(true);
+    command
+        .args(args)
+        .kill_on_drop(true)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("CI", "1")
+        .env("NO_COLOR", "1")
+        .env("TERM", "dumb");
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }

@@ -342,6 +342,7 @@ export default function Devices() {
                 </label>
 
                 <div className="space-y-1.5 mb-4">
+                  <p className="text-[10px] text-zinc-600">未安装 · 未启动 · 已启动</p>
                   {d.tools.length === 0 ? (
                     <p className="text-xs text-zinc-600">暂无工具信息</p>
                   ) : (
