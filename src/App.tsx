@@ -10,6 +10,7 @@ import Tasks from '@/pages/Tasks';
 import TaskDetail from '@/pages/TaskDetail';
 import Agent from '@/pages/Agent';
 import Integration from '@/pages/Integration';
+import SupportedToolsCorner from '@/components/SupportedToolsCorner';
 
 function AppShell({ children }: { children: React.ReactNode }) {
   return (
@@ -102,6 +103,7 @@ export default function App() {
   return (
     <Router>
       <WSConnector />
+      <SupportedToolsCorner />
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/agent" element={<Agent />} />
