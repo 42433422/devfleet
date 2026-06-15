@@ -32,6 +32,7 @@ export interface Task {
   subTasks: SubTask[];
   created_at: string;
   completed_at?: string;
+  merge_commit_sha?: string;
   repo_url: string;
   branch: string;
 }
@@ -46,54 +47,76 @@ interface TaskCreateData {
 interface TasksState {
   tasks: Task[];
   currentTask: Task | null;
+  loading: boolean;
+  currentTaskLoading: boolean;
+  error: string | null;
   fetchTasks: () => Promise<void>;
   fetchTask: (id: string) => Promise<void>;
   createTask: (data: TaskCreateData) => Promise<Task>;
   mergeTask: (id: string) => Promise<void>;
+  deleteTask: (id: string) => Promise<void>;
   updateTaskProgress: (taskId: string, subTaskId: string, progress: number, status?: SubTaskStatus) => void;
+  updateTaskStatus: (taskId: string, status: TaskStatus) => void;
   appendTaskLog: (taskId: string, subTaskId: string, log: LogEntry) => void;
   addTask: (task: Task) => void;
+  clearError: () => void;
 }
+
+const errorMessage = (error: unknown) => error instanceof Error ? error.message : '操作失败，请稍后重试';
 
 export const useTasksStore = create<TasksState>((set, get) => ({
   tasks: [],
   currentTask: null,
+  loading: false,
+  currentTaskLoading: false,
+  error: null,
 
   fetchTasks: async () => {
+    set({ loading: true, error: null });
     try {
       const result = await api<{ tasks: Task[] }>('/api/tasks');
       const tasks = result?.tasks || [];
-      set({ tasks });
-    } catch {
-      set({ tasks: [] });
+      set({ tasks, loading: false });
+    } catch (error) {
+      set({ loading: false, error: errorMessage(error) });
     }
   },
 
   fetchTask: async (id: string) => {
+    set({ currentTaskLoading: true, error: null });
     try {
       const result = await api<{ task: Task }>(`/api/tasks/${id}`);
       const task = result?.task;
       if (task && task.id) {
         set({
           currentTask: task,
+          currentTaskLoading: false,
           tasks: get().tasks.map((t) => (t.id === id ? task : t)),
         });
       }
-    } catch {
-      set({ currentTask: null });
+    } catch (error) {
+      set({ currentTask: null, currentTaskLoading: false, error: errorMessage(error) });
     }
   },
 
   createTask: async (data: TaskCreateData) => {
-    const result = await api<{ task: Task }>('/api/tasks', {
-      method: 'POST',
-      body: data as unknown as Record<string, unknown>,
-    });
-    const task = result?.task;
-    if (task && task.id) {
-      set({ tasks: [task, ...get().tasks] });
+    try {
+      const result = await api<{ task: Task }>('/api/tasks', {
+        method: 'POST',
+        body: data as unknown as Record<string, unknown>,
+      });
+      const task = result?.task;
+      if (task && task.id) {
+        set((state) => ({
+          tasks: [task, ...state.tasks.filter((item) => item.id !== task.id)],
+          error: null,
+        }));
+      }
+      return task;
+    } catch (error) {
+      set({ error: errorMessage(error) });
+      throw error;
     }
-    return task;
   },
 
   mergeTask: async (id: string) => {
@@ -101,6 +124,16 @@ export const useTasksStore = create<TasksState>((set, get) => ({
     set((s) => ({
       tasks: s.tasks.map((t) => (t.id === id ? { ...t, status: 'merged' as TaskStatus } : t)),
       currentTask: s.currentTask?.id === id ? { ...s.currentTask, status: 'merged' as TaskStatus } : s.currentTask,
+      error: null,
+    }));
+  },
+
+  deleteTask: async (id: string) => {
+    await api(`/api/tasks/${id}`, { method: 'DELETE' });
+    set((state) => ({
+      tasks: state.tasks.filter((task) => task.id !== id),
+      currentTask: state.currentTask?.id === id ? null : state.currentTask,
+      error: null,
     }));
   },
 
@@ -119,6 +152,13 @@ export const useTasksStore = create<TasksState>((set, get) => ({
     });
   },
 
+  updateTaskStatus: (taskId: string, status: TaskStatus) => {
+    set((state) => ({
+      tasks: state.tasks.map((task) => task.id === taskId ? { ...task, status } : task),
+      currentTask: state.currentTask?.id === taskId ? { ...state.currentTask, status } : state.currentTask,
+    }));
+  },
+
   appendTaskLog: (taskId: string, subTaskId: string, log: LogEntry) => {
     set((s) => {
       const updater = (t: Task): Task => ({
@@ -135,6 +175,8 @@ export const useTasksStore = create<TasksState>((set, get) => ({
   },
 
   addTask: (task: Task) => {
-    set((s) => ({ tasks: [task, ...s.tasks] }));
+    set((s) => ({ tasks: s.tasks.some((item) => item.id === task.id) ? s.tasks : [task, ...s.tasks] }));
   },
+
+  clearError: () => set({ error: null }),
 }));

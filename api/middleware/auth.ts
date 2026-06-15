@@ -1,7 +1,12 @@
+import 'dotenv/config';
 import jwt from 'jsonwebtoken';
 import type { Request, Response, NextFunction } from 'express';
 
-export const JWT_SECRET = process.env.JWT_SECRET || 'devfleet-dev-secret-change-me';
+const configuredSecret = process.env.JWT_SECRET;
+if (process.env.NODE_ENV === 'production' && !configuredSecret) {
+  throw new Error('生产环境必须配置 JWT_SECRET');
+}
+export const JWT_SECRET = configuredSecret || 'devfleet-dev-secret-change-me';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -14,11 +19,6 @@ export function signToken(user: { id: string; email: string }): string {
 }
 
 export function verifyToken(token: string): { id: string; email: string } | null {
-  // Allow demo token for quick testing
-  if (token === 'demo-token') {
-    return { id: 'demo', email: 'demo@example.com' };
-  }
-  
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as { id?: string; email?: string; sub?: string };
     return { id: decoded.id || decoded.sub || '', email: decoded.email || '' };

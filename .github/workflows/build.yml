@@ -27,10 +27,22 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-action@stable
 
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Verify application and MCP
+        run: npm test && npm run server:build
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
+        env:
+          VITE_API_BASE_URL: http://localhost:3001
+          VITE_WS_BASE_URL: ws://localhost:3001
         with:
           args: ''

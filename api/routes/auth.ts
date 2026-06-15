@@ -6,7 +6,9 @@ import { signToken, authMiddleware } from '../middleware/auth.js';
 const router = Router();
 
 router.post('/register', async (req: Request, res: Response): Promise<void> => {
-  const { email, password } = (req.body || {}) as { email?: string; password?: string };
+  const body = (req.body || {}) as { email?: string; password?: string };
+  const email = (body.email || '').trim().toLowerCase();
+  const password = body.password || '';
   if (!email || !password) {
     res.status(400).json({ error: '邮箱和密码不能为空' });
     return;
@@ -15,8 +17,8 @@ router.post('/register', async (req: Request, res: Response): Promise<void> => {
     res.status(400).json({ error: '邮箱格式不正确' });
     return;
   }
-  if (password.length < 6) {
-    res.status(400).json({ error: '密码至少 6 位' });
+  if (password.length < 8) {
+    res.status(400).json({ error: '密码至少 8 位' });
     return;
   }
   const exist = db.users.findByEmail(email);
@@ -24,14 +26,16 @@ router.post('/register', async (req: Request, res: Response): Promise<void> => {
     res.status(400).json({ error: '该邮箱已注册' });
     return;
   }
-  const password_hash = bcrypt.hashSync(password, 8);
+  const password_hash = bcrypt.hashSync(password, 10);
   const user = db.users.create({ email, password_hash });
   const token = signToken(user);
   res.status(200).json({ token, user: { id: user.id, email: user.email } });
 });
 
 router.post('/login', async (req: Request, res: Response): Promise<void> => {
-  const { email, password } = (req.body || {}) as { email?: string; password?: string };
+  const body = (req.body || {}) as { email?: string; password?: string };
+  const email = (body.email || '').trim().toLowerCase();
+  const password = body.password || '';
   if (!email || !password) {
     res.status(400).json({ error: '邮箱和密码不能为空' });
     return;

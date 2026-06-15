@@ -7,6 +7,8 @@ import Login from '@/pages/Login';
 import Devices from '@/pages/Devices';
 import Tasks from '@/pages/Tasks';
 import TaskDetail from '@/pages/TaskDetail';
+import Agent from '@/pages/Agent';
+import Integration from '@/pages/Integration';
 
 function AppShell({ children }: { children: React.ReactNode }) {
   return (
@@ -52,9 +54,11 @@ export default function App() {
       <WSConnector />
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/agent" element={<Agent />} />
         <Route path="/devices" element={<Protected><Devices /></Protected>} />
         <Route path="/tasks" element={<Protected><Tasks /></Protected>} />
         <Route path="/tasks/:id" element={<Protected><TaskDetail /></Protected>} />
+        <Route path="/integration" element={<Protected><Integration /></Protected>} />
         <Route path="*" element={<AuthRedirect />} />
       </Routes>
     </Router>

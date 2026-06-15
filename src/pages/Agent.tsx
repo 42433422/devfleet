@@ -1,0 +1,164 @@
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { Link } from 'react-router-dom';
+import { AlertCircle, ArrowLeft, CheckCircle2, Laptop, Link2, Play, Power, RefreshCw, Square, Unlink } from 'lucide-react';
+import { agentApi, isDesktopApp, type AgentStatus } from '@/lib/agent';
+import ToolBadge from '@/components/ToolBadge';
+
+const defaultWorkspace = navigator.platform.toLowerCase().includes('win') ? 'C:\\DevFleet\\workspaces' : `${navigator.platform.toLowerCase().includes('mac') ? '/Users/Shared' : '/tmp'}/DevFleet/workspaces`;
+
+export default function Agent() {
+  const desktop = isDesktopApp();
+  const [status, setStatus] = useState<AgentStatus | null>(null);
+  const [form, setForm] = useState({
+    apiBaseUrl: import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001',
+    bindCode: '',
+    deviceName: navigator.platform || '开发设备',
+    workspaceRoot: defaultWorkspace,
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const refresh = useCallback(async () => {
+    if (!desktop) return;
+    try {
+      setStatus(await agentApi.status());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [desktop]);
+
+  useEffect(() => {
+    refresh();
+    const timer = window.setInterval(refresh, 3000);
+    return () => window.clearInterval(timer);
+  }, [refresh]);
+
+  const bind = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      setStatus(await agentApi.bind({ ...form, bindCode: form.bindCode.trim().toUpperCase() }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const run = async (action: () => Promise<AgentStatus>) => {
+    setBusy(true);
+    setError('');
+    try {
+      setStatus(await action());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!desktop) {
+    return (
+      <div className="min-h-screen bg-zinc-950 text-zinc-200 flex items-center justify-center p-6">
+        <div className="max-w-md text-center bg-zinc-900/70 border border-zinc-800 rounded-2xl p-8">
+          <Laptop size={36} className="text-brand mx-auto mb-4" />
+          <h1 className="text-xl font-semibold text-white mb-2">需要桌面客户端</h1>
+          <p className="text-sm text-zinc-500 mb-6">设备代理需要访问本机进程、Git 和编程软件，浏览器页面无法提供这些权限。</p>
+          <Link to="/login" className="inline-flex items-center gap-2 text-sm text-brand"><ArrowLeft size={14} />返回</Link>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-zinc-950 text-zinc-200 p-6">
+      <div className="max-w-3xl mx-auto">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-xl font-semibold text-white flex items-center gap-2"><Laptop className="text-brand" size={20} />本机设备代理</h1>
+            <p className="text-sm text-zinc-500 mt-1">让这台设备接受主设备派发的真实代码任务</p>
+          </div>
+          <Link to="/login" className="flex items-center gap-2 text-sm text-zinc-500 hover:text-white"><ArrowLeft size={14} />返回控制台</Link>
+        </div>
+
+        {(error || status?.lastError) && (
+          <div className="mb-4 flex items-start gap-2 px-4 py-3 bg-red-500/10 border border-red-500/20 rounded-lg text-sm text-red-400">
+            <AlertCircle size={15} className="mt-0.5" />{error || status?.lastError}
+          </div>
+        )}
+
+        {!status?.configured ? (
+          <form onSubmit={bind} className="bg-zinc-900/70 border border-zinc-800 rounded-2xl p-6 space-y-4">
+            <div className="flex items-center gap-2 text-sm text-zinc-300 mb-2"><Link2 size={15} className="text-brand" />输入主设备生成的一次性绑定码</div>
+            <label className="block">
+              <span className="block text-xs text-zinc-500 mb-1.5">DevFleet 服务器地址</span>
+              <input value={form.apiBaseUrl} onChange={(event) => setForm({ ...form, apiBaseUrl: event.target.value })} required className="w-full px-3 py-2.5 bg-zinc-950 border border-zinc-800 rounded-lg text-sm focus:outline-none focus:border-brand/50" />
+            </label>
+            <div className="grid md:grid-cols-2 gap-4">
+              <label className="block">
+                <span className="block text-xs text-zinc-500 mb-1.5">绑定码</span>
+                <input value={form.bindCode} onChange={(event) => setForm({ ...form, bindCode: event.target.value.toUpperCase() })} required maxLength={6} placeholder="ABC123" className="w-full px-3 py-2.5 bg-zinc-950 border border-zinc-800 rounded-lg text-sm font-mono tracking-[0.25em] uppercase focus:outline-none focus:border-brand/50" />
+              </label>
+              <label className="block">
+                <span className="block text-xs text-zinc-500 mb-1.5">本机名称</span>
+                <input value={form.deviceName} onChange={(event) => setForm({ ...form, deviceName: event.target.value })} required className="w-full px-3 py-2.5 bg-zinc-950 border border-zinc-800 rounded-lg text-sm focus:outline-none focus:border-brand/50" />
+              </label>
+            </div>
+            <label className="block">
+              <span className="block text-xs text-zinc-500 mb-1.5">任务工作目录</span>
+              <input value={form.workspaceRoot} onChange={(event) => setForm({ ...form, workspaceRoot: event.target.value })} required className="w-full px-3 py-2.5 bg-zinc-950 border border-zinc-800 rounded-lg text-sm font-mono focus:outline-none focus:border-brand/50" />
+            </label>
+            <button disabled={busy} className="w-full py-2.5 bg-brand hover:bg-brand/90 disabled:opacity-50 text-black font-semibold rounded-lg text-sm">{busy ? '绑定中...' : '绑定这台设备'}</button>
+          </form>
+        ) : (
+          <div className="space-y-4">
+            <div className="bg-zinc-900/70 border border-zinc-800 rounded-2xl p-6">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    {status.connected ? <CheckCircle2 size={16} className="text-green-400" /> : <RefreshCw size={16} className="text-amber-400" />}
+                    <h2 className="font-medium text-white">{status.config?.deviceName}</h2>
+                    <span className={`text-xs ${status.connected ? 'text-green-400' : 'text-amber-400'}`}>{status.connected ? '已连接' : '正在重连'}</span>
+                  </div>
+                  <p className="text-sm text-zinc-400">绑定控制者：<span className="text-brand">{status.config?.controllerEmail}</span></p>
+                  <p className="text-sm text-zinc-400 mt-1">主设备：<span className="text-white">{status.config?.controllerDeviceName || '尚未设置主设备'}</span></p>
+                  <p className="text-xs text-zinc-600 mt-1 font-mono">设备 ID：{status.config?.deviceId}</p>
+                  <p className="text-xs text-zinc-600 mt-1 font-mono">工作目录：{status.config?.workspaceRoot}</p>
+                  {status.runningTask && <p className="text-xs text-green-400 mt-2">当前任务：{status.runningTask}</p>}
+                </div>
+                <div className="flex gap-2">
+                  {status.connected ? (
+                    <button disabled={busy} onClick={() => run(agentApi.stop)} className="p-2 bg-zinc-800 rounded-lg text-zinc-400 hover:text-white" title="停止代理"><Square size={15} /></button>
+                  ) : (
+                    <button disabled={busy} onClick={() => run(agentApi.start)} className="p-2 bg-brand/15 rounded-lg text-brand" title="启动代理"><Play size={15} /></button>
+                  )}
+                  <button disabled={busy} onClick={() => run(agentApi.unbind)} className="p-2 bg-red-500/10 rounded-lg text-red-400" title="解除本机绑定"><Unlink size={15} /></button>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-zinc-900/70 border border-zinc-800 rounded-2xl p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-sm font-medium text-white">编程工具状态</h2>
+                <button onClick={refresh} className="text-zinc-500 hover:text-white"><RefreshCw size={14} /></button>
+              </div>
+              <div className="grid md:grid-cols-2 gap-3">
+                {status.tools.map((tool) => (
+                  <div key={tool.toolName} className="p-3 bg-zinc-950/60 border border-zinc-800 rounded-lg">
+                    <ToolBadge tool={tool.toolName} status={tool.status} />
+                    <p className="text-[10px] text-zinc-600 mt-2 truncate">{tool.executable || '未检测到安装路径'}</p>
+                    {tool.toolName === 'trae' && tool.installed && (
+                      <button onClick={() => agentApi.openTool('trae', status.config?.workspaceRoot || '')} className="mt-2 flex items-center gap-1 text-xs text-brand"><Power size={11} />打开 Trae</button>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-zinc-600 mt-4">默认编辑器：Trae；自动执行器：Codex CLI。任务会在独立目录和独立 Git 分支中运行并推送。</p>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

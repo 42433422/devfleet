@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Link as LinkIcon, Power, PowerOff, Wifi, WifiOff, RefreshCw, QrCode, Copy, Check, Trash2, Star, Keyboard } from 'lucide-react';
+import { Plus, Link as LinkIcon, Power, PowerOff, Wifi, WifiOff, RefreshCw, QrCode, Copy, Check, Trash2, Star, AlertCircle } from 'lucide-react';
 import { useDevicesStore, type Device } from '@/store/devices';
 import ToolBadge from '@/components/ToolBadge';
 
@@ -30,14 +30,15 @@ function QRCodeBox({ code }: { code: string }) {
 }
 
 export default function Devices() {
-  const { devices, fetchDevices, bindDevice, connectDevice, disconnectDevice, deleteDevice, setPrimaryDevice } = useDevicesStore();
+  const { devices, loading: devicesLoading, error, clearError, fetchDevices, bindDevice, connectDevice, disconnectDevice, deleteDevice, setPrimaryDevice } = useDevicesStore();
   const [showAdd, setShowAdd] = useState(false);
-  const [bindMode, setBindMode] = useState<'qr' | 'input'>('qr');
   const [bindCode, setBindCode] = useState('');
-  const [inputCode, setInputCode] = useState('');
+  const [bindExpiresAt, setBindExpiresAt] = useState('');
+  const [deviceName, setDeviceName] = useState('我的开发设备');
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [actionError, setActionError] = useState('');
 
   useEffect(() => {
     fetchDevices();
@@ -46,12 +47,15 @@ export default function Devices() {
   }, [fetchDevices]);
 
   const handleGenerateBindCode = async () => {
+    setActionError('');
+    clearError();
     setLoading(true);
     try {
-      const res = await bindDevice('未命名设备');
+      const res = await bindDevice(deviceName.trim() || '未命名设备');
       setBindCode(res.bindCode);
-    } catch {
-      setBindCode('DEV-ERROR');
+      setBindExpiresAt(res.expiresAt || '');
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : '生成绑定码失败');
     } finally {
       setLoading(false);
     }
@@ -64,25 +68,22 @@ export default function Devices() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleInputCode = async () => {
-    if (!inputCode.trim()) return;
-    setLoading(true);
+  const runDeviceAction = async (action: () => Promise<void>) => {
+    setActionError('');
     try {
-      const res = await bindDevice('未命名设备');
-      setBindCode(res.bindCode);
-      setInputCode('');
-      setBindMode('qr');
-    } catch {
-      setBindCode('DEV-ERROR');
-    } finally {
-      setLoading(false);
+      await action();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : '设备操作失败');
     }
   };
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await fetchDevices();
-    setRefreshing(false);
+    try {
+      await fetchDevices();
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const onlineCount = devices.filter(d => d.status === 'online').length;
@@ -108,6 +109,8 @@ export default function Devices() {
             onClick={() => {
               setShowAdd(true);
               setBindCode('');
+              setActionError('');
+              clearError();
             }}
             className="flex items-center gap-2 px-4 py-2 bg-brand hover:bg-brand/90 text-black font-medium rounded-lg text-sm transition-all duration-200 shadow-lg shadow-brand/20"
           >
@@ -116,6 +119,13 @@ export default function Devices() {
           </button>
         </div>
       </div>
+
+      {(actionError || error) && (
+        <div className="mb-4 flex items-center gap-2 px-4 py-3 bg-red-500/10 border border-red-500/20 rounded-lg text-sm text-red-400">
+          <AlertCircle size={15} />
+          {actionError || error}
+        </div>
+      )}
 
       {showAdd && (
         <div className="mb-6 bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-5 animate-fade-in">
@@ -132,41 +142,24 @@ export default function Devices() {
             </button>
           </div>
 
-          {/* 模式切换 */}
           {!bindCode && (
-            <div className="flex gap-2 mb-6">
-              <button
-                onClick={() => setBindMode('qr')}
-                className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg text-sm font-medium transition-all duration-200 ${
-                  bindMode === 'qr'
-                    ? 'bg-brand text-black'
-                    : 'bg-zinc-800/60 text-zinc-400 hover:text-white'
-                }`}
-              >
-                <QrCode size={14} strokeWidth={1.5} />
-                扫码绑定
-              </button>
-              <button
-                onClick={() => setBindMode('input')}
-                className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg text-sm font-medium transition-all duration-200 ${
-                  bindMode === 'input'
-                    ? 'bg-brand text-black'
-                    : 'bg-zinc-800/60 text-zinc-400 hover:text-white'
-                }`}
-              >
-                <Keyboard size={14} strokeWidth={1.5} />
-                输入码绑定
-              </button>
+            <div className="mb-4">
+              <label className="block text-xs text-zinc-500 mb-1.5">设备名称</label>
+              <input
+                value={deviceName}
+                onChange={(event) => setDeviceName(event.target.value)}
+                placeholder="例如：办公 MacBook"
+                className="w-full px-4 py-3 bg-zinc-950 border border-zinc-800 rounded-lg text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-brand/50"
+              />
             </div>
           )}
 
-          {/* 扫码模式 */}
-          {bindMode === 'qr' && !bindCode && (
+          {!bindCode && (
             <div className="flex flex-col items-center py-6">
               <div className="w-20 h-20 rounded-xl bg-zinc-800/60 flex items-center justify-center mb-4">
                 <QrCode size={32} className="text-zinc-500" strokeWidth={1.5} />
               </div>
-              <p className="text-sm text-zinc-400 mb-4">生成绑定码后，使用设备客户端扫码完成绑定</p>
+              <p className="text-sm text-zinc-400 mb-4">在目标设备安装并打开 DevFleet，进入“本机代理”后输入绑定码</p>
               <button
                 onClick={handleGenerateBindCode}
                 disabled={loading}
@@ -178,36 +171,12 @@ export default function Devices() {
             </div>
           )}
 
-          {/* 输入码模式 */}
-          {bindMode === 'input' && !bindCode && (
-            <div className="py-4">
-              <div className="mb-4">
-                <label className="block text-xs text-zinc-500 mb-1.5">输入设备提供的绑定码</label>
-                <input
-                  value={inputCode}
-                  onChange={(e) => setInputCode(e.target.value.toUpperCase())}
-                  placeholder="请输入绑定码，如：ABC123"
-                  className="w-full px-4 py-3 bg-zinc-950 border border-zinc-800 rounded-lg text-sm text-white placeholder-zinc-600 font-mono tracking-wider focus:outline-none focus:border-brand/50 focus:ring-1 focus:ring-brand/30"
-                  onKeyDown={(e) => e.key === 'Enter' && handleInputCode()}
-                />
-              </div>
-              <button
-                onClick={handleInputCode}
-                disabled={loading || !inputCode.trim()}
-                className="w-full flex items-center justify-center gap-2 px-6 py-2.5 bg-brand hover:bg-brand/90 disabled:opacity-50 text-black font-medium rounded-lg text-sm transition-all duration-200"
-              >
-                <LinkIcon size={14} strokeWidth={1.5} />
-                {loading ? '绑定中...' : '确认绑定'}
-              </button>
-            </div>
-          )}
-
           {/* 显示绑定码 */}
           {bindCode && (
             <div className="grid md:grid-cols-2 gap-6 items-center">
               <div className="flex flex-col items-center">
                 <QRCodeBox code={bindCode} />
-                <p className="text-xs text-zinc-500 mt-3">使用设备客户端扫码绑定</p>
+                <p className="text-xs text-zinc-500 mt-3">在设备代理中输入右侧绑定码</p>
               </div>
               <div className="space-y-4">
                 <div className="p-4 bg-zinc-950/80 border border-zinc-800/60 rounded-lg">
@@ -223,8 +192,9 @@ export default function Devices() {
                   </div>
                 </div>
                 <p className="text-xs text-zinc-500">
-                  <span className="text-amber-400">提示：</span>设备扫码后会自动上报设备名称，无需手动输入
+                  <span className="text-amber-400">真实接入：</span>在目标设备打开 DevFleet 的“本机代理”并输入此一次性绑定码
                 </p>
+                {bindExpiresAt && <p className="text-xs text-zinc-600">有效期至：{formatTime(bindExpiresAt)}</p>}
                 <button
                   onClick={handleGenerateBindCode}
                   disabled={loading}
@@ -239,7 +209,9 @@ export default function Devices() {
         </div>
       )}
 
-      {devices.length === 0 ? (
+      {devicesLoading && devices.length === 0 ? (
+        <div className="p-12 text-center text-sm text-zinc-500">正在加载设备...</div>
+      ) : devices.length === 0 ? (
         <div className="bg-zinc-900/40 border border-zinc-800/40 border-dashed rounded-xl p-12 text-center">
           <div className="w-16 h-16 mx-auto mb-4 rounded-xl bg-zinc-800/50 flex items-center justify-center">
             <WifiOff size={24} className="text-zinc-600" />
@@ -298,7 +270,7 @@ export default function Devices() {
                 <div className="flex gap-2">
                   {d.status === 'online' ? (
                     <button
-                      onClick={() => disconnectDevice(d.id)}
+                      onClick={() => runDeviceAction(() => disconnectDevice(d.id))}
                       className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-zinc-800/60 hover:bg-red-500/10 hover:text-red-400 text-zinc-400 rounded-lg text-xs transition-all duration-200"
                     >
                       <PowerOff size={12} strokeWidth={1.5} />
@@ -306,7 +278,7 @@ export default function Devices() {
                     </button>
                   ) : (
                     <button
-                      onClick={() => connectDevice(d.id)}
+                      onClick={() => runDeviceAction(() => connectDevice(d.id))}
                       disabled={d.status === 'connecting'}
                       className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-brand/15 hover:bg-brand/25 disabled:opacity-50 text-brand rounded-lg text-xs transition-all duration-200"
                     >
@@ -315,7 +287,7 @@ export default function Devices() {
                     </button>
                   )}
                   <button
-                    onClick={() => setPrimaryDevice(d.id)}
+                    onClick={() => runDeviceAction(() => setPrimaryDevice(d.id))}
                     className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs transition-all duration-200 ${
                       d.isPrimary
                         ? 'bg-brand text-black'
@@ -326,7 +298,11 @@ export default function Devices() {
                     <Star size={12} strokeWidth={1.5} />
                   </button>
                   <button
-                    onClick={() => deleteDevice(d.id)}
+                    onClick={() => {
+                      if (window.confirm(`确定删除设备“${d.name}”吗？`)) {
+                        runDeviceAction(() => deleteDevice(d.id));
+                      }
+                    }}
                     className="flex items-center justify-center gap-1.5 px-3 py-2 bg-zinc-800/60 hover:bg-red-500/10 hover:text-red-400 text-zinc-400 rounded-lg text-xs transition-all duration-200"
                     title="删除设备"
                   >

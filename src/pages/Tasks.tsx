@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, ChevronRight, GitBranch, Calendar, Play, CheckCircle2, XCircle, Clock, GitMerge } from 'lucide-react';
+import { Plus, ChevronRight, GitBranch, Calendar, Play, CheckCircle2, XCircle, Clock, GitMerge, AlertCircle, Monitor } from 'lucide-react';
 import { useTasksStore, type Task } from '@/store/tasks';
+import { useDevicesStore } from '@/store/devices';
 
 const statusConfig: Record<Task['status'], { bg: string; text: string; icon: React.ReactNode }> = {
   pending: { bg: 'bg-zinc-700/50', text: 'text-zinc-400', icon: <Clock size={10} /> },
@@ -34,28 +35,31 @@ function formatTime(t: string) {
 }
 
 export default function Tasks() {
-  const { tasks, fetchTasks, createTask } = useTasksStore();
+  const { tasks, loading, error, clearError, fetchTasks, createTask } = useTasksStore();
+  const { devices, fetchDevices } = useDevicesStore();
   const navigate = useNavigate();
   const [form, setForm] = useState({ title: '', description: '', repo_url: '', branch: 'main' });
-  const [loading, setLoading] = useState(false);
+  const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     fetchTasks();
+    fetchDevices();
     const timer = setInterval(fetchTasks, 10000);
     return () => clearInterval(timer);
-  }, [fetchTasks]);
+  }, [fetchDevices, fetchTasks]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.title.trim()) return;
-    setLoading(true);
+    clearError();
+    setCreating(true);
     try {
       await createTask(form);
       setForm({ title: '', description: '', repo_url: '', branch: 'main' });
     } catch {
-      /* ignore */
+      // The store exposes the API error in the page banner.
     } finally {
-      setLoading(false);
+      setCreating(false);
     }
   };
 
@@ -69,6 +73,24 @@ export default function Tasks() {
           {runningCount}/{tasks.length} 任务运行中
         </p>
       </div>
+
+      {error && (
+        <div className="mb-4 flex items-center gap-2 px-4 py-3 bg-red-500/10 border border-red-500/20 rounded-lg text-sm text-red-400">
+          <AlertCircle size={15} />
+          {error}
+        </div>
+      )}
+
+      {devices.filter((device) => device.status === 'online').length === 0 && (
+        <button
+          type="button"
+          onClick={() => navigate('/devices')}
+          className="w-full mb-4 flex items-center gap-3 px-4 py-3 bg-amber-500/10 border border-amber-500/20 rounded-lg text-left"
+        >
+          <Monitor size={16} className="text-amber-400" />
+          <span className="text-sm text-amber-200">创建任务前，请确保至少一台真实设备代理在线</span>
+        </button>
+      )}
 
       <form onSubmit={submit} className="bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-5 mb-6 animate-fade-in">
         <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
@@ -96,8 +118,9 @@ export default function Tasks() {
           </div>
         </div>
         <div className="mb-3">
-          <label className="block text-xs text-zinc-500 mb-1.5">仓库地址</label>
+          <label className="block text-xs text-zinc-500 mb-1.5">仓库地址 *</label>
           <input
+            required
             value={form.repo_url}
             onChange={(e) => setForm({ ...form, repo_url: e.target.value })}
             placeholder="https://github.com/org/repo.git"
@@ -117,11 +140,11 @@ export default function Tasks() {
         <div className="flex justify-end">
           <button
             type="submit"
-            disabled={loading || !form.title.trim()}
+            disabled={creating || !form.title.trim() || !form.repo_url.trim() || devices.filter((device) => device.status === 'online').length === 0}
             className="flex items-center gap-2 px-5 py-2.5 bg-brand hover:bg-brand/90 disabled:opacity-50 text-black font-medium rounded-lg text-sm transition-all duration-200 shadow-lg shadow-brand/20"
           >
             <Plus size={14} strokeWidth={1.5} />
-            {loading ? '创建中...' : '创建任务'}
+            {creating ? '创建中...' : '创建任务'}
           </button>
         </div>
       </form>
@@ -131,7 +154,9 @@ export default function Tasks() {
         <span className="text-xs text-zinc-500">{tasks.length} 个任务</span>
       </div>
 
-      {tasks.length === 0 ? (
+      {loading && tasks.length === 0 ? (
+        <div className="p-12 text-center text-sm text-zinc-500">正在加载任务...</div>
+      ) : tasks.length === 0 ? (
         <div className="bg-zinc-900/40 border border-zinc-800/40 border-dashed rounded-xl p-12 text-center">
           <div className="w-16 h-16 mx-auto mb-4 rounded-xl bg-zinc-800/50 flex items-center justify-center">
             <GitBranch size={24} className="text-zinc-600" />

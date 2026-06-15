@@ -1,14 +1,20 @@
+import { randomBytes, randomInt, randomUUID } from 'node:crypto';
+
 export function genId(): string {
-  return Math.random().toString(16).slice(2) + Date.now().toString(16);
+  return randomUUID();
 }
 
 export function genBindCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let code = '';
   for (let i = 0; i < 6; i++) {
-    code += chars[Math.floor(Math.random() * chars.length)];
+    code += chars[randomInt(chars.length)];
   }
   return code;
+}
+
+export function genDeviceToken(): string {
+  return randomBytes(32).toString('hex');
 }
 
 export interface SubTaskDesc {
@@ -51,8 +57,4 @@ export function splitTaskIntoSubs(description: string, count = 3): SubTaskDesc[]
 export function branchNameFromTask(taskId: string, subIdx: number, tool: string): string {
   const shortId = taskId.slice(-6);
   return `devfleet/${tool}/sub-${subIdx + 1}-${shortId}`;
-}
-
-export function mergeCommitSha(taskId: string): string {
-  return 'merge-' + taskId.slice(-10) + '-' + Date.now().toString(16);
 }

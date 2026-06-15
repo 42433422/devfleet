@@ -1,5 +1,8 @@
 const getToken = () => localStorage.getItem('devfleet_token');
 
+export const getApiBaseUrl = () => (localStorage.getItem('devfleet_api_url') || import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+export const apiUrl = (url: string) => `${getApiBaseUrl()}${url}`;
+
 interface RequestOptions extends Omit<RequestInit, 'body'> {
   body?: Record<string, unknown>;
 }
@@ -19,7 +22,7 @@ export const api = async <T = Record<string, unknown>>(
     ? JSON.stringify(options.body)
     : options.body;
 
-  const res = await fetch(url, {
+  const res = await fetch(apiUrl(url), {
     ...options,
     headers,
     body: bodyContent as RequestInit['body'],

@@ -24,8 +24,10 @@ export interface Device {
 interface DevicesState {
   devices: Device[];
   currentDevice: Device | null;
+  loading: boolean;
+  error: string | null;
   fetchDevices: () => Promise<void>;
-  bindDevice: (name: string) => Promise<{ bindCode: string }>;
+  bindDevice: (name: string) => Promise<{ bindCode: string; deviceId?: string; expiresAt?: string }>;
   connectDevice: (id: string) => Promise<void>;
   disconnectDevice: (id: string) => Promise<void>;
   deleteDevice: (id: string) => Promise<void>;
@@ -33,78 +35,71 @@ interface DevicesState {
   updateToolStatus: (deviceId: string, toolStatus: ToolStatus[]) => void;
   updateDeviceStatus: (deviceId: string, status: DeviceStatus) => void;
   setCurrentDevice: (device: Device | null) => void;
+  clearError: () => void;
 }
 
-export const useDevicesStore = create<DevicesState>((set, get) => ({
+const errorMessage = (error: unknown) => error instanceof Error ? error.message : '操作失败，请稍后重试';
+
+export const useDevicesStore = create<DevicesState>((set) => ({
   devices: [],
   currentDevice: null,
+  loading: false,
+  error: null,
 
   fetchDevices: async () => {
+    set({ loading: true, error: null });
     try {
       const result = await api<{ devices: Device[] }>('/api/devices');
       const devices = result?.devices || [];
-      set({ devices });
-    } catch {
-      set({ devices: [] });
+      set({ devices, loading: false });
+    } catch (error) {
+      set({ loading: false, error: errorMessage(error) });
     }
   },
 
   bindDevice: async (name: string) => {
     // Only get bindCode, don't add device to list until activated
-    const res = await api<{ bindCode: string }>('/api/devices/bind', {
+    const res = await api<{ bindCode: string; deviceId?: string; expiresAt?: string }>('/api/devices/bind', {
       method: 'POST',
       body: { name },
     });
-    return { bindCode: res.bindCode || 'DEV-' + Math.random().toString(36).slice(2, 8).toUpperCase() };
+    return { bindCode: res.bindCode, deviceId: res.deviceId, expiresAt: res.expiresAt };
   },
 
   connectDevice: async (id: string) => {
-    try {
-      await api(`/api/devices/${id}/connect`, { method: 'POST' });
-    } catch (err) {
-      console.error('Failed to connect device:', err);
-    }
+    const result = await api<{ device: Device }>(`/api/devices/${id}/connect`, { method: 'POST' });
     set((s) => ({
-      devices: s.devices.map((d) => (d.id === id ? { ...d, status: 'connecting' } : d)),
+      devices: s.devices.map((d) => (d.id === id ? result.device : d)),
+      error: null,
     }));
   },
 
   disconnectDevice: async (id: string) => {
-    try {
-      await api(`/api/devices/${id}/disconnect`, { method: 'POST' });
-    } catch (err) {
-      console.error('Failed to disconnect device:', err);
-    }
+    const result = await api<{ device: Device }>(`/api/devices/${id}/disconnect`, { method: 'POST' });
     set((s) => ({
-      devices: s.devices.map((d) => (d.id === id ? { ...d, status: 'offline' } : d)),
+      devices: s.devices.map((d) => (d.id === id ? result.device : d)),
+      error: null,
     }));
   },
 
   deleteDevice: async (id: string) => {
-    try {
-      await api(`/api/devices/${id}`, { method: 'DELETE' });
-      set((s) => ({
-        devices: s.devices.filter((d) => d.id !== id),
-        currentDevice: s.currentDevice?.id === id ? null : s.currentDevice,
-      }));
-    } catch (err) {
-      console.error('Failed to delete device:', err);
-    }
+    await api(`/api/devices/${id}`, { method: 'DELETE' });
+    set((s) => ({
+      devices: s.devices.filter((d) => d.id !== id),
+      currentDevice: s.currentDevice?.id === id ? null : s.currentDevice,
+      error: null,
+    }));
   },
 
   setPrimaryDevice: async (id: string) => {
-    // Optimistically update UI
+    await api(`/api/devices/${id}/primary`, { method: 'POST' });
     set((s) => ({
       devices: s.devices.map((d) => ({
         ...d,
-        isPrimary: d.id === id ? true : false,
+        isPrimary: d.id === id,
       })),
+      error: null,
     }));
-    try {
-      await api(`/api/devices/${id}/primary`, { method: 'POST' });
-    } catch (err) {
-      console.error('Failed to set primary device:', err);
-    }
   },
 
   updateToolStatus: (deviceId: string, toolStatus: ToolStatus[]) => {
@@ -122,4 +117,5 @@ export const useDevicesStore = create<DevicesState>((set, get) => ({
   },
 
   setCurrentDevice: (device) => set({ currentDevice: device }),
+  clearError: () => set({ error: null }),
 }));

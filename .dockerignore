@@ -1,0 +1,12 @@
+.git
+.github
+.env
+node_modules
+dist
+dist-mcp
+dist-server
+dist-full
+src-tauri/target
+DevFleet-*.app
+*.zip
+*.log

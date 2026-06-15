@@ -1,19 +1,38 @@
 import express, { type Request, type Response } from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
+import rateLimit from 'express-rate-limit';
 import authRoutes from './routes/auth.js';
 import devicesRoutes from './routes/devices.js';
 import tasksRoutes from './routes/tasks.js';
 
-dotenv.config();
-
 const app = express();
 
-app.use(cors());
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+if (process.env.TRUST_PROXY) {
+  app.set('trust proxy', Number(process.env.TRUST_PROXY) || process.env.TRUST_PROXY);
+}
 
-app.use('/api/auth', authRoutes);
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: '登录请求过于频繁，请稍后重试' },
+});
+
+const activationLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  limit: 30,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: '绑定尝试过于频繁，请重新生成绑定码后再试' },
+});
+
+app.use(cors());
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+
+app.use('/api/auth', authLimiter, authRoutes);
+app.use('/api/devices/activate', activationLimiter);
 app.use('/api/devices', devicesRoutes);
 app.use('/api/tasks', tasksRoutes);
 

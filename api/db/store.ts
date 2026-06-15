@@ -1,11 +1,13 @@
+import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { createHash } from 'node:crypto';
+import { genId } from '../lib/utils.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const DATA_DIR = path.join(__dirname, '..', 'data');
-const DB_FILE = path.join(DATA_DIR, 'db.json');
+const DB_FILE = process.env.DEVFLEET_DB_FILE
+  ? path.resolve(process.env.DEVFLEET_DB_FILE)
+  : path.resolve(process.cwd(), 'api', 'data', 'db.json');
+const DATA_DIR = path.dirname(DB_FILE);
 
 interface User {
   id: string;
@@ -19,8 +21,12 @@ interface Device {
   user_id: string;
   name: string;
   bind_code?: string;
+  bind_code_expires_at?: string;
+  device_token_hash?: string;
   status: 'online' | 'offline' | 'connecting';
   activated: boolean;
+  connection_allowed?: boolean;
+  is_primary?: boolean;
   last_seen: string;
 }
 
@@ -42,6 +48,7 @@ interface Task {
   branch: string;
   created_at: string;
   completed_at?: string;
+  merge_commit_sha?: string;
 }
 
 interface SubTask {
@@ -103,24 +110,43 @@ function loadDB(): DB {
   try {
     const raw = fs.readFileSync(DB_FILE, 'utf-8');
     cachedDB = JSON.parse(raw) as DB;
-  } catch {
-    cachedDB = defaultDB();
+  } catch (error) {
+    throw new Error(`[DB] 无法读取 ${DB_FILE}: ${error instanceof Error ? error.message : String(error)}`);
   }
   return cachedDB!;
+}
+
+function saveDBNow() {
+  if (!cachedDB) return;
+  ensureDir();
+  const tempFile = `${DB_FILE}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(tempFile, JSON.stringify(cachedDB, null, 2), { encoding: 'utf-8', mode: 0o600 });
+    fs.renameSync(tempFile, DB_FILE);
+  } catch (error) {
+    try {
+      if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
+    } catch {
+      // Preserve the original write error.
+    }
+    console.error('[DB] write failed', error);
+  }
 }
 
 function saveDB() {
   if (writeTimer) return;
   writeTimer = setTimeout(() => {
     writeTimer = null;
-    if (!cachedDB) return;
-    ensureDir();
-    try {
-      fs.writeFileSync(DB_FILE, JSON.stringify(cachedDB, null, 2), 'utf-8');
-    } catch (e) {
-      console.error('[DB] write failed', e);
-    }
+    saveDBNow();
   }, 50);
+}
+
+export function flushDB() {
+  if (writeTimer) {
+    clearTimeout(writeTimer);
+    writeTimer = null;
+  }
+  saveDBNow();
 }
 
 export const db = {
@@ -138,7 +164,7 @@ export const db = {
     create(data: Omit<User, 'id' | 'created_at'>): User {
       const dbData = loadDB();
       const user: User = {
-        id: Math.random().toString(16).slice(2) + Date.now().toString(16),
+        id: genId(),
         created_at: new Date().toISOString(),
         ...data,
       };
@@ -151,7 +177,8 @@ export const db = {
   // ===== Devices =====
   devices: {
     findAllByUserId(userId: string): Device[] {
-      return loadDB().devices.filter((d) => d.user_id === userId && d.activated);
+      // Devices created before the activated field was introduced are treated as active.
+      return loadDB().devices.filter((d) => d.user_id === userId && d.activated !== false);
     },
     findById(id: string): Device | undefined {
       return loadDB().devices.find((d) => d.id === id);
@@ -159,10 +186,14 @@ export const db = {
     findByBindCode(bindCode: string): Device | undefined {
       return loadDB().devices.find((d) => d.bind_code === bindCode);
     },
+    findByDeviceToken(deviceToken: string): Device | undefined {
+      const hash = createHash('sha256').update(deviceToken).digest('hex');
+      return loadDB().devices.find((d) => d.device_token_hash === hash && d.activated !== false && d.connection_allowed !== false);
+    },
     create(data: Omit<Device, 'id' | 'last_seen'> & { last_seen?: string }): Device {
       const dbData = loadDB();
       const device: Device = {
-        id: Math.random().toString(16).slice(2) + Date.now().toString(16),
+        id: genId(),
         last_seen: new Date().toISOString(),
         ...data,
       };
@@ -177,6 +208,16 @@ export const db = {
       dbData.devices[idx] = { ...dbData.devices[idx], ...patch, last_seen: new Date().toISOString() };
       saveDB();
       return dbData.devices[idx];
+    },
+    setPrimary(userId: string, id: string): Device | undefined {
+      const dbData = loadDB();
+      const target = dbData.devices.find((d) => d.id === id && d.user_id === userId && d.activated !== false);
+      if (!target) return undefined;
+      dbData.devices.forEach((device) => {
+        if (device.user_id === userId) device.is_primary = device.id === id;
+      });
+      saveDB();
+      return target;
     },
     remove(id: string): void {
       const dbData = loadDB();
@@ -196,7 +237,7 @@ export const db = {
       let item = dbData.tool_statuses.find((t) => t.device_id === deviceId && t.tool_name === toolName);
       if (!item) {
         item = {
-          id: Math.random().toString(16).slice(2) + Date.now().toString(16),
+          id: genId(),
           device_id: deviceId,
           tool_name: toolName,
           status: 'idle',
@@ -225,7 +266,7 @@ export const db = {
     create(data: Omit<Task, 'id' | 'created_at' | 'status'> & { status?: Task['status'] }): Task {
       const dbData = loadDB();
       const task: Task = {
-        id: Math.random().toString(16).slice(2) + Date.now().toString(16),
+        id: genId(),
         status: 'pending',
         created_at: new Date().toISOString(),
         ...data,
@@ -247,7 +288,7 @@ export const db = {
       dbData.tasks = dbData.tasks.filter((t) => t.id !== id);
       const subIds = dbData.sub_tasks.filter((s) => s.task_id === id).map((s) => s.id);
       dbData.sub_tasks = dbData.sub_tasks.filter((s) => s.task_id !== id);
-      dbData.log_entries = dbData.log_entries.filter((l) => subIds.includes(l.sub_task_id));
+      dbData.log_entries = dbData.log_entries.filter((l) => !subIds.includes(l.sub_task_id));
       saveDB();
     },
   },
@@ -263,7 +304,7 @@ export const db = {
     create(data: Omit<SubTask, 'id' | 'created_at' | 'progress'> & { progress?: number }): SubTask {
       const dbData = loadDB();
       const sub: SubTask = {
-        id: Math.random().toString(16).slice(2) + Date.now().toString(16),
+        id: genId(),
         progress: 0,
         created_at: new Date().toISOString(),
         ...data,
@@ -290,7 +331,7 @@ export const db = {
     create(data: Omit<LogEntry, 'id' | 'timestamp'> & { timestamp?: string }): LogEntry {
       const dbData = loadDB();
       const log: LogEntry = {
-        id: Math.random().toString(16).slice(2) + Date.now().toString(16),
+        id: genId(),
         timestamp: new Date().toISOString(),
         ...data,
       };

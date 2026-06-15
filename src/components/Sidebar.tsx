@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom';
-import { Monitor, Workflow, LogOut, User, Settings } from 'lucide-react';
+import { Laptop, Monitor, PlugZap, Workflow, LogOut, User } from 'lucide-react';
 import { useAuthStore } from '@/store/auth';
 
 export default function Sidebar() {
@@ -37,6 +37,20 @@ export default function Sidebar() {
           <span className="text-sm font-medium">设备管理</span>
         </NavLink>
         <NavLink
+          to="/agent"
+          className={({ isActive }) => `${baseLink} ${isActive ? activeLink : ''}`}
+        >
+          <Laptop size={16} strokeWidth={1.5} />
+          <span className="text-sm font-medium">本机代理</span>
+        </NavLink>
+        <NavLink
+          to="/integration"
+          className={({ isActive }) => `${baseLink} ${isActive ? activeLink : ''}`}
+        >
+          <PlugZap size={16} strokeWidth={1.5} />
+          <span className="text-sm font-medium">MCP 接入</span>
+        </NavLink>
+        <NavLink
           to="/tasks"
           className={({ isActive }) => `${baseLink} ${isActive ? activeLink : ''}`}
         >
@@ -44,13 +58,6 @@ export default function Sidebar() {
           <span className="text-sm font-medium">任务控制台</span>
         </NavLink>
       </nav>
-
-      <div className="p-2 border-t border-zinc-800/50">
-        <button className={baseLink}>
-          <Settings size={16} strokeWidth={1.5} />
-          <span className="text-sm font-medium">设置</span>
-        </button>
-      </div>
 
       <div className="p-3 border-t border-zinc-800/50">
         <div className="flex items-center gap-3 p-2 rounded-lg bg-zinc-900/50">

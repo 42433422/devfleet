@@ -1,11 +1,14 @@
 import { useDevicesStore, type DeviceStatus, type ToolStatus } from '@/store/devices';
 import { useTasksStore, type LogEntry, type SubTaskStatus, type Task } from '@/store/tasks';
+import { getApiBaseUrl } from '@/lib/api';
 
 type WSMessage =
   | { type: 'device_status'; device_id: string; status: DeviceStatus; tools?: ToolStatus[] }
   | { type: 'task_progress'; task_id: string; subtask_id: string; progress: number; status?: SubTaskStatus }
   | { type: 'task_log'; task_id: string; subtask_id: string; log: LogEntry }
-  | { type: 'task_created'; task_id: string } & Partial<Pick<Task, 'title' | 'description' | 'subTasks' | 'created_at' | 'repo_url' | 'branch'>>;
+  | { type: 'task_status'; task_id: string; status: Task['status'] }
+  | { type: 'task_merged'; task_id: string; commit_sha: string }
+  | { type: 'task_created'; task_id: string } & Partial<Pick<Task, 'title' | 'description' | 'status' | 'subTasks' | 'created_at' | 'repo_url' | 'branch'>>;
 
 interface WSCallbacks {
   onDeviceStatus?: (msg: Extract<WSMessage, { type: 'device_status' }>) => void;
@@ -26,16 +29,13 @@ class WebSocketClient {
       return;
     }
 
-    // Skip WebSocket connection for demo token (no backend)
-    if (token === 'demo-token') {
-      return;
-    }
-
     this.isConnecting = true;
 
     const wsHost = host || (typeof window !== 'undefined' ? window.location.host : 'localhost:3000');
     const proto = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const url = `${proto}://${wsHost}/ws/client?token=${encodeURIComponent(token)}`;
+    const configuredBase = (import.meta.env.VITE_WS_BASE_URL || getApiBaseUrl().replace(/^http/, 'ws') || '').replace(/\/$/, '');
+    const wsBase = configuredBase || `${proto}://${wsHost}`;
+    const url = `${wsBase}/ws/client?token=${encodeURIComponent(token)}`;
 
     try {
       this.ws = new WebSocket(url);
@@ -57,7 +57,7 @@ class WebSocketClient {
         if (!data || !data.type) return;
 
         const { updateDeviceStatus, updateToolStatus } = useDevicesStore.getState();
-        const { updateTaskProgress, appendTaskLog, addTask, tasks } = useTasksStore.getState();
+        const { updateTaskProgress, updateTaskStatus, appendTaskLog, addTask, tasks } = useTasksStore.getState();
 
         switch (data.type) {
           case 'device_status':
@@ -73,13 +73,19 @@ class WebSocketClient {
             appendTaskLog(data.task_id, data.subtask_id, data.log);
             callbacks?.onTaskLog?.(data);
             break;
+          case 'task_status':
+            updateTaskStatus(data.task_id, data.status);
+            break;
+          case 'task_merged':
+            updateTaskStatus(data.task_id, 'merged');
+            break;
           case 'task_created':
             if (data.task_id && !tasks.some((t) => t.id === data.task_id)) {
               addTask({
                 id: data.task_id,
                 title: data.title || '新任务',
                 description: data.description || '',
-                status: 'pending',
+                status: data.status || 'pending',
                 subTasks: data.subTasks || [],
                 created_at: data.created_at || new Date().toISOString(),
                 repo_url: data.repo_url || '',
@@ -107,8 +113,6 @@ class WebSocketClient {
 
   private scheduleReconnect(token: string, host: string | undefined, callbacks?: WSCallbacks) {
     if (this.reconnectTimer !== null) return;
-    if (token === 'demo-token') return; // Don't reconnect for demo
-    
     this.reconnectTimer = window.setTimeout(() => {
       this.reconnectTimer = null;
       this.connect(token, host, callbacks);

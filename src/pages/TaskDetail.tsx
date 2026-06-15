@@ -1,6 +1,6 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, GitBranch, GitMerge, Calendar, Play, CheckCircle2, XCircle, Terminal } from 'lucide-react';
+import { ArrowLeft, GitBranch, GitMerge, Calendar, Play, CheckCircle2, XCircle, Terminal, Trash2, AlertCircle, PlugZap } from 'lucide-react';
 import { useTasksStore } from '@/store/tasks';
 import { useDevicesStore } from '@/store/devices';
 
@@ -17,19 +17,24 @@ const statusConfig = {
   failed: { bg: 'bg-red-500/15', text: 'text-red-400', icon: <XCircle size={10} /> },
   running: { bg: 'bg-green-500/15', text: 'text-green-400', icon: <Play size={10} /> },
   pending: { bg: 'bg-zinc-700/50', text: 'text-zinc-400', icon: <Terminal size={10} /> },
+  merged: { bg: 'bg-purple-500/15', text: 'text-purple-400', icon: <GitMerge size={10} /> },
 };
 
 export default function TaskDetail() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
-  const { currentTask, fetchTask, mergeTask } = useTasksStore();
-  const { devices } = useDevicesStore();
+  const { currentTask, currentTaskLoading, error, fetchTask, deleteTask } = useTasksStore();
+  const { devices, fetchDevices } = useDevicesStore();
   const logRefs = useRef<Record<string, HTMLDivElement | null>>({});
-  const mergingRef = useRef(false);
+  const [deleting, setDeleting] = useState(false);
+  const [actionError, setActionError] = useState('');
 
   useEffect(() => {
     fetchTask(id);
-  }, [id, fetchTask]);
+    fetchDevices();
+    const timer = setInterval(() => fetchTask(id), 3000);
+    return () => clearInterval(timer);
+  }, [fetchDevices, fetchTask, id]);
 
   useEffect(() => {
     if (!currentTask) return;
@@ -44,22 +49,33 @@ export default function TaskDetail() {
       ? currentTask.subTasks.every((s) => s.status === 'completed')
       : false;
 
-  const handleMerge = async () => {
-    if (mergingRef.current || !allCompleted) return;
-    mergingRef.current = true;
+  const handleDelete = async () => {
+    if (!currentTask || !window.confirm(`确定删除任务“${currentTask.title}”吗？`)) return;
+    setActionError('');
+    setDeleting(true);
     try {
-      await mergeTask(id);
-    } catch {
-      /* ignore */
+      await deleteTask(id);
+      navigate('/tasks', { replace: true });
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : '删除任务失败');
     } finally {
-      mergingRef.current = false;
+      setDeleting(false);
     }
   };
 
-  if (!currentTask) {
+  if (!currentTask || currentTask.id !== id) {
     return (
       <div className="flex-1 p-6 flex items-center justify-center">
-        <div className="text-center text-zinc-500 text-sm animate-shimmer">加载中...</div>
+        <div className="text-center">
+          {error && !currentTaskLoading ? (
+            <>
+              <p className="text-sm text-red-400 mb-3">{error}</p>
+              <button onClick={() => navigate('/tasks')} className="text-sm text-brand">返回任务列表</button>
+            </>
+          ) : (
+            <div className="text-zinc-500 text-sm animate-shimmer">加载中...</div>
+          )}
+        </div>
       </div>
     );
   }
@@ -78,15 +94,32 @@ export default function TaskDetail() {
           <ArrowLeft size={16} strokeWidth={1.5} />
           返回任务列表
         </button>
-        <button
-          onClick={handleMerge}
-          disabled={!allCompleted || mergingRef.current || currentTask.status === 'merged'}
-          className="flex items-center gap-2 px-4 py-2 bg-brand hover:bg-brand/90 disabled:opacity-40 disabled:cursor-not-allowed text-black font-medium rounded-lg text-sm transition-all duration-200 shadow-lg shadow-brand/20"
-        >
-          <GitMerge size={14} strokeWidth={1.5} />
-          {currentTask.status === 'merged' ? '已合并' : mergingRef.current ? '合并中...' : '合并分支'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleDelete}
+            disabled={deleting}
+            className="flex items-center gap-2 px-3 py-2 bg-zinc-800/60 hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40 text-zinc-400 rounded-lg text-sm transition-colors"
+          >
+            <Trash2 size={14} strokeWidth={1.5} />
+            {deleting ? '删除中...' : '删除'}
+          </button>
+          <button
+            onClick={() => navigate('/integration')}
+            disabled={!allCompleted || currentTask.status === 'merged'}
+            className="flex items-center gap-2 px-4 py-2 bg-brand hover:bg-brand/90 disabled:opacity-40 disabled:cursor-not-allowed text-black font-medium rounded-lg text-sm transition-all duration-200 shadow-lg shadow-brand/20"
+          >
+            {currentTask.status === 'merged' ? <GitMerge size={14} strokeWidth={1.5} /> : <PlugZap size={14} strokeWidth={1.5} />}
+            {currentTask.status === 'merged' ? '已真实合并' : '通过 MCP 合并'}
+          </button>
+        </div>
       </div>
+
+      {(actionError || error) && (
+        <div className="mb-4 flex items-center gap-2 px-4 py-3 bg-red-500/10 border border-red-500/20 rounded-lg text-sm text-red-400">
+          <AlertCircle size={15} />
+          {actionError || error}
+        </div>
+      )}
 
       <div className="bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-5 mb-6">
         <div className="mb-4">
@@ -135,6 +168,9 @@ export default function TaskDetail() {
         
         {!allCompleted && currentTask.status !== 'merged' && (
           <p className="text-xs text-amber-400/80 mt-3">所有子任务完成后即可合并分支</p>
+        )}
+        {allCompleted && currentTask.status !== 'merged' && (
+          <p className="text-xs text-brand/80 mt-3">请让主设备 Trae 调用 `devfleet_merge_task`，真实拉取、合并并推送所有设备分支。</p>
         )}
       </div>
 
