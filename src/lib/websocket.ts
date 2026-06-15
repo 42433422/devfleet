@@ -32,10 +32,9 @@ class WebSocketClient {
 
     this.isConnecting = true;
 
-    const wsHost = host || (typeof window !== 'undefined' ? window.location.host : 'localhost:3000');
-    const proto = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const wsHost = host || getApiBaseUrl().replace(/^https?:\/\//, '') || 'localhost:3001';
     const configuredBase = (import.meta.env.VITE_WS_BASE_URL || getApiBaseUrl().replace(/^http/, 'ws') || '').replace(/\/$/, '');
-    const wsBase = configuredBase || `${proto}://${wsHost}`;
+    const wsBase = configuredBase || `ws://${wsHost}`;
     const url = `${wsBase}/ws/client?token=${encodeURIComponent(token)}`;
 
     try {

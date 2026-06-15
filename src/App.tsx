@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { HashRouter as Router, Routes, Route, Navigate, Link } from 'react-router-dom';
 import { useAuthStore } from '@/store/auth';
 import { wsClient } from '@/lib/websocket';
+import { DEFAULT_API_BASE } from '@/lib/apiBase';
 import Sidebar from '@/components/Sidebar';
 import Login from '@/pages/Login';
 import Devices from '@/pages/Devices';
@@ -22,11 +23,16 @@ function AppShell({ children }: { children: React.ReactNode }) {
 function Protected({ children }: { children: React.ReactNode }) {
   const { token, guestLogin } = useAuthStore();
   const [loading, setLoading] = useState(!token);
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    if (!token) {
-      guestLogin().finally(() => setLoading(false));
-    }
+    if (token) return;
+    setError('');
+    guestLogin()
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : '无法连接 DevFleet 服务');
+      })
+      .finally(() => setLoading(false));
   }, [token, guestLogin]);
 
   if (loading) {
@@ -37,7 +43,38 @@ function Protected({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!token) return null;
+  if (!token) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-bg-primary p-6">
+        <div className="max-w-md w-full bg-zinc-900/70 border border-zinc-800 rounded-2xl p-6 text-center">
+          <h2 className="text-lg font-semibold text-white mb-2">无法自动进入</h2>
+          <p className="text-sm text-zinc-400 mb-1">{error || '访客登录失败'}</p>
+          <p className="text-xs text-zinc-600 mb-4">请确认 DevFleet 服务端已启动（默认 {DEFAULT_API_BASE}）</p>
+          <div className="flex flex-col gap-2">
+            <button
+              type="button"
+              className="w-full py-2.5 bg-brand text-black font-medium rounded-lg text-sm"
+              onClick={() => {
+                setLoading(true);
+                setError('');
+                guestLogin()
+                  .catch((err) => setError(err instanceof Error ? err.message : '连接失败'))
+                  .finally(() => setLoading(false));
+              }}
+            >
+              重试连接
+            </button>
+            <Link to="/login" className="w-full py-2.5 bg-zinc-800 text-zinc-200 rounded-lg text-sm">
+              前往登录 / 配置服务器
+            </Link>
+            <Link to="/agent" className="text-xs text-zinc-500 hover:text-brand">
+              打开本机设备代理
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return <AppShell>{children}</AppShell>;
 }

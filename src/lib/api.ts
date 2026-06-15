@@ -1,7 +1,10 @@
-const getToken = () => localStorage.getItem('devfleet_token');
+import { getApiBaseUrl, ensureApiBaseConfigured, apiUrl } from './apiBase';
 
-export const getApiBaseUrl = () => (localStorage.getItem('devfleet_api_url') || import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
-export const apiUrl = (url: string) => `${getApiBaseUrl()}${url}`;
+ensureApiBaseConfigured();
+
+export { getApiBaseUrl, ensureApiBaseConfigured, apiUrl, DEFAULT_API_BASE } from './apiBase';
+
+const getToken = () => localStorage.getItem('devfleet_token');
 
 interface RequestOptions extends Omit<RequestInit, 'body'> {
   body?: Record<string, unknown>;
@@ -58,8 +61,9 @@ export const api = async <T = Record<string, unknown>>(
       });
     } else {
       localStorage.removeItem('devfleet_token');
-      if (!location.pathname.startsWith('/login')) {
-        location.href = '/login';
+      const onLogin = location.hash.includes('/login') || location.pathname.endsWith('/login');
+      if (!onLogin) {
+        location.hash = '#/login';
       }
       throw new Error('未授权，请重新登录');
     }
