@@ -10,6 +10,11 @@ export function getApiBaseUrl(): string {
   return DEFAULT_API_BASE;
 }
 
+/** MCP 始终连本机服务端，不受穿透/远程 API 地址影响 */
+export function getMcpApiBaseUrl(): string {
+  return DEFAULT_API_BASE;
+}
+
 export function ensureApiBaseConfigured(): void {
   if (!localStorage.getItem(STORAGE_KEY)) {
     localStorage.setItem(STORAGE_KEY, getApiBaseUrl());

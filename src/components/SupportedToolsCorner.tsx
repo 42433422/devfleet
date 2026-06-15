@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import CornerPillBadge from '@/components/badges/CornerPillBadge';
 import { OfficialBrandLogo, type OfficialBrand } from '@/components/badges/OfficialBrandLogo';
 
@@ -34,11 +35,12 @@ const PARTNER_BADGES: { key: OfficialBrand; title: string }[] = [
 
 /** 右下角 4 个独立工具胶囊，均使用官方品牌资源 */
 export default function SupportedToolsCorner() {
+  const location = useLocation();
   const [dismissed, setDismissed] = useState(
     () => typeof window !== 'undefined' && localStorage.getItem(STORAGE_KEY) === '1',
   );
 
-  if (dismissed) return null;
+  if (dismissed || location.pathname === '/integration') return null;
 
   return (
     <div className="devfleet-corner-stack" aria-label="支持的 AI 开发工具">

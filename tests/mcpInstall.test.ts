@@ -6,6 +6,8 @@ import {
   buildDevfleetStdioConfig,
   buildTraeInstallLinks,
   buildTraeMcpJson,
+  buildTraeDeeplink,
+  buildTraeLegacyDeeplink,
   DEVFLEET_MCP_SERVER_NAME,
 } from '../src/lib/mcpInstall.ts';
 
@@ -36,10 +38,42 @@ test('Cursor 一键安装 deeplink 编码 stdio 配置', () => {
   assert.equal(links.mcpJson, buildTraeMcpJson(sample));
 });
 
-test('Trae 一键安装 deeplink 编码 stdio 配置', () => {
+test('Trae 一键安装 deeplink 使用新版 trae://mcp/install 格式', () => {
   const links = buildTraeInstallLinks(sample);
-  assert.match(links.deeplink, /^trae:\/\/mcp\/install/);
+  assert.match(links.deeplinkCn, /^trae-cn:\/\/mcp\/install/);
+  assert.match(links.deeplinkIntl, /^trae:\/\/mcp\/install/);
+  assert.match(links.deeplinkCn, /type=stdio/);
+  assert.match(links.deeplinkIntl, /type=stdio/);
   assert.equal(links.mcpJson, buildTraeMcpJson(sample));
+  assert.equal(links.variant, 'cn');
+});
+
+test('Trae 旧版 deeplink 使用 trae.ai-ide/mcp-import 格式', () => {
+  const links = buildTraeInstallLinks(sample);
+  assert.match(links.legacyDeeplinkCn, /^trae-cn:\/\/trae\.ai-ide\/mcp-import/);
+  assert.match(links.legacyDeeplinkIntl, /^trae:\/\/trae\.ai-ide\/mcp-import/);
+});
+
+test('buildTraeDeeplink 生成新版协议链接', () => {
+  const config = buildDevfleetStdioConfig(sample);
+  const cnLink = buildTraeDeeplink(DEVFLEET_MCP_SERVER_NAME, config, 'cn');
+  const intlLink = buildTraeDeeplink(DEVFLEET_MCP_SERVER_NAME, config, 'intl');
+  assert.match(cnLink, /^trae-cn:\/\/mcp\/install\?/);
+  assert.match(intlLink, /^trae:\/\/mcp\/install\?/);
+  assert.match(cnLink, /name=devfleet/);
+  assert.match(cnLink, /type=stdio/);
+});
+
+test('buildTraeLegacyDeeplink 生成旧版协议链接', () => {
+  const config = buildDevfleetStdioConfig(sample);
+  const legacyCn = buildTraeLegacyDeeplink(DEVFLEET_MCP_SERVER_NAME, config, 'cn');
+  assert.match(legacyCn, /^trae-cn:\/\/trae\.ai-ide\/mcp-import/);
+});
+
+test('Trae 安装链接支持指定国际版', () => {
+  const links = buildTraeInstallLinks(sample, 'intl');
+  assert.equal(links.variant, 'intl');
+  assert.match(links.deeplink, /^trae:\/\/mcp\/install/);
 });
 
 test('Codex MCP 命令包含环境变量', () => {

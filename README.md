@@ -71,11 +71,14 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 ## 接入 Trae / Codex / Cursor
 
-从 GitHub Release 下载并解压 `devfleet-mcp.zip`，在控制台「MCP 接入」页面填写文件路径。页面会生成：
+从 GitHub Release 下载并解压 `devfleet-mcp.zip`，在桌面控制台「MCP 接入」页面填写文件路径。页面会检测每个客户端的 `未安装 / 未配置 / 已配置 / 需要更新 / 检测失败` 状态，并提供一键配置：
 
-- Trae MCP JSON 配置。
-- `codex mcp add devfleet ...` 命令。
-- Cursor 一键安装 deeplink（写入 `~/.cursor/mcp.json`）及手动 JSON 配置。
+- Trae / Trae CN：合并写入用户级 `mcp.json`，保留已有 MCP。
+- Codex：通过官方 `codex mcp` CLI 写入用户配置，CLI 与 IDE 共用。
+- Cursor：合并写入 `~/.cursor/mcp.json`，保留已有 MCP。
+- Claude Code：通过官方 `claude mcp add-json --scope user` 写入用户配置。
+
+浏览器控制台不能直接修改本机文件，会降级为 deeplink 或复制命令/JSON。配置预览会隐藏令牌，复制和一键配置仍使用完整值。
 
 MCP 提供以下工具：
 

@@ -91,6 +91,9 @@ export default function ServerAddressPanel({ compact = false, showTunnelInput = 
     if (builtin?.active && builtin.url) {
       return { url: builtin.url, kind: 'tunnel' as const };
     }
+    if (tunnelUrl && isValidApiBaseUrl(tunnelUrl)) {
+      return { url: tunnelUrl, kind: 'tunnel' as const };
+    }
     return resolveShareableApiUrl(lanIp);
   }, [builtin, lanIp, tunnelUrl]);
 

@@ -56,18 +56,55 @@ export function buildCursorWebInstallUrl(serverName: string, serverConfig: McpSt
   return `https://cursor.com/en/install-mcp?name=${encodeURIComponent(serverName)}&config=${encodeURIComponent(configB64)}`;
 }
 
-export function buildTraeDeeplink(serverName: string, serverConfig: McpStdioConfig): string {
+export type TraeVariant = 'cn' | 'intl';
+
+export function buildTraeDeeplink(
+  serverName: string,
+  serverConfig: McpStdioConfig,
+  variant: TraeVariant = 'cn',
+): string {
   const configB64 = toBase64Json(serverConfig);
-  return `trae://mcp/install?name=${encodeURIComponent(serverName)}&config=${encodeURIComponent(configB64)}`;
+  const scheme = variant === 'cn' ? 'trae-cn' : 'trae';
+  return `${scheme}://mcp/install?name=${encodeURIComponent(serverName)}&type=stdio&config=${encodeURIComponent(configB64)}`;
 }
 
-export function buildTraeInstallLinks(options: DevfleetMcpOptions) {
+/** 旧版 deeplink 格式（兼容旧版 Trae） */
+export function buildTraeLegacyDeeplink(
+  serverName: string,
+  serverConfig: McpStdioConfig,
+  variant: TraeVariant = 'cn',
+): string {
+  const configB64 = toBase64Json(serverConfig);
+  const scheme = variant === 'cn' ? 'trae-cn' : 'trae';
+  return `${scheme}://trae.ai-ide/mcp-import?name=${encodeURIComponent(serverName)}&type=stdio&config=${encodeURIComponent(configB64)}`;
+}
+
+export function buildTraeInstallLinks(options: DevfleetMcpOptions, variant?: TraeVariant) {
   const config = buildDevfleetStdioConfig(options);
+  const resolvedVariant = variant ?? detectTraeVariant();
   return {
     config,
+    variant: resolvedVariant,
     mcpJson: wrapMcpJson(DEVFLEET_MCP_SERVER_NAME, config),
-    deeplink: buildTraeDeeplink(DEVFLEET_MCP_SERVER_NAME, config),
+    deeplinkCn: buildTraeDeeplink(DEVFLEET_MCP_SERVER_NAME, config, 'cn'),
+    deeplinkIntl: buildTraeDeeplink(DEVFLEET_MCP_SERVER_NAME, config, 'intl'),
+    deeplink: buildTraeDeeplink(DEVFLEET_MCP_SERVER_NAME, config, resolvedVariant),
+    legacyDeeplinkCn: buildTraeLegacyDeeplink(DEVFLEET_MCP_SERVER_NAME, config, 'cn'),
+    legacyDeeplinkIntl: buildTraeLegacyDeeplink(DEVFLEET_MCP_SERVER_NAME, config, 'intl'),
   };
+}
+
+/** 根据本机安装情况自动检测 Trae 版本 */
+export function detectTraeVariant(): TraeVariant {
+  if (typeof navigator === 'undefined') return 'cn';
+  const platform = navigator.platform.toLowerCase();
+  // macOS: 检测 /Applications 下是否有 Trae CN
+  if (platform.includes('mac')) {
+    // 浏览器环境无法直接检测文件系统，默认 cn
+    return 'cn';
+  }
+  // Windows / Linux 默认 cn
+  return 'cn';
 }
 
 export function buildCursorInstallLinks(options: DevfleetMcpOptions) {

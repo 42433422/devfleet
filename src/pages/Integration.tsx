@@ -1,36 +1,38 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Check, Clipboard, Code2, PlugZap, ShieldCheck, Sparkles, Terminal, Braces } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Check, Clipboard, Code2, PlugZap, ShieldCheck, Sparkles, Terminal, Braces, RefreshCw, Monitor } from 'lucide-react';
 import { useAuthStore } from '@/store/auth';
 import { useDevicesStore } from '@/store/devices';
-import { DEV_TOOL_LABELS, normalizeToolRuntimeStatus, TOOL_RUNTIME_LABELS, type DevTool } from '@/lib/devTools';
+import { DEV_TOOL_LABELS, TOOL_RUNTIME_LABELS, type DevTool } from '@/lib/devTools';
 import {
   buildCodexMcpCommand,
   buildCursorInstallLinks,
   buildTraeInstallLinks,
   defaultMcpPath,
+  type TraeVariant,
 } from '@/lib/mcpInstall';
-import { getApiBaseUrl } from '@/lib/apiBase';
+import { getMcpApiBaseUrl } from '@/lib/apiBase';
+import { openDeeplink, openTraeInstall } from '@/lib/openExternal';
+import { mcpClientApi, type McpClientStatus, type McpClientTool } from '@/lib/mcpClient';
 import ServerAddressPanel from '@/components/ServerAddressPanel';
 
 export default function Integration() {
   const { token } = useAuthStore();
   const { devices, fetchDevices } = useDevicesStore();
   const [mcpPath, setMcpPath] = useState(defaultMcpPath());
-  const [apiUrl, setApiUrl] = useState(getApiBaseUrl());
+  const [apiUrl, setApiUrl] = useState(getMcpApiBaseUrl());
   const [copied, setCopied] = useState('');
-
-  useEffect(() => {
-    setApiUrl(getApiBaseUrl());
-    fetchDevices();
-  }, [fetchDevices]);
-
+  const [installHint, setInstallHint] = useState('');
+  const [installBusy, setInstallBusy] = useState('');
+  const [statusBusy, setStatusBusy] = useState(false);
+  const [clientStatuses, setClientStatuses] = useState<Partial<Record<McpClientTool, McpClientStatus>>>({});
+  const [traeVariant, setTraeVariant] = useState<TraeVariant>('cn');
   const mcpOptions = useMemo(() => ({
     mcpPath,
     apiUrl,
     token: token || '',
   }), [apiUrl, mcpPath, token]);
 
-  const traeInstall = useMemo(() => buildTraeInstallLinks(mcpOptions), [mcpOptions]);
+  const traeInstall = useMemo(() => buildTraeInstallLinks(mcpOptions, traeVariant), [mcpOptions, traeVariant]);
   const traeConfig = traeInstall.mcpJson;
   const claudeConfig = traeConfig;
   const codexCommand = useMemo(
@@ -38,6 +40,33 @@ export default function Integration() {
     [mcpOptions],
   );
   const cursorInstall = useMemo(() => buildCursorInstallLinks(mcpOptions), [mcpOptions]);
+  const preview = useCallback((content: string) => redactSecret(content, token || ''), [token]);
+
+  const refreshStatuses = useCallback(async () => {
+    if (!mcpClientApi.isDesktop()) return;
+    setStatusBusy(true);
+    try {
+      const [statuses, variant] = await Promise.all([
+        mcpClientApi.statuses(mcpOptions),
+        mcpClientApi.detectTraeVariant().catch(() => 'cn' as TraeVariant),
+      ]);
+      setClientStatuses(Object.fromEntries(statuses.map((status) => [status.tool, status])));
+      setTraeVariant(variant);
+    } catch (error) {
+      setInstallHint(error instanceof Error ? error.message : '无法检测 MCP 配置状态');
+    } finally {
+      setStatusBusy(false);
+    }
+  }, [mcpOptions]);
+
+  useEffect(() => {
+    setApiUrl(getMcpApiBaseUrl());
+    fetchDevices();
+  }, [fetchDevices]);
+
+  useEffect(() => {
+    void refreshStatuses();
+  }, [refreshStatuses]);
 
   const copy = async (name: string, value: string) => {
     await navigator.clipboard.writeText(value);
@@ -45,17 +74,40 @@ export default function Integration() {
     window.setTimeout(() => setCopied(''), 1500);
   };
 
-  const installCursor = () => {
-    window.location.href = cursorInstall.deeplink;
-    window.setTimeout(() => {
-      if (document.visibilityState === 'visible') {
-        window.open(cursorInstall.webUrl, '_blank', 'noopener,noreferrer');
+  const install = async (tool: McpClientTool) => {
+    setInstallBusy(tool);
+    setInstallHint('');
+    try {
+      if (mcpClientApi.isDesktop()) {
+        const status = await mcpClientApi.install(tool, mcpOptions);
+        setClientStatuses((current) => ({ ...current, [tool]: status }));
+        setInstallHint(`${DEV_TOOL_LABELS[tool]} 已完成 DevFleet MCP 配置。`);
+        await refreshStatuses();
+        return;
       }
-    }, 1200);
-  };
 
-  const installTrae = () => {
-    window.location.href = traeInstall.deeplink;
+      if (tool === 'trae') {
+        const appName = await openTraeInstall(traeInstall.deeplinkCn, traeInstall.deeplinkIntl);
+        setInstallHint(`正在打开 ${appName} 安装 MCP；请在客户端确认后使用桌面版复检。`);
+      } else if (tool === 'cursor') {
+        const error = await openDeeplink(cursorInstall.deeplink, cursorInstall.webUrl);
+        if (error) throw new Error(error);
+        setInstallHint('正在打开 Cursor 安装 MCP；请在客户端确认后使用桌面版复检。');
+      } else if (tool === 'codex') {
+        await copy('codex', codexCommand);
+        setInstallHint('浏览器无法直接修改 Codex 配置，命令已复制。');
+      } else {
+        await copy('claude', claudeConfig);
+        setInstallHint('浏览器无法直接修改 Claude Code 配置，JSON 已复制。');
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '一键配置失败';
+      const fallback = tool === 'codex' ? codexCommand : tool === 'cursor' ? cursorInstall.mcpJson : traeConfig;
+      await copy(tool === 'claude_code' ? 'claude' : tool, fallback);
+      setInstallHint(`${message}。已复制手动配置内容。`);
+    } finally {
+      setInstallBusy('');
+    }
   };
 
   return (
@@ -83,40 +135,84 @@ export default function Integration() {
         </label>
       </div>
 
-      <div className="grid lg:grid-cols-2 xl:grid-cols-4 gap-4 mb-4">
-        <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-5">
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <h2 className="text-sm font-medium text-white flex items-center gap-2"><Sparkles size={14} />Trae</h2>
-              <p className="text-xs text-zinc-500 mt-1">一键或复制 JSON</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <button onClick={installTrae} className="px-3 py-2 bg-brand/90 hover:bg-brand rounded-lg text-xs text-black font-medium">一键</button>
-              <button onClick={() => copy('trae', traeConfig)} className="flex items-center gap-1.5 px-3 py-2 bg-zinc-800 rounded-lg text-xs text-zinc-300 hover:text-white">
-                {copied === 'trae' ? <Check size={13} className="text-green-400" /> : <Clipboard size={13} />}
-              </button>
-            </div>
-          </div>
-          <pre className="p-4 bg-zinc-950 rounded-lg overflow-x-auto text-xs text-zinc-300 font-mono whitespace-pre-wrap max-h-40">{traeConfig}</pre>
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <h2 className="text-sm font-medium text-white">本机 MCP 配置</h2>
+          <p className="text-[11px] text-zinc-600 mt-1">配置状态与子设备工具运行状态分开检测</p>
         </div>
-        <McpCard title="Codex" icon={<Terminal size={14} />} hint="终端执行一次" copyKey="codex" copied={copied} onCopy={() => copy('codex', codexCommand)} content={codexCommand} accent />
-        <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-5">
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <h2 className="text-sm font-medium text-white flex items-center gap-2"><Code2 size={14} />Cursor</h2>
-              <p className="text-xs text-zinc-500 mt-1">一键或复制 JSON</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <button onClick={installCursor} className="px-3 py-2 bg-brand/90 hover:bg-brand rounded-lg text-xs text-black font-medium">一键</button>
-              <button onClick={() => copy('cursor', cursorInstall.mcpJson)} className="flex items-center gap-1.5 px-3 py-2 bg-zinc-800 rounded-lg text-xs text-zinc-300 hover:text-white">
-                {copied === 'cursor' ? <Check size={13} className="text-green-400" /> : <Clipboard size={13} />}
-              </button>
-            </div>
-          </div>
-          <pre className="p-4 bg-zinc-950 rounded-lg overflow-x-auto text-xs text-zinc-300 font-mono whitespace-pre-wrap max-h-40">{cursorInstall.mcpJson}</pre>
-        </div>
-        <McpCard title="Claude Code" icon={<Braces size={14} />} hint="Claude Desktop MCP JSON" copyKey="claude" copied={copied} onCopy={() => copy('claude', claudeConfig)} content={claudeConfig} />
+        <button
+          type="button"
+          onClick={() => void refreshStatuses()}
+          disabled={!mcpClientApi.isDesktop() || statusBusy}
+          title="刷新配置状态"
+          className="p-2 text-zinc-500 hover:text-white disabled:opacity-40"
+        >
+          <RefreshCw size={14} className={statusBusy ? 'animate-spin' : ''} />
+        </button>
       </div>
+
+      <div className="grid lg:grid-cols-2 2xl:grid-cols-4 gap-4 mb-4">
+        <McpCard
+          title="Trae"
+          icon={<Sparkles size={14} />}
+          hint={traeVariant === 'cn' ? 'Trae CN（国内版）' : 'Trae（国际版）'}
+          copyKey="trae"
+          copied={copied}
+          onCopy={() => copy('trae', traeConfig)}
+          onInstall={() => void install('trae')}
+          busy={installBusy === 'trae'}
+          status={clientStatuses.trae}
+          content={preview(traeConfig)}
+          variant={traeVariant}
+          onDeeplinkInstall={mcpClientApi.isDesktop() ? async () => {
+            const appName = await openTraeInstall(traeInstall.deeplinkCn, traeInstall.deeplinkIntl);
+            setInstallHint(`正在打开 ${appName} 安装 MCP；请在客户端确认。`);
+          } : undefined}
+        />
+        <McpCard
+          title="Codex"
+          icon={<Terminal size={14} />}
+          hint="Codex CLI / IDE 共用配置"
+          copyKey="codex"
+          copied={copied}
+          onCopy={() => copy('codex', codexCommand)}
+          onInstall={() => void install('codex')}
+          busy={installBusy === 'codex'}
+          status={clientStatuses.codex}
+          content={preview(codexCommand)}
+          accent
+        />
+        <McpCard
+          title="Cursor"
+          icon={<Code2 size={14} />}
+          hint="用户级 mcp.json"
+          copyKey="cursor"
+          copied={copied}
+          onCopy={() => copy('cursor', cursorInstall.mcpJson)}
+          onInstall={() => void install('cursor')}
+          busy={installBusy === 'cursor'}
+          status={clientStatuses.cursor}
+          content={preview(cursorInstall.mcpJson)}
+        />
+        <McpCard
+          title="Claude Code"
+          icon={<Braces size={14} />}
+          hint="Claude Code 用户级配置"
+          copyKey="claude"
+          copied={copied}
+          onCopy={() => copy('claude', claudeConfig)}
+          onInstall={() => void install('claude_code')}
+          busy={installBusy === 'claude_code'}
+          status={clientStatuses.claude_code}
+          content={preview(claudeConfig)}
+        />
+      </div>
+
+      {installHint && (
+        <div className="mb-4 px-4 py-3 bg-blue-500/10 border border-blue-500/20 rounded-lg text-xs text-blue-200/90">
+          {installHint}
+        </div>
+      )}
 
       {devices.length > 0 && (
         <div className="mb-4 bg-zinc-900/60 border border-zinc-800 rounded-xl p-5">
@@ -166,32 +262,98 @@ export default function Integration() {
   );
 }
 
-function McpCard({ title, icon, hint, copyKey, copied, onCopy, content, accent }: {
+function McpCard({ title, icon, hint, copyKey, copied, onCopy, onInstall, busy, status, content, accent, variant, onDeeplinkInstall }: {
   title: string;
   icon: ReactNode;
   hint: string;
   copyKey: string;
   copied: string;
   onCopy: () => void;
+  onInstall: () => void;
+  busy: boolean;
+  status?: McpClientStatus;
   content: string;
   accent?: boolean;
+  variant?: TraeVariant;
+  onDeeplinkInstall?: () => Promise<void>;
 }) {
+  const actionLabel = status?.state === 'configured'
+    ? '重新配置'
+    : status?.state === 'needs_update'
+      ? '更新配置'
+      : '一键配置';
   return (
     <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-5">
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-start justify-between gap-3 mb-3">
         <div>
-          <h2 className="text-sm font-medium text-white flex items-center gap-2">{icon}{title}</h2>
+          <h2 className="text-sm font-medium text-white flex items-center gap-2">
+            {icon}{title}
+            {variant && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-brand/20 text-brand font-normal">
+                {variant === 'cn' ? '国内版' : '国际版'}
+              </span>
+            )}
+          </h2>
           <p className="text-xs text-zinc-500 mt-1">{hint}</p>
+          <McpStatus status={status} />
         </div>
-        <button onClick={onCopy} className="flex items-center gap-1.5 px-3 py-2 bg-zinc-800 rounded-lg text-xs text-zinc-300 hover:text-white">
-          {copied === copyKey ? <Check size={13} className="text-green-400" /> : <Clipboard size={13} />}复制
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={onInstall}
+            disabled={busy}
+            className="px-3 py-2 bg-brand/90 hover:bg-brand disabled:opacity-50 rounded-lg text-xs text-black font-medium"
+          >
+            {busy ? '配置中…' : actionLabel}
+          </button>
+          {onDeeplinkInstall && (
+            <button
+              type="button"
+              onClick={() => void onDeeplinkInstall()}
+              disabled={busy}
+              title="通过 deeplink 在 Trae 中打开安装"
+              className="p-2 bg-zinc-800 rounded-lg text-zinc-300 hover:text-white disabled:opacity-50"
+            >
+              <Monitor size={13} />
+            </button>
+          )}
+          <button type="button" onClick={onCopy} title={`复制 ${title} 配置`} className="p-2 bg-zinc-800 rounded-lg text-zinc-300 hover:text-white">
+            {copied === copyKey ? <Check size={13} className="text-green-400" /> : <Clipboard size={13} />}
+          </button>
+        </div>
       </div>
       <pre className={`p-4 bg-zinc-950 rounded-lg overflow-x-auto text-xs font-mono whitespace-pre-wrap max-h-40 ${accent ? 'text-brand' : 'text-zinc-300'}`}>{content}</pre>
     </div>
   );
 }
 
+function McpStatus({ status }: { status?: McpClientStatus }) {
+  if (!mcpClientApi.isDesktop()) {
+    return <p className="text-[10px] text-zinc-600 mt-2">桌面端可检测配置状态</p>;
+  }
+  if (!status) {
+    return <p className="text-[10px] text-zinc-600 mt-2">正在检测…</p>;
+  }
+  const styles = {
+    not_installed: { label: '未安装', dot: 'bg-zinc-600', text: 'text-zinc-500' },
+    not_configured: { label: '未配置', dot: 'bg-amber-500', text: 'text-amber-400' },
+    configured: { label: '已配置', dot: 'bg-green-500', text: 'text-green-400' },
+    needs_update: { label: '需要更新', dot: 'bg-blue-500', text: 'text-blue-400' },
+    error: { label: '检测失败', dot: 'bg-red-500', text: 'text-red-400' },
+  }[status.state];
+  return (
+    <div className="flex items-center gap-1.5 mt-2" title={status.detail}>
+      <span className={`w-1.5 h-1.5 rounded-full ${styles.dot}`} />
+      <span className={`text-[10px] ${styles.text}`}>{styles.label}</span>
+    </div>
+  );
+}
+
 function processPlatform(): 'windows' | 'unix' {
   return navigator.platform.toLowerCase().includes('win') ? 'windows' : 'unix';
+}
+
+function redactSecret(content: string, secret: string): string {
+  if (!secret) return content;
+  return content.split(secret).join('••••••••');
 }

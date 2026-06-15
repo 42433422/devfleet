@@ -138,6 +138,23 @@ body {
   filter: brightness(0) invert(1);
 }
 
+.devfleet-codex-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.devfleet-codex-brand-icon {
+  width: 15px;
+  height: 15px;
+  object-fit: contain;
+  filter: invert(1);
+}
+
 .devfleet-pill-badge-share {
   flex-shrink: 0;
   color: rgba(78, 82, 87, 1);

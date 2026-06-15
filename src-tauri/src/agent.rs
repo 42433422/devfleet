@@ -425,7 +425,12 @@ impl AgentState {
 
         match dev_tool {
             "cursor" => {
-                send_log(tx, task, "Cursor Agent 正在 headless 模式分析并修改代码", "info");
+                send_log(
+                    tx,
+                    task,
+                    "Cursor Agent 正在 headless 模式分析并修改代码",
+                    "info",
+                );
                 send_progress(tx, task, 40, "running");
                 let output = run_cursor_agent(&task_dir, &prompt).await?;
                 if !output.trim().is_empty() {
@@ -460,7 +465,8 @@ impl AgentState {
                 tokio::fs::create_dir_all(&trae_dir)
                     .await
                     .map_err(|error| format!("创建 .trae 目录失败: {error}"))?;
-                let mcp_json = build_trae_project_mcp_json(&config.api_base_url, &config.device_token);
+                let mcp_json =
+                    build_trae_project_mcp_json(&config.api_base_url, &config.device_token);
                 tokio::fs::write(trae_dir.join("mcp.json"), &mcp_json)
                     .await
                     .map_err(|error| format!("写入 MCP 配置失败: {error}"))?;
@@ -510,7 +516,9 @@ impl AgentState {
             _ => {
                 if matches!(dev_tool, "claude_code") {
                     match launch_tool(dev_tool, &task_dir) {
-                        Ok(()) => send_log(tx, task, &format!("已使用 {dev_tool} 打开工作区"), "info"),
+                        Ok(()) => {
+                            send_log(tx, task, &format!("已使用 {dev_tool} 打开工作区"), "info")
+                        }
                         Err(error) => send_log(
                             tx,
                             task,
@@ -589,12 +597,7 @@ impl AgentState {
             tokio::fs::create_dir_all(&task_dir)
                 .await
                 .map_err(|error| format!("创建工作区失败: {error}"))?;
-            send_log(
-                tx,
-                task,
-                "未提供远程仓库地址，使用本地工作目录",
-                "info",
-            );
+            send_log(tx, task, "未提供远程仓库地址，使用本地工作目录", "info");
             send_progress(tx, task, 10, "running");
             if !task_dir.join(".git").exists() {
                 send_log(tx, task, "初始化本地 Git 仓库", "info");
@@ -884,10 +887,7 @@ fn set_mutex<T>(mutex: &Mutex<T>, value: T) {
     }
 }
 
-fn scan_tools(
-    current_task: Option<&str>,
-    active_dev_tool: Option<&str>,
-) -> Vec<LocalToolStatus> {
+fn scan_tools(current_task: Option<&str>, active_dev_tool: Option<&str>) -> Vec<LocalToolStatus> {
     let processes = process_list();
     ["trae", "codex", "cursor", "claude_code"]
         .into_iter()
@@ -1048,12 +1048,7 @@ async fn checkout_work_branch(
     .await
     .is_ok()
     {
-        run_command(
-            Some(task_dir),
-            "git",
-            &["checkout", work_branch],
-        )
-        .await?;
+        run_command(Some(task_dir), "git", &["checkout", work_branch]).await?;
         return Ok(());
     }
     if !base_branch.is_empty()
@@ -1073,13 +1068,9 @@ async fn checkout_work_branch(
         .await?;
         return Ok(());
     }
-    run_command(
-        Some(task_dir),
-        "git",
-        &["checkout", "-b", work_branch],
-    )
-    .await
-    .map(|_| ())?;
+    run_command(Some(task_dir), "git", &["checkout", "-b", work_branch])
+        .await
+        .map(|_| ())?;
     Ok(())
 }
 
@@ -1092,12 +1083,7 @@ async fn push_branch_if_remote(
     match run_command(Some(task_dir), "git", &["remote", "get-url", "origin"]).await {
         Ok(url) if !url.trim().is_empty() => {
             send_log(tx, task, "正在推送远程分支", "info");
-            run_command(
-                Some(task_dir),
-                "git",
-                &["push", "-u", "origin", branch],
-            )
-            .await?;
+            run_command(Some(task_dir), "git", &["push", "-u", "origin", branch]).await?;
             send_log(tx, task, "远程分支已推送", "info");
             Ok(())
         }
@@ -1142,9 +1128,8 @@ async fn run_cursor_agent(cwd: &Path, prompt: &str) -> Result<String, String> {
 }
 
 async fn run_codex_agent(cwd: &Path, prompt: &str) -> Result<String, String> {
-    let codex = find_executable("codex").ok_or_else(|| {
-        "未找到 Codex CLI。目标设备需安装并登录 Codex（codex login）".to_string()
-    })?;
+    let codex = find_executable("codex")
+        .ok_or_else(|| "未找到 Codex CLI。目标设备需安装并登录 Codex（codex login）".to_string())?;
     run_command(
         Some(cwd),
         &codex,
@@ -1267,12 +1252,7 @@ pub async fn agent_merge_task(
 
     run_command(Some(cwd), "git", &["fetch", "--all", "--prune"]).await?;
     run_command(Some(cwd), "git", &["checkout", &branch]).await?;
-    run_command(
-        Some(cwd),
-        "git",
-        &["pull", "--ff-only", "origin", &branch],
-    )
-    .await?;
+    run_command(Some(cwd), "git", &["pull", "--ff-only", "origin", &branch]).await?;
 
     for branch_name in &subtask_branches {
         match run_command(
