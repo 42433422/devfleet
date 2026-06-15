@@ -16,6 +16,7 @@
     "test": "npm run mcp:build && tsx --test tests/*.test.ts",
     "mcp": "tsx mcp/server.ts",
     "mcp:build": "esbuild mcp/server.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist-mcp/devfleet-mcp.mjs",
+    "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"
   },
