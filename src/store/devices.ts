@@ -15,6 +15,7 @@ export interface Device {
   id: string;
   name: string;
   status: DeviceStatus;
+  devTool: ToolName;
   tools: ToolStatus[];
   lastSeen: string;
   activated?: boolean;
@@ -32,8 +33,10 @@ interface DevicesState {
   disconnectDevice: (id: string) => Promise<void>;
   deleteDevice: (id: string) => Promise<void>;
   setPrimaryDevice: (id: string) => Promise<void>;
+  setDeviceDevTool: (id: string, devTool: ToolName) => Promise<void>;
   updateToolStatus: (deviceId: string, toolStatus: ToolStatus[]) => void;
   updateDeviceStatus: (deviceId: string, status: DeviceStatus) => void;
+  updateDeviceDevTool: (deviceId: string, devTool: ToolName) => void;
   setCurrentDevice: (device: Device | null) => void;
   clearError: () => void;
 }
@@ -102,6 +105,17 @@ export const useDevicesStore = create<DevicesState>((set) => ({
     }));
   },
 
+  setDeviceDevTool: async (id: string, devTool: ToolName) => {
+    const result = await api<{ device: Device }>(`/api/devices/${id}/dev-tool`, {
+      method: 'PUT',
+      body: { devTool },
+    });
+    set((s) => ({
+      devices: s.devices.map((d) => (d.id === id ? result.device : d)),
+      error: null,
+    }));
+  },
+
   updateToolStatus: (deviceId: string, toolStatus: ToolStatus[]) => {
     set((s) => ({
       devices: s.devices.map((d) => (d.id === deviceId ? { ...d, tools: toolStatus } : d)),
@@ -113,6 +127,12 @@ export const useDevicesStore = create<DevicesState>((set) => ({
       devices: s.devices.map((d) =>
         d.id === deviceId ? { ...d, status, lastSeen: new Date().toISOString() } : d
       ),
+    }));
+  },
+
+  updateDeviceDevTool: (deviceId: string, devTool: ToolName) => {
+    set((s) => ({
+      devices: s.devices.map((d) => (d.id === deviceId ? { ...d, devTool } : d)),
     }));
   },
 

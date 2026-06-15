@@ -27,6 +27,8 @@ interface Device {
   activated: boolean;
   connection_allowed?: boolean;
   is_primary?: boolean;
+  /** 主设备指定的本机开发工具，默认 trae */
+  dev_tool?: 'codex' | 'trae' | 'cursor' | 'claude_code';
   last_seen: string;
 }
 

@@ -29,6 +29,7 @@ pub struct AgentConfig {
     pub controller_device_id: Option<String>,
     pub controller_device_name: Option<String>,
     pub workspace_root: String,
+    pub dev_tool: String,
     pub default_editor: String,
     pub executor: String,
 }
@@ -75,9 +76,12 @@ struct ActivationResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ActivatedDevice {
     id: String,
     name: String,
+    #[serde(default)]
+    dev_tool: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -100,6 +104,7 @@ struct AgentInner {
     connected: Mutex<bool>,
     tools: Mutex<Vec<LocalToolStatus>>,
     running_task: Mutex<Option<String>>,
+    running_dev_tool: Mutex<Option<String>>,
     last_error: Mutex<Option<String>>,
     generation: AtomicU64,
 }
@@ -124,8 +129,9 @@ impl AgentState {
                 config_path,
                 config: Mutex::new(config),
                 connected: Mutex::new(false),
-                tools: Mutex::new(scan_tools(None)),
+                tools: Mutex::new(scan_tools(None, None)),
                 running_task: Mutex::new(None),
+                running_dev_tool: Mutex::new(None),
                 last_error: Mutex::new(None),
                 generation: AtomicU64::new(0),
             }),
@@ -140,7 +146,11 @@ impl AgentState {
         std::fs::write(&self.inner.config_path, raw).map_err(|error| error.to_string())
     }
 
-    fn update_controller_identity(&self, identity: ControllerIdentity) -> Result<(), String> {
+    fn update_controller_identity(
+        &self,
+        identity: ControllerIdentity,
+        dev_tool: Option<String>,
+    ) -> Result<(), String> {
         let updated = {
             let mut config = self
                 .inner
@@ -157,6 +167,10 @@ impl AgentState {
                 .as_ref()
                 .map(|device| device.id.clone());
             config.controller_device_name = identity.primary_device.map(|device| device.name);
+            if let Some(tool) = dev_tool.filter(|value| !value.trim().is_empty()) {
+                config.dev_tool = tool;
+                config.default_editor = config.dev_tool.clone();
+            }
             config.clone()
         };
         self.save_config(&updated)
@@ -244,7 +258,13 @@ impl AgentState {
                   return Ok(());
                 }
                 let running_task = self.inner.running_task.lock().ok().and_then(|value| value.clone());
-                let tools = scan_tools(running_task.as_deref());
+                let running_dev_tool = self
+                    .inner
+                    .running_dev_tool
+                    .lock()
+                    .ok()
+                    .and_then(|value| value.clone());
+                let tools = scan_tools(running_task.as_deref(), running_dev_tool.as_deref());
                 set_mutex(&self.inner.tools, tools.clone());
                 let payload = json!({
                   "type": "tool_status",
@@ -266,7 +286,8 @@ impl AgentState {
                     if value.get("type").and_then(Value::as_str) == Some("binding_identity") {
                       let identity = value.get("controller").cloned().ok_or_else(|| "绑定身份消息缺少 controller".to_string())?;
                       let identity: ControllerIdentity = serde_json::from_value(identity).map_err(|error| error.to_string())?;
-                      self.update_controller_identity(identity)?;
+                      let dev_tool = value.get("devTool").and_then(Value::as_str).map(str::to_string);
+                      self.update_controller_identity(identity, dev_tool)?;
                       continue;
                     }
                     if value.get("type").and_then(Value::as_str) == Some("execute_task") {
@@ -308,6 +329,7 @@ impl AgentState {
             return;
         }
         set_mutex(&self.inner.running_task, Some(task.task_id.clone()));
+        set_mutex(&self.inner.running_dev_tool, Some(task.tool.clone()));
         let result = self.execute_task_inner(&config, &task, &tx).await;
         if let Err(error) = result {
             send_log(&tx, &task, &error, "error");
@@ -315,6 +337,7 @@ impl AgentState {
             set_mutex(&self.inner.last_error, Some(error));
         }
         set_mutex(&self.inner.running_task, None);
+        set_mutex(&self.inner.running_dev_tool, None);
     }
 
     async fn execute_task_inner(
@@ -359,51 +382,53 @@ impl AgentState {
         .await?;
         send_progress(tx, task, 25, "running");
 
-        let editor = if task.tool == "trae" {
-            "trae"
-        } else if config.default_editor.is_empty() {
-            "trae"
-        } else {
-            &config.default_editor
-        };
-        match launch_tool(editor, &task_dir) {
-            Ok(()) => send_log(tx, task, &format!("已使用 {editor} 打开工作区"), "info"),
-            Err(error) => send_log(
-                tx,
-                task,
-                &format!("编辑器启动失败，但继续执行自动编码: {error}"),
-                "warn",
-            ),
-        }
-
-        if config.executor != "codex" {
-            return Err(format!(
-                "当前仅支持 codex 自动执行器，收到: {}",
-                config.executor
-            ));
-        }
-        let codex = find_executable("codex")
-            .ok_or_else(|| "未找到 Codex CLI。请先安装并登录 Codex，然后重试任务".to_string())?;
-        send_log(tx, task, "Codex 正在设备本地分析并修改代码", "info");
-        send_progress(tx, task, 40, "running");
+        let dev_tool = task.tool.as_str();
         let prompt = format!(
-      "完成以下分布式子任务。直接在当前仓库修改代码，运行必要检查，不要只给建议。\n任务: {}\n要求: {}\n工作分支: {}\n完成后总结修改和验证结果。",
-      task.title, task.description, task.work_branch
-    );
-        let output = run_command(
-            Some(&task_dir),
-            &codex,
-            &[
-                "exec",
-                "--sandbox",
-                "workspace-write",
-                "--ephemeral",
-                &prompt,
-            ],
-        )
-        .await?;
-        if !output.trim().is_empty() {
-            send_log(tx, task, &truncate(&output, 4000), "info");
+            "完成以下分布式子任务。直接在当前仓库修改代码，运行必要检查，不要只给建议。\n任务: {}\n要求: {}\n工作分支: {}\n开发工具: {}\n完成后总结修改和验证结果。",
+            task.title, task.description, task.work_branch, dev_tool
+        );
+
+        match dev_tool {
+            "cursor" => {
+                send_log(tx, task, "Cursor Agent 正在 headless 模式分析并修改代码", "info");
+                send_progress(tx, task, 40, "running");
+                let output = run_cursor_agent(&task_dir, &prompt).await?;
+                if !output.trim().is_empty() {
+                    send_log(tx, task, &truncate(&output, 4000), "info");
+                }
+            }
+            "codex" => {
+                send_log(tx, task, "Codex CLI 正在设备本地分析并修改代码", "info");
+                send_progress(tx, task, 40, "running");
+                let output = run_codex_agent(&task_dir, &prompt).await?;
+                if !output.trim().is_empty() {
+                    send_log(tx, task, &truncate(&output, 4000), "info");
+                }
+            }
+            _ => {
+                if matches!(dev_tool, "trae" | "claude_code") {
+                    match launch_tool(dev_tool, &task_dir) {
+                        Ok(()) => send_log(tx, task, &format!("已使用 {dev_tool} 打开工作区"), "info"),
+                        Err(error) => send_log(
+                            tx,
+                            task,
+                            &format!("{dev_tool} 启动失败，但继续自动编码: {error}"),
+                            "warn",
+                        ),
+                    }
+                }
+                send_log(
+                    tx,
+                    task,
+                    &format!("使用 {dev_tool} 工作流 + Codex CLI 自动改码"),
+                    "info",
+                );
+                send_progress(tx, task, 40, "running");
+                let output = run_codex_agent(&task_dir, &prompt).await?;
+                if !output.trim().is_empty() {
+                    send_log(tx, task, &truncate(&output, 4000), "info");
+                }
+            }
         }
         send_progress(tx, task, 80, "running");
 
@@ -514,7 +539,18 @@ pub async fn agent_bind(
             .primary_device
             .map(|device| device.name),
         workspace_root,
-        default_editor: "trae".to_string(),
+        dev_tool: activation
+            .device
+            .dev_tool
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "trae".to_string()),
+        default_editor: activation
+            .device
+            .dev_tool
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "trae".to_string()),
         executor: "codex".to_string(),
     };
     state.save_config(&config)?;
@@ -639,24 +675,34 @@ fn set_mutex<T>(mutex: &Mutex<T>, value: T) {
     }
 }
 
-fn scan_tools(current_task: Option<&str>) -> Vec<LocalToolStatus> {
+fn scan_tools(
+    current_task: Option<&str>,
+    active_dev_tool: Option<&str>,
+) -> Vec<LocalToolStatus> {
     let processes = process_list();
     ["trae", "codex", "cursor", "claude_code"]
         .into_iter()
         .map(|name| {
-            let executable = find_executable(name);
+            let executable = if name == "cursor" {
+                resolve_cursor_agent()
+                    .map(|(program, _)| program)
+                    .or_else(|| find_executable("cursor"))
+            } else {
+                find_executable(name)
+            };
             let process_names: &[&str] = match name {
                 "claude_code" => &["claude", "claude.exe"],
                 "trae" => &["trae", "trae.exe"],
-                "cursor" => &["cursor", "cursor.exe"],
+                "cursor" => &["cursor", "cursor.exe", "agent"],
                 _ => &["codex", "codex.exe"],
             };
             let running = process_names
                 .iter()
                 .any(|process| processes.contains(&process.to_lowercase()));
+            let is_active = current_task.is_some() && active_dev_tool == Some(name);
             LocalToolStatus {
                 tool_name: name.to_string(),
-                status: if current_task.is_some() && (name == "codex" || name == "trae") {
+                status: if is_active {
                     "running"
                 } else if running {
                     "running"
@@ -668,7 +714,7 @@ fn scan_tools(current_task: Option<&str>) -> Vec<LocalToolStatus> {
                 .to_string(),
                 installed: executable.is_some(),
                 executable,
-                current_task: if name == "codex" || name == "trae" {
+                current_task: if is_active {
                     current_task.map(str::to_string)
                 } else {
                     None
@@ -751,6 +797,81 @@ fn launch_tool(tool: &str, workspace: &Path) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+/// 解析 Cursor Agent CLI：`agent` 独立二进制，或 `cursor agent` 子命令。
+fn resolve_cursor_agent() -> Option<(String, Vec<String>)> {
+    if let Some(path) = find_binary_in_path("agent") {
+        return Some((path, Vec::new()));
+    }
+    if let Some(path) = find_binary_in_path("cursor") {
+        return Some((path, vec!["agent".to_string()]));
+    }
+    None
+}
+
+async fn run_cursor_agent(cwd: &Path, prompt: &str) -> Result<String, String> {
+    let (program, prefix) = resolve_cursor_agent().ok_or_else(|| {
+        "未找到 Cursor Agent CLI。请安装：curl https://cursor.com/install -fsS | bash，并执行 agent login 或设置 CURSOR_API_KEY".to_string()
+    })?;
+    let mut args: Vec<String> = prefix;
+    args.extend([
+        "-p".to_string(),
+        "--force".to_string(),
+        "--trust".to_string(),
+        "--output-format".to_string(),
+        "text".to_string(),
+        prompt.to_string(),
+    ]);
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_command(Some(cwd), &program, &arg_refs).await
+}
+
+async fn run_codex_agent(cwd: &Path, prompt: &str) -> Result<String, String> {
+    let codex = find_executable("codex").ok_or_else(|| {
+        "未找到 Codex CLI。目标设备需安装并登录 Codex（codex login）".to_string()
+    })?;
+    run_command(
+        Some(cwd),
+        &codex,
+        &[
+            "exec",
+            "--sandbox",
+            "workspace-write",
+            "--ephemeral",
+            prompt,
+        ],
+    )
+    .await
+}
+
+fn find_binary_in_path(binary: &str) -> Option<String> {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(output) = StdCommand::new("where").arg(binary).output() {
+            if output.status.success() {
+                if let Some(path) = String::from_utf8_lossy(&output.stdout).lines().next() {
+                    let trimmed = path.trim().to_string();
+                    if !trimmed.is_empty() {
+                        return Some(trimmed);
+                    }
+                }
+            }
+        }
+        None
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Ok(output) = StdCommand::new("which").arg(binary).output() {
+            if output.status.success() {
+                let trimmed = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !trimmed.is_empty() {
+                    return Some(trimmed);
+                }
+            }
+        }
+        None
+    }
+}
+
 async fn run_command(cwd: Option<&Path>, program: &str, args: &[&str]) -> Result<String, String> {
     let mut command = Command::new(program);
     command.args(args).kill_on_drop(true);
@@ -776,6 +897,90 @@ async fn run_command(cwd: Option<&Path>, program: &str, args: &[&str]) -> Result
             truncate(&stderr, 4000)
         ))
     }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeTaskResult {
+    pub success: bool,
+    pub commit: String,
+    pub branch: String,
+    pub merged_branches: Vec<String>,
+    pub pushed: bool,
+}
+
+#[tauri::command]
+pub async fn agent_merge_task(
+    workspace_path: String,
+    branch: String,
+    subtask_branches: Vec<String>,
+    push: bool,
+) -> Result<MergeTaskResult, String> {
+    let workspace = workspace_path.trim();
+    if workspace.is_empty() || !Path::new(workspace).is_absolute() {
+        return Err("工作区必须是绝对路径".to_string());
+    }
+    if subtask_branches.is_empty() {
+        return Err("没有可合并的子任务分支".to_string());
+    }
+    for branch_name in &subtask_branches {
+        if branch_name.is_empty()
+            || branch_name.contains("..")
+            || !branch_name
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || "/_-".contains(ch) || ch == '.')
+        {
+            return Err(format!("不安全的 Git 分支名: {branch_name}"));
+        }
+    }
+
+    let cwd = Path::new(workspace);
+    run_command(Some(cwd), "git", &["rev-parse", "--is-inside-work-tree"]).await?;
+    let dirty = run_command(Some(cwd), "git", &["status", "--porcelain"]).await?;
+    if !dirty.trim().is_empty() {
+        return Err("主设备工作区存在未提交修改，请先提交或暂存后再合并".to_string());
+    }
+
+    run_command(Some(cwd), "git", &["fetch", "--all", "--prune"]).await?;
+    run_command(Some(cwd), "git", &["checkout", &branch]).await?;
+    run_command(
+        Some(cwd),
+        "git",
+        &["pull", "--ff-only", "origin", &branch],
+    )
+    .await?;
+
+    for branch_name in &subtask_branches {
+        match run_command(
+            Some(cwd),
+            "git",
+            &["merge", "--no-edit", &format!("origin/{branch_name}")],
+        )
+        .await
+        {
+            Ok(_) => {}
+            Err(error) => {
+                let _ = run_command(Some(cwd), "git", &["merge", "--abort"]).await;
+                return Err(format!("合并 origin/{branch_name} 失败: {error}"));
+            }
+        }
+    }
+
+    if push {
+        run_command(Some(cwd), "git", &["push", "origin", &branch]).await?;
+    }
+    let commit = run_command(Some(cwd), "git", &["rev-parse", "HEAD"])
+        .await?
+        .trim()
+        .to_string();
+
+    Ok(MergeTaskResult {
+        success: true,
+        commit,
+        branch: branch.clone(),
+        merged_branches: subtask_branches,
+        pushed: push,
+    })
 }
 
 fn validate_task(task: &ExecuteTask) -> Result<(), String> {

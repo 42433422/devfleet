@@ -1,8 +1,8 @@
 import { Router, type Request, type Response } from 'express';
 import { db } from '../db/store.js';
 import { authMiddleware } from '../middleware/auth.js';
-import { genBindCode, genDeviceToken } from '../lib/utils.js';
-import { broadcast, disconnectDeviceSocket, hasDevice, sendBindingIdentityToUser } from '../websocket/manager.js';
+import { genBindCode, genDeviceToken, normalizeDevTool, type DevTool } from '../lib/utils.js';
+import { broadcast, disconnectDeviceSocket, hasDevice, sendBindingIdentity, sendBindingIdentityToUser } from '../websocket/manager.js';
 import { createHash } from 'node:crypto';
 
 const router = Router();
@@ -28,6 +28,7 @@ function serializeDevice(deviceId: string) {
     id: dev.id,
     name: dev.name,
     status: hasDevice(dev.id) ? 'online' : dev.status === 'connecting' ? 'connecting' : 'offline',
+    devTool: normalizeDevTool(dev.dev_tool),
     tools: finalTools,
     lastSeen: dev.last_seen,
     bindCode: dev.bind_code,
@@ -121,6 +122,7 @@ router.post('/bind', async (req: Request, res: Response): Promise<void> => {
     bind_code_expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
     status: 'offline',
     activated: false,
+    dev_tool: 'trae',
   });
   res.status(200).json({ bindCode: device.bind_code, deviceId: device.id, expiresAt: device.bind_code_expires_at });
 });
@@ -150,6 +152,25 @@ router.post('/:id/disconnect', async (req: Request, res: Response): Promise<void
   disconnectDeviceSocket(id, '主设备已断开连接');
   db.devices.update(id, { status: 'offline', connection_allowed: false });
   broadcast(userId, { type: 'device_status', device_id: id, status: 'offline' });
+  res.status(200).json({ success: true, device: serializeDevice(id) });
+});
+
+router.put('/:id/dev-tool', async (req: Request, res: Response): Promise<void> => {
+  const userId = req.user!.id;
+  const { id } = req.params;
+  const dev = db.devices.findById(id);
+  if (!dev || dev.user_id !== userId) {
+    res.status(404).json({ error: '设备不存在' });
+    return;
+  }
+  const { devTool } = (req.body || {}) as { devTool?: DevTool };
+  if (!devTool || !['codex', 'trae', 'cursor', 'claude_code'].includes(devTool)) {
+    res.status(400).json({ error: 'devTool 必须是 codex、trae、cursor 或 claude_code' });
+    return;
+  }
+  db.devices.update(id, { dev_tool: devTool });
+  sendBindingIdentity(id);
+  broadcast(userId, { type: 'device_dev_tool', device_id: id, devTool });
   res.status(200).json({ success: true, device: serializeDevice(id) });
 });
 

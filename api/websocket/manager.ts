@@ -1,6 +1,7 @@
 import type { WebSocket, Server as WSServer } from 'ws';
 import { db } from '../db/store.js';
 import { verifyToken } from '../middleware/auth.js';
+import { normalizeDevTool } from '../lib/utils.js';
 import type { ToolStatusItem } from '../db/store.js';
 
 type ClientWS = WebSocket & { _userId?: string };
@@ -212,6 +213,7 @@ export function sendBindingIdentity(deviceId: string) {
       email: owner?.email || '未知账号',
       primaryDevice: primaryDevice ? { id: primaryDevice.id, name: primaryDevice.name } : null,
     },
+    devTool: normalizeDevTool(device.dev_tool),
   });
 }
 

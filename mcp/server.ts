@@ -49,12 +49,12 @@ const api = async <T>(path: string, options: RequestInit = {}): Promise<T> => {
 
 server.registerTool('devfleet_list_devices', {
   title: '列出 DevFleet 设备',
-  description: '列出已绑定设备、在线状态、默认设备以及 Trae/Codex 等编程工具的当前状态。',
+  description: '列出已绑定设备、在线状态、默认设备以及 Trae / Codex / Cursor 等编程工具的当前状态。',
 }, async () => result(await api('/api/devices')));
 
 server.registerTool('devfleet_dispatch_task', {
   title: '向多台设备派发代码任务',
-  description: '把真实代码任务拆分并派发到在线 DevFleet 设备。设备会克隆仓库、创建独立分支、使用 Trae 打开并由 Codex CLI 修改代码后推送分支。',
+  description: '把真实代码任务派发到在线工作设备。Cursor 设备由 Cursor Agent CLI 改码；Trae/Codex/Claude 由 Codex CLI 改码；各设备 push 独立 Git 分支。',
   inputSchema: {
     title: z.string().min(1).describe('任务标题'),
     description: z.string().min(1).describe('详细实现要求，建议按句子列出可并行的子任务'),

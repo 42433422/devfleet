@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { db, type SubTask } from '../db/store.js';
 import { authMiddleware } from '../middleware/auth.js';
-import { splitTaskIntoSubs, branchNameFromTask } from '../lib/utils.js';
+import { splitTaskIntoSubs, branchNameFromTask, normalizeDevTool, selectExecutionDevices, type DevTool } from '../lib/utils.js';
 import { broadcast, hasDevice, sendToDevice } from '../websocket/manager.js';
 
 const router = Router();
@@ -112,6 +112,32 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
     return;
   }
 
+  const executionDevices = selectExecutionDevices(onlineDevices);
+  const missingExecutor = executionDevices.filter((device) => {
+    const tools = db.tools.findAllByDeviceId(device.id);
+    if (tools.length === 0) return false;
+    const devTool = normalizeDevTool(device.dev_tool) as DevTool;
+    if (devTool === 'cursor') {
+      const cursor = tools.find((tool) => tool.tool_name === 'cursor');
+      return !cursor || cursor.status === 'not_installed';
+    }
+    const codex = tools.find((tool) => tool.tool_name === 'codex');
+    return !codex || codex.status === 'not_installed';
+  });
+  if (missingExecutor.length > 0) {
+    const detail = missingExecutor
+      .map((device) => {
+        const devTool = normalizeDevTool(device.dev_tool);
+        const need = devTool === 'cursor' ? 'Cursor Agent CLI（agent login）' : 'Codex CLI（codex login）';
+        return `${device.name}：${need}`;
+      })
+      .join('；');
+    res.status(400).json({
+      error: `以下工作设备缺少自动改码执行器：${detail}`,
+    });
+    return;
+  }
+
   const task = db.tasks.create({
     user_id: userId,
     title,
@@ -121,16 +147,17 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
     branch,
   });
 
-  const subs = splitTaskIntoSubs(description, Math.min(3, onlineDevices.length));
-  const usedDevices = [...onlineDevices].sort((a, b) => Number(a.is_primary) - Number(b.is_primary));
+  const subs = splitTaskIntoSubs(description, Math.min(3, executionDevices.length));
+  const usedDevices = executionDevices;
   const createdSubs = subs.map((sub, idx) => {
     const device = usedDevices[idx % usedDevices.length];
+    const toolName = normalizeDevTool(device.dev_tool);
     return db.subTasks.create({
       task_id: task.id,
       device_id: device.id,
-      tool_name: 'trae',
+      tool_name: toolName,
       status: 'running',
-      branch_name: branchNameFromTask(task.id, idx, 'trae'),
+      branch_name: branchNameFromTask(task.id, idx, toolName),
       progress: 0,
     });
   });

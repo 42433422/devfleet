@@ -8,6 +8,7 @@ type WSMessage =
   | { type: 'task_log'; task_id: string; subtask_id: string; log: LogEntry }
   | { type: 'task_status'; task_id: string; status: Task['status'] }
   | { type: 'task_merged'; task_id: string; commit_sha: string }
+  | { type: 'device_dev_tool'; device_id: string; devTool: ToolStatus['toolName'] }
   | { type: 'task_created'; task_id: string } & Partial<Pick<Task, 'title' | 'description' | 'status' | 'subTasks' | 'created_at' | 'repo_url' | 'branch'>>;
 
 interface WSCallbacks {
@@ -56,7 +57,7 @@ class WebSocketClient {
         const data = JSON.parse(ev.data) as WSMessage;
         if (!data || !data.type) return;
 
-        const { updateDeviceStatus, updateToolStatus } = useDevicesStore.getState();
+        const { updateDeviceStatus, updateToolStatus, updateDeviceDevTool } = useDevicesStore.getState();
         const { updateTaskProgress, updateTaskStatus, appendTaskLog, addTask, tasks } = useTasksStore.getState();
 
         switch (data.type) {
@@ -64,6 +65,9 @@ class WebSocketClient {
             updateDeviceStatus(data.device_id, data.status);
             if (data.tools) updateToolStatus(data.device_id, data.tools);
             callbacks?.onDeviceStatus?.(data);
+            break;
+          case 'device_dev_tool':
+            updateDeviceDevTool(data.device_id, data.devTool);
             break;
           case 'task_progress':
             updateTaskProgress(data.task_id, data.subtask_id, data.progress, data.status);

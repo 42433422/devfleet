@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertCircle, ArrowLeft, CheckCircle2, Laptop, Link2, Play, Power, RefreshCw, Square, Unlink } from 'lucide-react';
 import { agentApi, isDesktopApp, type AgentStatus } from '@/lib/agent';
+import { DEV_TOOL_LABELS, normalizeDevTool } from '@/lib/devTools';
 import ToolBadge from '@/components/ToolBadge';
 
 const defaultWorkspace = navigator.platform.toLowerCase().includes('win') ? 'C:\\DevFleet\\workspaces' : `${navigator.platform.toLowerCase().includes('mac') ? '/Users/Shared' : '/tmp'}/DevFleet/workspaces`;
@@ -123,6 +124,7 @@ export default function Agent() {
                   </div>
                   <p className="text-sm text-zinc-400">绑定控制者：<span className="text-brand">{status.config?.controllerEmail}</span></p>
                   <p className="text-sm text-zinc-400 mt-1">主设备：<span className="text-white">{status.config?.controllerDeviceName || '尚未设置主设备'}</span></p>
+                  <p className="text-sm text-zinc-400 mt-1">主设备指定开发工具：<span className="text-brand">{DEV_TOOL_LABELS[normalizeDevTool(status.config?.devTool)]}</span></p>
                   <p className="text-xs text-zinc-600 mt-1 font-mono">设备 ID：{status.config?.deviceId}</p>
                   <p className="text-xs text-zinc-600 mt-1 font-mono">工作目录：{status.config?.workspaceRoot}</p>
                   {status.runningTask && <p className="text-xs text-green-400 mt-2">当前任务：{status.runningTask}</p>}
@@ -144,17 +146,24 @@ export default function Agent() {
                 <button onClick={refresh} className="text-zinc-500 hover:text-white"><RefreshCw size={14} /></button>
               </div>
               <div className="grid md:grid-cols-2 gap-3">
-                {status.tools.map((tool) => (
-                  <div key={tool.toolName} className="p-3 bg-zinc-950/60 border border-zinc-800 rounded-lg">
+                {status.tools.map((tool) => {
+                  const assigned = normalizeDevTool(status.config?.devTool) === tool.toolName;
+                  const canOpen = assigned && tool.installed && tool.toolName !== 'codex';
+                  return (
+                  <div key={tool.toolName} className={`p-3 bg-zinc-950/60 border rounded-lg ${assigned ? 'border-brand/40 ring-1 ring-brand/20' : 'border-zinc-800'}`}>
                     <ToolBadge tool={tool.toolName} status={tool.status} />
+                    {assigned && <p className="text-[10px] text-brand mt-1">主设备已指定</p>}
                     <p className="text-[10px] text-zinc-600 mt-2 truncate">{tool.executable || '未检测到安装路径'}</p>
-                    {tool.toolName === 'trae' && tool.installed && (
-                      <button onClick={() => agentApi.openTool('trae', status.config?.workspaceRoot || '')} className="mt-2 flex items-center gap-1 text-xs text-brand"><Power size={11} />打开 Trae</button>
+                    {canOpen && (
+                      <button onClick={() => agentApi.openTool(tool.toolName, status.config?.workspaceRoot || '')} className="mt-2 flex items-center gap-1 text-xs text-brand"><Power size={11} />打开 {DEV_TOOL_LABELS[tool.toolName]}</button>
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
-              <p className="text-xs text-zinc-600 mt-4">默认编辑器：Trae；自动执行器：Codex CLI。任务会在独立目录和独立 Git 分支中运行并推送。</p>
+              <p className="text-xs text-zinc-600 mt-4">
+                主设备在「设备管理」指定开发工具。Cursor 设备由 Cursor Agent CLI（agent -p --force）改码，无需 Codex；Trae / Codex / Claude Code 由 Codex CLI 改码。完成后统一 Git push 分支。
+              </p>
             </div>
           </div>
         )}

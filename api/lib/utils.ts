@@ -17,13 +17,21 @@ export function genDeviceToken(): string {
   return randomBytes(32).toString('hex');
 }
 
+export type DevTool = 'codex' | 'trae' | 'cursor' | 'claude_code';
+
+export const DEV_TOOLS: DevTool[] = ['trae', 'codex', 'cursor', 'claude_code'];
+export const DEFAULT_DEV_TOOL: DevTool = 'trae';
+
+export function normalizeDevTool(value: unknown): DevTool {
+  return typeof value === 'string' && (DEV_TOOLS as string[]).includes(value)
+    ? (value as DevTool)
+    : DEFAULT_DEV_TOOL;
+}
+
 export interface SubTaskDesc {
   title: string;
   description: string;
-  preferredTool: 'codex' | 'trae' | 'cursor' | 'claude_code';
 }
-
-const TOOL_POOL: Array<'codex' | 'trae' | 'cursor' | 'claude_code'> = ['cursor', 'trae', 'claude_code', 'codex'];
 
 export function splitTaskIntoSubs(description: string, count = 3): SubTaskDesc[] {
   const trimmed = description.trim();
@@ -36,7 +44,6 @@ export function splitTaskIntoSubs(description: string, count = 3): SubTaskDesc[]
       subs.push({
         title: `子任务 ${i + 1}`,
         description: lines[i],
-        preferredTool: TOOL_POOL[i % TOOL_POOL.length],
       });
     }
   } else {
@@ -46,7 +53,6 @@ export function splitTaskIntoSubs(description: string, count = 3): SubTaskDesc[]
       subs.push({
         title: subTitles[i] || `子任务 ${i + 1}`,
         description: `${baseDesc}（第 ${i + 1} 部分）`,
-        preferredTool: TOOL_POOL[i % TOOL_POOL.length],
       });
     }
   }
@@ -57,4 +63,14 @@ export function splitTaskIntoSubs(description: string, count = 3): SubTaskDesc[]
 export function branchNameFromTask(taskId: string, subIdx: number, tool: string): string {
   const shortId = taskId.slice(-6);
   return `devfleet/${tool}/sub-${subIdx + 1}-${shortId}`;
+}
+
+/** 主设备负责调度/合并；有非主设备在线时只向工作设备派发子任务 */
+export function selectExecutionDevices<T extends { is_primary?: boolean }>(online: T[]): T[] {
+  const workers = online.filter((device) => !device.is_primary);
+  return workers.length > 0 ? workers : online;
+}
+
+export function normalizeRepoUrl(value: string): string {
+  return value.trim().replace(/\.git$/, '').replace(/^git@([^:]+):/, 'https://$1/').replace(/\/$/, '').toLowerCase();
 }

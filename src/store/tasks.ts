@@ -53,7 +53,7 @@ interface TasksState {
   fetchTasks: () => Promise<void>;
   fetchTask: (id: string) => Promise<void>;
   createTask: (data: TaskCreateData) => Promise<Task>;
-  mergeTask: (id: string) => Promise<void>;
+  mergeTask: (id: string, mergeCommitSha: string) => Promise<void>;
   deleteTask: (id: string) => Promise<void>;
   updateTaskProgress: (taskId: string, subTaskId: string, progress: number, status?: SubTaskStatus) => void;
   updateTaskStatus: (taskId: string, status: TaskStatus) => void;
@@ -119,8 +119,11 @@ export const useTasksStore = create<TasksState>((set, get) => ({
     }
   },
 
-  mergeTask: async (id: string) => {
-    await api(`/api/tasks/${id}/merge`, { method: 'POST' });
+  mergeTask: async (id: string, mergeCommitSha: string) => {
+    await api(`/api/tasks/${id}/merge`, {
+      method: 'POST',
+      body: { merge_commit_sha: mergeCommitSha },
+    });
     set((s) => ({
       tasks: s.tasks.map((t) => (t.id === id ? { ...t, status: 'merged' as TaskStatus } : t)),
       currentTask: s.currentTask?.id === id ? { ...s.currentTask, status: 'merged' as TaskStatus } : s.currentTask,

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Plus, Link as LinkIcon, Power, PowerOff, Wifi, WifiOff, RefreshCw, QrCode, Copy, Check, Trash2, Star, AlertCircle } from 'lucide-react';
-import { useDevicesStore, type Device } from '@/store/devices';
+import { useDevicesStore, type Device, type ToolName } from '@/store/devices';
+import { DEV_TOOL_LABELS, DEV_TOOLS } from '@/lib/devTools';
 import ToolBadge from '@/components/ToolBadge';
 
 const statusConfig: Record<Device['status'], { color: string; text: string; icon: React.ReactNode }> = {
@@ -30,7 +31,7 @@ function QRCodeBox({ code }: { code: string }) {
 }
 
 export default function Devices() {
-  const { devices, loading: devicesLoading, error, clearError, fetchDevices, bindDevice, connectDevice, disconnectDevice, deleteDevice, setPrimaryDevice } = useDevicesStore();
+  const { devices, loading: devicesLoading, error, clearError, fetchDevices, bindDevice, connectDevice, disconnectDevice, deleteDevice, setPrimaryDevice, setDeviceDevTool } = useDevicesStore();
   const [showAdd, setShowAdd] = useState(false);
   const [bindCode, setBindCode] = useState('');
   const [bindExpiresAt, setBindExpiresAt] = useState('');
@@ -39,6 +40,7 @@ export default function Devices() {
   const [refreshing, setRefreshing] = useState(false);
   const [copied, setCopied] = useState(false);
   const [actionError, setActionError] = useState('');
+  const [devToolSaving, setDevToolSaving] = useState<string | null>(null);
 
   useEffect(() => {
     fetchDevices();
@@ -86,6 +88,18 @@ export default function Devices() {
     }
   };
 
+  const handleDevToolChange = async (deviceId: string, devTool: ToolName) => {
+    setDevToolSaving(deviceId);
+    setActionError('');
+    try {
+      await setDeviceDevTool(deviceId, devTool);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : '更新开发工具失败');
+    } finally {
+      setDevToolSaving(null);
+    }
+  };
+
   const onlineCount = devices.filter(d => d.status === 'online').length;
 
   return (
@@ -94,7 +108,7 @@ export default function Devices() {
         <div>
           <h1 className="text-lg font-semibold text-white">设备管理</h1>
           <p className="text-xs text-zinc-500 mt-1">
-            {onlineCount}/{devices.length} 设备在线
+            {onlineCount}/{devices.length} 设备在线 · 为每台工作设备指定一种开发工具（默认 Trae），主设备负责发任务与合并
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -253,16 +267,36 @@ export default function Devices() {
 
                 <p className="text-[10px] text-zinc-600 mb-3">最近活跃：{formatTime(d.lastSeen)}</p>
 
+                <label className="block mb-3">
+                  <span className="block text-[10px] text-zinc-500 mb-1.5">开发工具（主设备指定）</span>
+                  <select
+                    value={d.devTool || 'trae'}
+                    disabled={devToolSaving === d.id}
+                    onChange={(event) => handleDevToolChange(d.id, event.target.value as ToolName)}
+                    className="w-full px-2.5 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-white focus:outline-none focus:border-brand/50 disabled:opacity-50"
+                  >
+                    {DEV_TOOLS.map((tool) => (
+                      <option key={tool} value={tool}>{DEV_TOOL_LABELS[tool]}</option>
+                    ))}
+                  </select>
+                  <p className="text-[10px] text-zinc-600 mt-1">
+                    {(d.devTool || 'trae') === 'cursor'
+                      ? '自动改码：Cursor Agent CLI（无需 Codex）'
+                      : '自动改码：Codex CLI'}
+                  </p>
+                </label>
+
                 <div className="space-y-1.5 mb-4">
                   {d.tools.length === 0 ? (
                     <p className="text-xs text-zinc-600">暂无工具信息</p>
                   ) : (
                     d.tools.map((t) => (
-                      <ToolBadge
-                        key={t.toolName}
-                        tool={t.toolName}
-                        status={t.status}
-                      />
+                      <div key={t.toolName} className={t.toolName === (d.devTool || 'trae') ? 'ring-1 ring-brand/40 rounded-lg' : ''}>
+                        <ToolBadge
+                          tool={t.toolName}
+                          status={t.status}
+                        />
+                      </div>
                     ))
                   )}
                 </div>

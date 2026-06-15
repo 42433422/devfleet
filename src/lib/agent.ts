@@ -15,6 +15,7 @@ export interface AgentConfig {
   controllerDeviceId?: string;
   controllerDeviceName?: string;
   workspaceRoot: string;
+  devTool: string;
   defaultEditor: string;
   executor: string;
 }
@@ -36,6 +37,14 @@ const invoke = async <T>(command: string, args?: Record<string, unknown>): Promi
   return tauriInvoke<T>(command, args);
 };
 
+export interface MergeTaskResult {
+  success: boolean;
+  commit: string;
+  branch: string;
+  mergedBranches: string[];
+  pushed: boolean;
+}
+
 export const agentApi = {
   status: () => invoke<AgentStatus>('agent_status'),
   bind: (data: { apiBaseUrl: string; bindCode: string; deviceName: string; workspaceRoot: string }) => invoke<AgentStatus>('agent_bind', data),
@@ -43,4 +52,11 @@ export const agentApi = {
   stop: () => invoke<AgentStatus>('agent_stop'),
   unbind: () => invoke<AgentStatus>('agent_unbind'),
   openTool: (tool: string, workspace: string) => invoke<void>('agent_open_tool', { tool, workspace }),
+  mergeTask: (data: { workspacePath: string; branch: string; subtaskBranches: string[]; push?: boolean }) =>
+    invoke<MergeTaskResult>('agent_merge_task', {
+      workspacePath: data.workspacePath,
+      branch: data.branch,
+      subtaskBranches: data.subtaskBranches,
+      push: data.push ?? true,
+    }),
 };

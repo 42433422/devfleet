@@ -5,20 +5,26 @@ DevFleet 是真实运行的多设备代码任务系统，由四部分组成：
 1. Tauri 桌面控制台。
 2. 内置于同一桌面程序的设备代理。
 3. 支持 WebSocket 的自托管协调服务。
-4. 可接入 Trae、Codex CLI/IDE 的 STDIO MCP 服务。
+4. 可接入 Trae、Codex CLI/IDE、Cursor 的 STDIO MCP 服务（主设备调度用）。
 
-任务会在目标设备克隆真实 Git 仓库、建立独立分支、默认用 Trae 打开工作区，并调用已登录的 Codex CLI 修改代码、提交和推送。主设备 MCP 再真实拉取并合并各设备分支。
+**工作流**：主设备在「设备管理」为每台**工作设备**指定一种开发工具（Trae / Codex / Cursor / Claude Code，**默认 Trae**）。主设备创建任务后，任务只派发给在线的工作设备（有非主设备在线时，主设备本身不执行子任务）；各设备按指定工具打开工作区，由 Codex CLI 自动改码并 **Git push 独立分支**；主设备在任务详情或 MCP 中 **fetch/merge/push** 合并各分支。
 
 ## 运行要求
 
-所有工作设备需要：
+**主设备**（调度 + 合并）：
 
-- Git，并已配置仓库拉取和推送权限。
-- Trae IDE，作为默认工作区编辑器。
-- Codex CLI，已完成登录，用作非交互自动编码执行器。
-- 能访问同一个 DevFleet 服务端。
+- DevFleet 桌面客户端或 Web 控制台
+- Trae / Codex / Cursor / Claude Code 任一 MCP（见「MCP 接入」）
+- 本地已有该 Git 仓库 clone（用于最终合并）
 
-Codex 自动执行使用官方支持的 `codex exec --sandbox workspace-write --ephemeral` 模式。Trae 通过官方支持的 STDIO MCP 调用 DevFleet 工具。
+**工作设备**（执行子任务）：
+
+- Git，并已配置仓库拉取和推送权限
+- 开发工具与执行器（由主设备在「设备管理」指定）：
+  - **Cursor** → Cursor Agent CLI（`agent login` 或 `CURSOR_API_KEY`），**不需要 Codex**
+  - **Trae / Claude Code** → 可选打开 IDE + **Codex CLI** 自动改码
+  - **Codex** → 仅 **Codex CLI**
+- DevFleet 本机代理在线
 
 ## 部署服务端
 
@@ -55,16 +61,21 @@ Set-ExecutionPolicy -Scope Process Bypass
 3. 再为每台目标电脑生成一个 10 分钟有效的一次性绑定码。
 4. 目标电脑安装同一个 DevFleet Windows 客户端，无需登录主账号，打开“本机设备代理”。
 5. 输入服务器地址和各自的绑定码。
-6. 目标电脑会显示绑定账号、主设备名称、连接状态和本机工具状态；主设备变更会自动同步。
+6. 目标电脑会显示绑定账号、主设备名称、**主设备指定的开发工具**、连接状态和本机工具状态；主设备变更会自动同步。
 
 绑定后服务器只保存设备令牌的 SHA-256 摘要。解除绑定或主设备删除设备时，令牌立即吊销且 WebSocket 被关闭。
 
-## 接入 Trae / Codex
+### 指定每台设备的开发工具
 
-从 GitHub Release 下载并解压 `devfleet-mcp.zip`，在控制台“MCP 接入”页面填写文件路径。页面会生成：
+在控制台 **设备管理** 中，为每台已绑定设备选择一种开发工具（Trae / Codex / Cursor / Claude Code），**默认 Trae**。此设置保存在服务端，目标设备代理会通过 WebSocket 实时同步。创建任务时，各在线设备按各自指定的工具接收子任务，分支名形如 `devfleet/trae/sub-1-xxxxxx`。
+
+## 接入 Trae / Codex / Cursor
+
+从 GitHub Release 下载并解压 `devfleet-mcp.zip`，在控制台「MCP 接入」页面填写文件路径。页面会生成：
 
 - Trae MCP JSON 配置。
 - `codex mcp add devfleet ...` 命令。
+- Cursor 一键安装 deeplink（写入 `~/.cursor/mcp.json`）及手动 JSON 配置。
 
 MCP 提供以下工具：
 
@@ -125,3 +136,4 @@ git push origin main --tags
 - [Trae MCP 文档](https://docs.trae.ai/ide/model-context-protocol)
 - [Codex 非交互模式](https://developers.openai.com/codex/noninteractive)
 - [Codex MCP 配置](https://developers.openai.com/codex/mcp)
+- [Cursor MCP 安装](https://cursor.com/docs/context/mcp)

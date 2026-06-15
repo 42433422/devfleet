@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Plus, ChevronRight, GitBranch, Calendar, Play, CheckCircle2, XCircle, Clock, GitMerge, AlertCircle, Monitor } from 'lucide-react';
 import { useTasksStore, type Task } from '@/store/tasks';
 import { useDevicesStore } from '@/store/devices';
+import { DEV_TOOL_LABELS, executorLabel, selectExecutionDevices } from '@/lib/devTools';
 
 const statusConfig: Record<Task['status'], { bg: string; text: string; icon: React.ReactNode }> = {
   pending: { bg: 'bg-zinc-700/50', text: 'text-zinc-400', icon: <Clock size={10} /> },
@@ -48,6 +49,9 @@ export default function Tasks() {
     return () => clearInterval(timer);
   }, [fetchDevices, fetchTasks]);
 
+  const onlineDevices = devices.filter((device) => device.status === 'online');
+  const executionDevices = selectExecutionDevices(onlineDevices);
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.title.trim()) return;
@@ -70,7 +74,7 @@ export default function Tasks() {
       <div className="mb-6">
         <h1 className="text-lg font-semibold text-white">任务控制台</h1>
         <p className="text-xs text-zinc-500 mt-1">
-          {runningCount}/{tasks.length} 任务运行中
+          {runningCount}/{tasks.length} 任务运行中 · 主设备创建任务后按各设备指定的开发工具派发，各设备独立 Git 分支提交
         </p>
       </div>
 
@@ -81,15 +85,29 @@ export default function Tasks() {
         </div>
       )}
 
-      {devices.filter((device) => device.status === 'online').length === 0 && (
+      {onlineDevices.length === 0 ? (
         <button
           type="button"
           onClick={() => navigate('/devices')}
           className="w-full mb-4 flex items-center gap-3 px-4 py-3 bg-amber-500/10 border border-amber-500/20 rounded-lg text-left"
         >
           <Monitor size={16} className="text-amber-400" />
-          <span className="text-sm text-amber-200">创建任务前，请确保至少一台真实设备代理在线</span>
+          <span className="text-sm text-amber-200">创建任务前，请确保至少一台工作设备代理在线</span>
         </button>
+      ) : (
+        <div className="mb-4 px-4 py-3 bg-zinc-900/60 border border-zinc-800/60 rounded-lg">
+          <p className="text-xs text-zinc-500 mb-2">
+            将派发到 {executionDevices.length} 台工作设备
+            {onlineDevices.length > executionDevices.length ? '（主设备仅负责调度与合并）' : ''}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {executionDevices.map((device) => (
+              <span key={device.id} className="px-2.5 py-1 bg-zinc-950 border border-zinc-800 rounded-md text-xs text-zinc-300">
+                {device.name} · {DEV_TOOL_LABELS[device.devTool || 'trae']} · {executorLabel(device.devTool || 'trae')}
+              </span>
+            ))}
+          </div>
+        </div>
       )}
 
       <form onSubmit={submit} className="bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-5 mb-6 animate-fade-in">
@@ -140,7 +158,7 @@ export default function Tasks() {
         <div className="flex justify-end">
           <button
             type="submit"
-            disabled={creating || !form.title.trim() || !form.repo_url.trim() || devices.filter((device) => device.status === 'online').length === 0}
+            disabled={creating || !form.title.trim() || !form.repo_url.trim() || executionDevices.length === 0}
             className="flex items-center gap-2 px-5 py-2.5 bg-brand hover:bg-brand/90 disabled:opacity-50 text-black font-medium rounded-lg text-sm transition-all duration-200 shadow-lg shadow-brand/20"
           >
             <Plus size={14} strokeWidth={1.5} />

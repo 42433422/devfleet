@@ -79,14 +79,14 @@ jobs:
             - **macOS**: 下载 .dmg 文件并拖到 Applications 文件夹
             - **Windows**: 下载 `.msi` 或 `-setup.exe` 安装包
             - **Linux**: 下载 .AppImage 或 .deb 包运行
-            - **Trae / Codex MCP**: 下载 `devfleet-mcp.zip`
+            - **Trae / Codex / Cursor MCP**: 下载 `devfleet-mcp.zip`
             - **自托管服务端**: 下载 `devfleet-server.zip`（Node.js 20.19+）或使用仓库中的 Docker Compose
 
             ### 新功能
             - 一次性绑定码和独立设备令牌
             - 目标设备显示绑定者，检测并默认启动 Trae
             - Codex CLI 在各设备真实修改、提交、推送分支
-            - Trae / Codex MCP 调度和主设备真实 Git 合并
+            - Trae / Codex / Cursor MCP 调度和主设备真实 Git 合并
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}

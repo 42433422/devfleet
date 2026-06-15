@@ -78,6 +78,18 @@ test('账号、设备和任务的 MVP 主流程', async () => {
     assert.equal(devices.devices.length, 1);
     assert.equal(devices.devices[0].status, 'online');
 
+    await request(`/api/devices/${activation.device.id}/tools`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        tools: [
+          { tool_name: 'codex', status: 'idle' },
+          { tool_name: 'trae', status: 'idle' },
+          { tool_name: 'cursor', status: 'not_installed' },
+          { tool_name: 'claude_code', status: 'not_installed' },
+        ],
+      }),
+    });
+
     const dispatchedMessage = new Promise<Record<string, unknown>>((resolve, reject) => {
       deviceSocket!.once('message', (raw) => {
         try {

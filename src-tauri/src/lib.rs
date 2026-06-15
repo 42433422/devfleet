@@ -24,6 +24,7 @@ pub fn run() {
             agent::agent_stop,
             agent::agent_unbind,
             agent::agent_open_tool,
+            agent::agent_merge_task,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
