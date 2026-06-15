@@ -8,7 +8,7 @@ export type BuiltinTunnelStatus = {
 };
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> {
-  let timer: ReturnType<typeof window.setTimeout> | undefined;
+  let timer: number | undefined;
   try {
     return await Promise.race([
       promise,
