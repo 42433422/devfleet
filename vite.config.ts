@@ -3,9 +3,12 @@ import react from '@vitejs/plugin-react'
 import tsconfigPaths from "vite-tsconfig-paths";
 
 const apiProxyTarget = process.env.VITE_API_PROXY_TARGET || 'http://localhost:3001';
+const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig({
+  // Tauri 生产包必须用相对路径，否则 WebView 加载 /assets/* 会白屏
+  base: './',
   plugins: [
     react({
       babel: {
@@ -15,6 +18,7 @@ export default defineConfig({
     tsconfigPaths(),
   ],
   server: {
+    host: host || undefined,
     port: 5173,
     strictPort: true,
     proxy: {

@@ -1,13 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "DevFleet",
-  "version": "1.2.8",
+  "version": "1.2.9",
   "identifier": "com.devfleet.desktop",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build && npm run server:build"
+    "beforeBuildCommand": "npm run build && npm run server:build && npm run mcp:build"
   },
   "app": {
     "windows": [
@@ -52,7 +52,8 @@
       }
     },
     "resources": {
-      "../dist-server/devfleet-server.cjs": "server/devfleet-server.cjs"
+      "../dist-server/devfleet-server.cjs": "server/devfleet-server.cjs",
+      "../dist-mcp/devfleet-mcp.mjs": "mcp/devfleet-mcp.mjs"
     }
   }
 }

@@ -3,8 +3,11 @@ mod mcp;
 mod network;
 mod server;
 
-use tauri::webview::WebviewWindowBuilder;
+use std::net::TcpStream;
+use std::time::Duration;
+
 use tauri::Manager;
+use tauri::webview::WebviewWindowBuilder;
 use tauri_utils::config::WebviewUrl;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -18,16 +21,7 @@ pub fn run() {
             let min_width = win.min_width.unwrap_or(800.0);
             let min_height = win.min_height.unwrap_or(600.0);
 
-            let url = if cfg!(debug_assertions) {
-                app.config()
-                    .build
-                    .dev_url
-                    .clone()
-                    .map(WebviewUrl::External)
-                    .unwrap_or_else(|| WebviewUrl::App("index.html".into()))
-            } else {
-                WebviewUrl::App("index.html".into())
-            };
+            let url = resolve_webview_url(app);
 
             WebviewWindowBuilder::new(app, win.label.clone(), url)
                 .title(win.title.clone())
@@ -42,6 +36,11 @@ pub fn run() {
             let agent_state = agent::AgentState::load(&app.handle());
             agent::start_saved_agent(&agent_state);
             app.manage(agent_state);
+
+            let app_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let _ = mcp::ensure_mcp_bundle(app_handle);
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -56,10 +55,36 @@ pub fn run() {
             mcp::install_mcp_client,
             mcp::install_trae_mcp,
             mcp::detect_trae_variant,
+            mcp::ensure_mcp_bundle,
             network::get_lan_address,
             network::open_external_url,
             network::open_trae_install,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+fn resolve_webview_url(app: &tauri::App) -> WebviewUrl {
+    if cfg!(debug_assertions) {
+        if let Some(dev_url) = app.config().build.dev_url.clone() {
+            if dev_server_available(&dev_url) {
+                return WebviewUrl::External(dev_url);
+            }
+            log::warn!(
+                "[DevFleet] Vite dev server unavailable at {dev_url}, falling back to bundled frontend"
+            );
+        }
+    }
+    WebviewUrl::App("index.html".into())
+}
+
+fn dev_server_available(dev_url: &url::Url) -> bool {
+    let host = dev_url.host_str().unwrap_or("127.0.0.1");
+    let port = dev_url.port().unwrap_or(5173);
+    let host = if host == "localhost" { "127.0.0.1" } else { host };
+    let addr: std::net::SocketAddr = match format!("{host}:{port}").parse() {
+        Ok(addr) => addr,
+        Err(_) => return false,
+    };
+    TcpStream::connect_timeout(&addr, Duration::from_millis(400)).is_ok()
 }

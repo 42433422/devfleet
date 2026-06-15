@@ -38,20 +38,15 @@ test('Cursor 一键安装 deeplink 编码 stdio 配置', () => {
   assert.equal(links.mcpJson, buildTraeMcpJson(sample));
 });
 
-test('Trae 一键安装 deeplink 使用新版 trae://mcp/install 格式', () => {
+test('Trae 一键安装 deeplink 使用新版 mcp/install 格式', () => {
   const links = buildTraeInstallLinks(sample);
   assert.match(links.deeplinkCn, /^trae-cn:\/\/mcp\/install/);
   assert.match(links.deeplinkIntl, /^trae:\/\/mcp\/install/);
-  assert.match(links.deeplinkCn, /type=stdio/);
-  assert.match(links.deeplinkIntl, /type=stdio/);
-  assert.equal(links.mcpJson, buildTraeMcpJson(sample));
-  assert.equal(links.variant, 'cn');
-});
-
-test('Trae 旧版 deeplink 使用 trae.ai-ide/mcp-import 格式', () => {
-  const links = buildTraeInstallLinks(sample);
   assert.match(links.legacyDeeplinkCn, /^trae-cn:\/\/trae\.ai-ide\/mcp-import/);
   assert.match(links.legacyDeeplinkIntl, /^trae:\/\/trae\.ai-ide\/mcp-import/);
+  assert.match(links.deeplinkCn, /type=stdio/);
+  assert.equal(links.mcpJson, buildTraeMcpJson(sample));
+  assert.equal(links.variant, 'cn');
 });
 
 test('buildTraeDeeplink 生成新版协议链接', () => {

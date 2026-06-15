@@ -62,6 +62,13 @@ export default function Integration() {
   useEffect(() => {
     setApiUrl(getMcpApiBaseUrl());
     fetchDevices();
+    if (mcpClientApi.isDesktop()) {
+      void mcpClientApi.ensureBundle()
+        .then((path) => setMcpPath(path))
+        .catch((error) => {
+          setInstallHint(error instanceof Error ? error.message : '无法初始化 MCP 文件');
+        });
+    }
   }, [fetchDevices]);
 
   useEffect(() => {

@@ -35,6 +35,7 @@ function commandArgs(options: McpClientOptions) {
 
 export const mcpClientApi = {
   isDesktop: isDesktopApp,
+  ensureBundle: () => invoke<string>('ensure_mcp_bundle'),
   statuses: (options: McpClientOptions) =>
     invoke<McpClientStatus[]>('mcp_client_statuses', commandArgs(options)),
   install: (tool: McpClientTool, options: McpClientOptions) =>

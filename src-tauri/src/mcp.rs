@@ -3,6 +3,7 @@ use std::process::Command;
 
 use serde::Serialize;
 use serde_json::{json, Map, Value};
+use tauri::{AppHandle, Manager};
 
 const SERVER_NAME: &str = "devfleet";
 
@@ -21,6 +22,40 @@ struct McpOptions<'a> {
     mcp_path: &'a str,
     api_url: &'a str,
     token: &'a str,
+}
+
+#[tauri::command]
+pub fn ensure_mcp_bundle(app: AppHandle) -> Result<String, String> {
+    let dest_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("mcp");
+    let dest = dest_dir.join("devfleet-mcp.mjs");
+    if dest.is_file() {
+        return Ok(dest.display().to_string());
+    }
+    let src = app
+        .path()
+        .resolve("mcp/devfleet-mcp.mjs", tauri::path::BaseDirectory::Resource)
+        .map_err(|error| error.to_string())?;
+    if !src.is_file() {
+        return Err("内置 MCP 文件缺失，请从 Release 下载 devfleet-mcp.zip".into());
+    }
+    std::fs::create_dir_all(&dest_dir).map_err(|error| error.to_string())?;
+    std::fs::copy(&src, &dest).map_err(|error| error.to_string())?;
+    Ok(dest.display().to_string())
+}
+
+fn resolve_mcp_path(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if !trimmed.is_empty() && Path::new(trimmed).is_file() {
+        return Ok(trimmed.to_string());
+    }
+    Err(
+        "MCP 文件不存在。桌面端会自动解压到应用数据目录，请刷新页面或重新打开 DevFleet。"
+            .into(),
+    )
 }
 
 #[tauri::command]
@@ -53,22 +88,19 @@ pub fn install_mcp_client(
         return Err("不支持的 MCP 客户端".into());
     }
 
-    let mcp_path = mcp_path.trim();
-    if mcp_path.is_empty() || !Path::new(mcp_path).is_file() {
-        return Err("MCP 文件不存在，请先填写正确的 devfleet-mcp.mjs 绝对路径".into());
-    }
+    let mcp_path = resolve_mcp_path(&mcp_path)?;
     let api_url = api_url.trim().trim_end_matches('/');
     if !(api_url.starts_with("http://") || api_url.starts_with("https://")) {
         return Err("MCP API 地址必须以 http:// 或 https:// 开头".into());
     }
 
     let options = McpOptions {
-        mcp_path,
+        mcp_path: mcp_path.as_str(),
         api_url,
         token: token.trim(),
     };
-    let node = find_executable("node")
-        .ok_or_else(|| "未检测到 Node.js，请先安装 Node.js 20.19+".to_string())?;
+    let node = find_node_executable()
+        .ok_or_else(|| "未检测到 Node.js，请先安装 Node.js 20.19+（或安装 Cursor / VS Code 等自带 Node 的 IDE）".to_string())?;
 
     match tool {
         "codex" => install_codex(&options, &node)?,
@@ -77,15 +109,16 @@ pub fn install_mcp_client(
             if !client_installed(tool) {
                 return Err(format!("未检测到 {}，请先安装客户端", tool_label(tool)));
             }
-            let path = preferred_json_config_path(tool)?;
-            merge_json_config(&path, &server_config(&options, &node))?;
+            let path = preferred_json_config_path(tool, None)?;
+            merge_json_config(&path, &json_server_config(&options, &node))?;
         }
         "trae" => {
             if !client_installed(tool) {
                 return Err(format!("未检测到 {}，请先安装客户端", tool_label(tool)));
             }
-            let path = preferred_json_config_path(tool)?;
-            merge_json_config(&path, &server_config(&options, &node))?;
+            let variant = detect_trae_variant();
+            let path = preferred_json_config_path(tool, Some(variant.as_str()))?;
+            merge_json_config(&path, &json_server_config(&options, &node))?;
         }
         _ => unreachable!(),
     }
@@ -93,8 +126,9 @@ pub fn install_mcp_client(
     let status = inspect_client(tool, &options);
     if !status.configured {
         return Err(format!(
-            "{} 配置命令已执行，但未能复检到 DevFleet MCP",
-            tool_label(tool)
+            "{} 配置已写入，但未能复检到 DevFleet MCP（{}）",
+            tool_label(tool),
+            status.detail.unwrap_or_else(|| "请重启客户端后重试".into())
         ));
     }
     Ok(status)
@@ -117,20 +151,26 @@ pub fn install_trae_mcp(
 /// 检测本机安装的 Trae 版本
 #[tauri::command]
 pub fn detect_trae_variant() -> String {
-    if app_exists("Trae CN") {
+    if app_exists("TRAE SOLO CN") || app_exists("Trae CN") {
         return "cn".into();
     }
-    if app_exists("Trae") {
+    if app_exists("TRAE SOLO") || app_exists("Trae") {
         return "intl".into();
     }
-    // 检查配置文件判断版本
+    // 通过 Application Support 目录判断版本
     if let Some(home) = home_dir() {
-        let cn_config = home.join("Library/Application Support/Trae CN/User/mcp.json");
-        let intl_config = home.join("Library/Application Support/Trae/User/mcp.json");
-        if cn_config.is_file() {
+        let cn_dirs = [
+            home.join("Library/Application Support/TRAE SOLO CN"),
+            home.join("Library/Application Support/Trae CN"),
+        ];
+        let intl_dirs = [
+            home.join("Library/Application Support/TRAE SOLO"),
+            home.join("Library/Application Support/Trae"),
+        ];
+        if cn_dirs.iter().any(|p| p.is_dir()) {
             return "cn".into();
         }
-        if intl_config.is_file() {
+        if intl_dirs.iter().any(|p| p.is_dir()) {
             return "intl".into();
         }
     }
@@ -207,7 +247,12 @@ fn inspect_json_paths(
     tool: &str,
     options: &McpOptions<'_>,
 ) -> Result<Option<(bool, String)>, String> {
-    for path in json_config_paths(tool) {
+    let variant = if tool == "trae" {
+        Some(detect_trae_variant())
+    } else {
+        None
+    };
+    for path in json_config_paths(tool, variant.as_deref()) {
         if !path.is_file() {
             continue;
         }
@@ -259,10 +304,21 @@ fn install_codex(options: &McpOptions<'_>, node: &str) -> Result<(), String> {
     command_result("Codex", output)
 }
 
+fn json_server_config(options: &McpOptions<'_>, node: &str) -> Value {
+    json!({
+        "command": node,
+        "args": [options.mcp_path],
+        "env": {
+            "DEVFLEET_API_URL": options.api_url,
+            "DEVFLEET_TOKEN": options.token,
+        }
+    })
+}
+
 fn install_claude(options: &McpOptions<'_>, node: &str) -> Result<(), String> {
     let claude = find_client_executable("claude_code")
         .ok_or_else(|| "未检测到 Claude Code CLI，请先安装 Claude Code".to_string())?;
-    let config = server_config(options, node).to_string();
+    let config = json_server_config(options, node).to_string();
     let _ = Command::new(&claude)
         .args(["mcp", "remove", SERVER_NAME, "--scope", "user"])
         .output();
@@ -290,29 +346,18 @@ fn command_result(label: &str, output: std::process::Output) -> Result<(), Strin
     })
 }
 
-fn server_config(options: &McpOptions<'_>, node: &str) -> Value {
-    json!({
-        "type": "stdio",
-        "command": node,
-        "args": [options.mcp_path],
-        "env": {
-            "DEVFLEET_API_URL": options.api_url,
-            "DEVFLEET_TOKEN": options.token,
-        }
-    })
-}
-
 fn config_matches(config: &Value, options: &McpOptions<'_>) -> bool {
     let config = config.get("transport").unwrap_or(config);
     let command = config
         .get("command")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let node_ok = Path::new(command)
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .map(|value| value.eq_ignore_ascii_case("node"))
-        .unwrap_or(false);
+    let node_ok = command.ends_with("node")
+        || Path::new(command)
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .map(|value| value.eq_ignore_ascii_case("node"))
+            .unwrap_or(false);
     let path_ok = config
         .get("args")
         .and_then(Value::as_array)
@@ -362,8 +407,8 @@ fn merge_json_config(path: &Path, server: &Value) -> Result<(), String> {
         .map_err(|error| format!("无法写入 {}: {error}", path.display()))
 }
 
-fn preferred_json_config_path(tool: &str) -> Result<PathBuf, String> {
-    let paths = json_config_paths(tool);
+fn preferred_json_config_path(tool: &str, trae_variant: Option<&str>) -> Result<PathBuf, String> {
+    let paths = json_config_paths(tool, trae_variant);
     paths
         .iter()
         .find(|path| path.is_file())
@@ -372,7 +417,7 @@ fn preferred_json_config_path(tool: &str) -> Result<PathBuf, String> {
         .ok_or_else(|| format!("无法确定 {} 配置目录", tool_label(tool)))
 }
 
-fn json_config_paths(tool: &str) -> Vec<PathBuf> {
+fn json_config_paths(tool: &str, trae_variant: Option<&str>) -> Vec<PathBuf> {
     let Some(home) = home_dir() else {
         return Vec::new();
     };
@@ -390,31 +435,37 @@ fn json_config_paths(tool: &str) -> Vec<PathBuf> {
             paths
         }
         "trae" => {
+            let variant = trae_variant.unwrap_or("cn");
             let mut paths = Vec::new();
             #[cfg(target_os = "macos")]
             {
-                if app_exists("Trae CN") {
+                if variant == "cn" {
                     paths.push(home.join("Library/Application Support/Trae CN/User/mcp.json"));
-                }
-                if app_exists("Trae") {
+                    paths.push(home.join("Library/Application Support/TRAE SOLO CN/User/mcp.json"));
+                } else {
                     paths.push(home.join("Library/Application Support/Trae/User/mcp.json"));
+                    paths.push(home.join("Library/Application Support/TRAE SOLO/User/mcp.json"));
                 }
-                paths.push(home.join("Library/Application Support/Trae CN/User/mcp.json"));
-                paths.push(home.join("Library/Application Support/Trae/User/mcp.json"));
                 paths.push(home.join("Library/Application Support/Trae/mcp.json"));
             }
             #[cfg(target_os = "linux")]
             {
-                paths.push(home.join(".config/Trae/User/mcp.json"));
-                paths.push(home.join(".config/Trae CN/User/mcp.json"));
+                if variant == "cn" {
+                    paths.push(home.join(".config/Trae CN/User/mcp.json"));
+                } else {
+                    paths.push(home.join(".config/Trae/User/mcp.json"));
+                }
             }
             #[cfg(target_os = "windows")]
             if let Some(app_data) = std::env::var_os("APPDATA") {
                 let base = PathBuf::from(app_data);
-                paths.push(base.join("Trae/User/mcp.json"));
-                paths.push(base.join("Trae CN/User/mcp.json"));
+                if variant == "cn" {
+                    paths.push(base.join("Trae CN/User/mcp.json"));
+                } else {
+                    paths.push(base.join("Trae/User/mcp.json"));
+                }
             }
-            paths.push(home.join(".trae").join("mcp.json"));
+            paths.push(home.join(".trae/mcp.json"));
             paths.dedup();
             paths
         }
@@ -426,7 +477,13 @@ fn json_config_paths(tool: &str) -> Vec<PathBuf> {
 fn client_installed(tool: &str) -> bool {
     find_client_executable(tool).is_some()
         || match tool {
-            "trae" => app_exists("Trae") || app_exists("Trae CN"),
+            "trae" => {
+                app_exists("Trae")
+                    || app_exists("Trae CN")
+                    || app_exists("TRAE SOLO CN")
+                    || app_exists("TRAE SOLO")
+                    || trae_support_dir_exists()
+            }
             "cursor" => app_exists("Cursor"),
             "codex" => app_exists("Codex"),
             "claude_code" => app_exists("Claude"),
@@ -445,11 +502,21 @@ fn find_client_executable(tool: &str) -> Option<String> {
     #[cfg(target_os = "macos")]
     {
         let candidates: &[&str] = match tool {
-            "codex" => &["/Applications/Codex.app/Contents/Resources/codex"],
+            "codex" => &[
+                "/Applications/Codex.app/Contents/Resources/codex",
+                "/Applications/Codex.app/Contents/MacOS/Codex",
+            ],
+            "claude_code" => &[
+                "/Applications/Claude.app/Contents/MacOS/Claude",
+            ],
             "cursor" => &["/Applications/Cursor.app/Contents/MacOS/Cursor"],
             "trae" => &[
                 "/Applications/Trae.app/Contents/MacOS/Trae",
                 "/Applications/Trae CN.app/Contents/MacOS/Trae CN",
+                "/Applications/TRAE SOLO CN.app/Contents/MacOS/TRAE SOLO CN",
+                "/Applications/TRAE SOLO.app/Contents/MacOS/TRAE SOLO",
+                "/Volumes/TRAE Work CN/TRAE SOLO CN.app/Contents/MacOS/Electron",
+                "/Volumes/TRAE Work/TRAE SOLO.app/Contents/MacOS/Electron",
             ],
             _ => &[],
         };
@@ -462,32 +529,91 @@ fn find_client_executable(tool: &str) -> Option<String> {
     None
 }
 
+fn find_node_executable() -> Option<String> {
+    if let Some(path) = find_executable("node") {
+        return Some(path);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let bundled = [
+            "/Applications/Cursor.app/Contents/Resources/app/resources/helpers/node",
+            "/Applications/Visual Studio Code.app/Contents/Resources/app/resources/helpers/node",
+            "/Applications/Trae.app/Contents/Resources/app/resources/helpers/node",
+            "/Applications/Trae CN.app/Contents/Resources/app/resources/helpers/node",
+            "/Applications/TRAE SOLO.app/Contents/Resources/app/resources/helpers/node",
+            "/Applications/TRAE SOLO CN.app/Contents/Resources/app/resources/helpers/node",
+        ];
+        return bundled
+            .iter()
+            .find(|path| Path::new(path).is_file())
+            .map(|path| path.to_string());
+    }
+
+    #[allow(unreachable_code)]
+    None
+}
+
 fn find_executable(binary: &str) -> Option<String> {
-    #[cfg(target_os = "windows")]
-    let lookup = Command::new("where").arg(binary).output();
+    for prefix in executable_search_dirs() {
+        let path = Path::new(&prefix).join(binary);
+        if path.is_file() {
+            return Some(path.display().to_string());
+        }
+    }
+
     #[cfg(not(target_os = "windows"))]
-    let lookup = Command::new("which").arg(binary).output();
-    if let Ok(output) = lookup {
-        if output.status.success() {
-            if let Some(path) = String::from_utf8_lossy(&output.stdout).lines().next() {
-                let path = path.trim();
-                if !path.is_empty() {
-                    return Some(path.to_string());
+    {
+        if let Ok(output) = Command::new("which")
+            .arg(binary)
+            .env("PATH", expanded_path())
+            .output()
+        {
+            if output.status.success() {
+                if let Some(path) = String::from_utf8_lossy(&output.stdout).lines().next() {
+                    let path = path.trim();
+                    if !path.is_empty() {
+                        return Some(path.to_string());
+                    }
                 }
             }
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(target_os = "windows")]
     {
-        for prefix in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"] {
-            let path = Path::new(prefix).join(binary);
-            if path.is_file() {
-                return Some(path.display().to_string());
+        if let Ok(output) = Command::new("where").arg(binary).output() {
+            if output.status.success() {
+                if let Some(path) = String::from_utf8_lossy(&output.stdout).lines().next() {
+                    let path = path.trim();
+                    if !path.is_empty() {
+                        return Some(path.to_string());
+                    }
+                }
             }
         }
     }
+
     None
+}
+
+fn expanded_path() -> String {
+    format!(
+        "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:{}",
+        std::env::var("PATH").unwrap_or_default()
+    )
+}
+
+fn executable_search_dirs() -> Vec<String> {
+    let mut dirs = vec![
+        "/opt/homebrew/bin".into(),
+        "/usr/local/bin".into(),
+        "/usr/bin".into(),
+    ];
+    if let Some(home) = home_dir() {
+        dirs.push(home.join(".local/bin").display().to_string());
+    }
+    dirs
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -498,12 +624,41 @@ fn home_dir() -> Option<PathBuf> {
 
 fn app_exists(name: &str) -> bool {
     #[cfg(target_os = "macos")]
-    return Path::new(&format!("/Applications/{name}.app")).is_dir();
+    {
+        // 检查 /Applications 目录
+        if Path::new(&format!("/Applications/{name}.app")).is_dir() {
+            return true;
+        }
+        // 检查 /Volumes 下的 DMG 挂载安装
+        if let Ok(entries) = std::fs::read_dir("/Volumes") {
+            for entry in entries.flatten() {
+                let app_path = entry.path().join(format!("{name}.app"));
+                if app_path.is_dir() {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = name;
         false
     }
+}
+
+/// 检查 Trae 的 Application Support 目录是否存在（作为安装检测的回退）
+fn trae_support_dir_exists() -> bool {
+    if let Some(home) = home_dir() {
+        let candidates = [
+            home.join("Library/Application Support/Trae CN"),
+            home.join("Library/Application Support/Trae"),
+            home.join("Library/Application Support/TRAE SOLO CN"),
+            home.join("Library/Application Support/TRAE SOLO"),
+        ];
+        return candidates.iter().any(|p| p.is_dir());
+    }
+    false
 }
 
 fn tool_label(tool: &str) -> &str {
@@ -556,5 +711,58 @@ mod tests {
             }
         });
         assert!(config_matches(&config, &options));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn finds_cursor_bundled_node() {
+        let cursor_node =
+            "/Applications/Cursor.app/Contents/Resources/app/resources/helpers/node";
+        if !Path::new(cursor_node).is_file() {
+            return;
+        }
+        let node = find_node_executable().expect("expected bundled node fallback");
+        assert!(node.ends_with("node"));
+    }
+
+    #[test]
+    #[ignore = "live smoke: cargo test live_cursor_install_smoke -- --ignored --nocapture"]
+    fn live_cursor_install_smoke() {
+        let Some(home) = home_dir() else {
+            return;
+        };
+        let mcp_path = home
+            .join("Library/Application Support/com.devfleet.desktop/mcp/devfleet-mcp.mjs");
+        assert!(
+            mcp_path.is_file(),
+            "launch DevFleet once so MCP bundle is extracted"
+        );
+        let token = std::env::var("DEVFLEET_TOKEN").unwrap_or_default();
+        let api_url = std::env::var("DEVFLEET_API_URL")
+            .unwrap_or_else(|_| "http://localhost:3001".into());
+        let options = McpOptions {
+            mcp_path: mcp_path.to_str().unwrap(),
+            api_url: api_url.trim_end_matches('/'),
+            token: token.as_str(),
+        };
+        let node = find_node_executable().expect("node required for MCP install");
+        let path = preferred_json_config_path("cursor", None).expect("cursor config path");
+        let backup = path.with_extension("json.bak.smoke");
+        if path.is_file() {
+            std::fs::copy(&path, &backup).unwrap();
+        }
+        merge_json_config(&path, &json_server_config(&options, &node)).unwrap();
+        let status = inspect_client("cursor", &options);
+        assert!(
+            status.configured && status.matches_current,
+            "cursor install smoke failed: {:?}",
+            status
+        );
+        if backup.is_file() {
+            std::fs::copy(&backup, &path).unwrap();
+            let _ = std::fs::remove_file(backup);
+        } else if path.is_file() {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }

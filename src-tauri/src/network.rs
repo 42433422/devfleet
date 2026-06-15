@@ -12,7 +12,20 @@ fn is_allowed_external_url(url: &str) -> bool {
 }
 
 fn app_installed(name: &str) -> bool {
-    Path::new(&format!("/Applications/{name}.app")).exists()
+    // 检查 /Applications 目录
+    if Path::new(&format!("/Applications/{name}.app")).exists() {
+        return true;
+    }
+    // 检查 /Volumes 下的 DMG 挂载安装
+    if let Ok(entries) = std::fs::read_dir("/Volumes") {
+        for entry in entries.flatten() {
+            let app_path = entry.path().join(format!("{name}.app"));
+            if app_path.exists() {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn open_with_status(args: &[&str]) -> Result<(), String> {
@@ -33,18 +46,28 @@ fn open_with_status(args: &[&str]) -> Result<(), String> {
 #[cfg(target_os = "macos")]
 fn open_on_macos(url: &str) -> Result<(), String> {
     if url.starts_with("trae-cn://") {
+        // 优先 TRAE SOLO CN，其次 Trae CN
+        if app_installed("TRAE SOLO CN") {
+            return open_with_app_dir("TRAE SOLO CN", url);
+        }
         if app_installed("Trae CN") {
             return open_with_status(&["-a", "Trae CN", url]);
         }
         return Err("未检测到 Trae CN，请先安装 Trae 或使用「复制」手动配置 MCP".into());
     }
     if url.starts_with("trae://") {
+        if app_installed("TRAE SOLO") {
+            return open_with_app_dir("TRAE SOLO", url);
+        }
         if app_installed("Trae") {
             return open_with_status(&["-a", "Trae", url]);
         }
         // 国际版未安装但国内版已安装时，尝试用国内版打开
+        if app_installed("TRAE SOLO CN") {
+            let cn_url = url.replacen("trae://", "trae-cn://", 1);
+            return open_with_app_dir("TRAE SOLO CN", &cn_url);
+        }
         if app_installed("Trae CN") {
-            // 将 trae:// 替换为 trae-cn:// 后用国内版打开
             let cn_url = url.replacen("trae://", "trae-cn://", 1);
             return open_with_status(&["-a", "Trae CN", &cn_url]);
         }
@@ -57,6 +80,27 @@ fn open_on_macos(url: &str) -> Result<(), String> {
         return Err("未检测到 Cursor，请先安装 Cursor 或使用「复制」手动配置 MCP".into());
     }
     open_with_status(&[url])
+}
+
+/// 通过应用目录查找并打开 DMG 挂载安装的 Trae 应用
+#[cfg(target_os = "macos")]
+fn open_with_app_dir(name: &str, url: &str) -> Result<(), String> {
+    // 先尝试 /Applications
+    let app_path = format!("/Applications/{name}.app");
+    if Path::new(&app_path).is_dir() {
+        return open_with_status(&["-a", name, url]);
+    }
+    // 在 /Volumes 下查找
+    if let Ok(entries) = std::fs::read_dir("/Volumes") {
+        for entry in entries.flatten() {
+            let candidate = entry.path().join(format!("{name}.app"));
+            if candidate.is_dir() {
+                // 使用 open 命令直接指定 .app 路径
+                return open_with_status(&[&candidate.to_string_lossy(), url]);
+            }
+        }
+    }
+    Err(format!("无法找到 {name} 应用路径"))
 }
 
 #[cfg(target_os = "windows")]
@@ -115,9 +159,18 @@ pub fn open_external_url(url: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn open_trae_install(deeplink_cn: String, deeplink_intl: String) -> Result<String, String> {
+    // 优先 TRAE SOLO CN
+    if app_installed("TRAE SOLO CN") {
+        open_with_app_dir("TRAE SOLO CN", &deeplink_cn)?;
+        return Ok("TRAE SOLO CN".into());
+    }
     if app_installed("Trae CN") {
         open_external_url_impl(&deeplink_cn)?;
         return Ok("Trae CN".into());
+    }
+    if app_installed("TRAE SOLO") {
+        open_with_app_dir("TRAE SOLO", &deeplink_intl)?;
+        return Ok("TRAE SOLO".into());
     }
     if app_installed("Trae") {
         open_external_url_impl(&deeplink_intl)?;
