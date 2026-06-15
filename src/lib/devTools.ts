@@ -23,17 +23,23 @@ export function selectExecutionDevices<T extends { isPrimary?: boolean }>(device
   return workers.length > 0 ? workers : devices;
 }
 
-/** Cursor 设备用 Cursor Agent；其余默认走 Codex CLI */
+/** Cursor 设备用 Cursor Agent；Trae 用混合模式（IDE + MCP）；其余走 Codex CLI */
 export function deviceUsesCodexExecutor(devTool: DevTool): boolean {
-  return devTool !== 'cursor';
+  return devTool !== 'cursor' && devTool !== 'trae';
 }
 
 export function deviceUsesCursorExecutor(devTool: DevTool): boolean {
   return devTool === 'cursor';
 }
 
+export function deviceUsesTraeExecutor(devTool: DevTool): boolean {
+  return devTool === 'trae';
+}
+
 export function executorLabel(devTool: DevTool): string {
-  return devTool === 'cursor' ? 'Cursor Agent CLI' : 'Codex CLI';
+  if (devTool === 'cursor') return 'Cursor Agent CLI';
+  if (devTool === 'trae') return 'Trae Agent (混合模式)';
+  return 'Codex CLI';
 }
 
 /** 服务端 / 本机代理上报的工具运行态（idle = 已安装未启动） */

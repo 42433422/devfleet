@@ -114,6 +114,38 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
   }
 
   const executionDevices = selectExecutionDevices(onlineDevices);
+  const missingExecutor = executionDevices.filter((device) => {
+    const tools = db.tools.findAllByDeviceId(device.id);
+    if (tools.length === 0) return false;
+    const devTool = normalizeDevTool(device.dev_tool) as DevTool;
+    if (devTool === 'cursor') {
+      const cursor = tools.find((tool) => tool.tool_name === 'cursor');
+      return !cursor || cursor.status === 'not_installed';
+    }
+    if (devTool === 'trae') {
+      const trae = tools.find((tool) => tool.tool_name === 'trae');
+      return !trae || trae.status === 'not_installed';
+    }
+    const codex = tools.find((tool) => tool.tool_name === 'codex');
+    return !codex || codex.status === 'not_installed';
+  });
+  if (missingExecutor.length > 0) {
+    const detail = missingExecutor
+      .map((device) => {
+        const devTool = normalizeDevTool(device.dev_tool);
+        const need = devTool === 'cursor'
+          ? 'Cursor Agent CLI（agent login）'
+          : devTool === 'trae'
+            ? 'Trae IDE（混合模式）'
+            : 'Codex CLI（codex login）';
+        return `${device.name}：${need}`;
+      })
+      .join('；');
+    res.status(400).json({
+      error: `以下工作设备缺少自动改码执行器：${detail}`,
+    });
+    return;
+  }
 
   const task = db.tasks.create({
     user_id: userId,

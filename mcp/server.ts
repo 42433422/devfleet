@@ -52,9 +52,21 @@ server.registerTool('devfleet_list_devices', {
   description: '列出已绑定设备、在线状态、默认设备以及 Trae / Codex / Cursor 等编程工具的当前状态。',
 }, async () => result(await api('/api/devices')));
 
+server.registerTool('devfleet_next_task', {
+  title: '获取当前设备的待执行任务',
+  description: 'Trae Agent 调用此工具获取 DevFleet 派发给本设备的任务。返回任务标题、描述、工作分支等信息；无任务时返回 null。',
+}, async () => {
+  const response = await fetch(`${apiBaseUrl}/api/devices/me/pending-task`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const body = await response.json() as { task?: Record<string, unknown> | null; error?: string };
+  if (!response.ok) throw new Error(body.error || `获取待执行任务失败 (${response.status})`);
+  return result(body.task);
+});
+
 server.registerTool('devfleet_dispatch_task', {
   title: '向多台设备派发代码任务',
-  description: '把真实代码任务派发到在线工作设备。Cursor 设备由 Cursor Agent CLI 改码；Trae/Codex/Claude 由 Codex CLI 改码；各设备 push 独立 Git 分支。',
+  description: '把真实代码任务派发到在线工作设备。Trae 设备由 Trae Agent（混合模式）改码；Cursor 设备由 Cursor Agent CLI 改码；Codex/Claude 由 Codex CLI 改码；各设备 push 独立 Git 分支。',
   inputSchema: {
     title: z.string().min(1).describe('任务标题'),
     description: z.string().min(1).describe('详细实现要求，建议按句子列出可并行的子任务'),

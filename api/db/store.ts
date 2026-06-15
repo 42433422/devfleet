@@ -300,6 +300,9 @@ export const db = {
     findAllByTaskId(taskId: string): SubTask[] {
       return loadDB().sub_tasks.filter((s) => s.task_id === taskId);
     },
+    findAllByDeviceId(deviceId: string): SubTask[] {
+      return loadDB().sub_tasks.filter((s) => s.device_id === deviceId);
+    },
     findById(id: string): SubTask | undefined {
       return loadDB().sub_tasks.find((s) => s.id === id);
     },

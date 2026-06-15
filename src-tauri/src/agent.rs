@@ -440,7 +440,85 @@ impl AgentState {
                     send_log(tx, task, &truncate(&output, 4000), "info");
                 }
             }
+            "trae" => {
+                send_log(tx, task, "Trae 混合模式：写入任务文件并打开 IDE", "info");
+                send_progress(tx, task, 30, "running");
+
+                let devfleet_dir = task_dir.join(".devfleet");
+                tokio::fs::create_dir_all(&devfleet_dir)
+                    .await
+                    .map_err(|error| format!("创建 .devfleet 目录失败: {error}"))?;
+                let task_md = format!(
+                    "# DevFleet 任务\n\n## 标题\n{}\n\n## 要求\n{}\n\n## 工作分支\n{}\n\n完成后总结修改和验证结果。",
+                    task.title, task.description, task.work_branch
+                );
+                tokio::fs::write(devfleet_dir.join("TASK.md"), &task_md)
+                    .await
+                    .map_err(|error| format!("写入任务文件失败: {error}"))?;
+
+                let trae_dir = task_dir.join(".trae");
+                tokio::fs::create_dir_all(&trae_dir)
+                    .await
+                    .map_err(|error| format!("创建 .trae 目录失败: {error}"))?;
+                let mcp_json = build_trae_project_mcp_json(&config.api_base_url, &config.device_token);
+                tokio::fs::write(trae_dir.join("mcp.json"), &mcp_json)
+                    .await
+                    .map_err(|error| format!("写入 MCP 配置失败: {error}"))?;
+
+                match launch_tool("trae", &task_dir) {
+                    Ok(()) => send_log(tx, task, "已使用 Trae 打开工作区", "info"),
+                    Err(error) => send_log(
+                        tx,
+                        task,
+                        &format!("Trae 启动失败: {error}，请手动打开工作区"),
+                        "warn",
+                    ),
+                }
+                send_log(
+                    tx,
+                    task,
+                    "任务已写入 .devfleet/TASK.md，Trae Agent 可通过 devfleet_next_task MCP 工具获取任务",
+                    "info",
+                );
+                send_progress(tx, task, 40, "running");
+
+                send_log(tx, task, "等待 Trae Agent 修改代码...", "info");
+                let timeout_secs: u64 = 600;
+                let poll_interval_secs: u64 = 10;
+                let start = std::time::Instant::now();
+                let mut has_changes = false;
+
+                while start.elapsed().as_secs() < timeout_secs {
+                    tokio::time::sleep(Duration::from_secs(poll_interval_secs)).await;
+                    match run_command(Some(&task_dir), "git", &["status", "--porcelain"]).await {
+                        Ok(output) if !output.trim().is_empty() => {
+                            has_changes = true;
+                            break;
+                        }
+                        _ => {}
+                    }
+                    let elapsed_secs = start.elapsed().as_secs();
+                    let progress = 40 + ((elapsed_secs * 40) / timeout_secs).min(40) as u8;
+                    send_progress(tx, task, progress, "running");
+                }
+
+                if !has_changes {
+                    return Err("等待 Trae Agent 超时，未检测到代码变更".to_string());
+                }
+                send_log(tx, task, "检测到 Trae Agent 代码变更", "info");
+            }
             _ => {
+                if matches!(dev_tool, "claude_code") {
+                    match launch_tool(dev_tool, &task_dir) {
+                        Ok(()) => send_log(tx, task, &format!("已使用 {dev_tool} 打开工作区"), "info"),
+                        Err(error) => send_log(
+                            tx,
+                            task,
+                            &format!("{dev_tool} 启动失败，但继续自动编码: {error}"),
+                            "warn",
+                        ),
+                    }
+                }
                 send_log(
                     tx,
                     task,
@@ -1227,6 +1305,31 @@ pub async fn agent_merge_task(
         merged_branches: subtask_branches,
         pushed: push,
     })
+}
+
+fn build_trae_project_mcp_json(api_base_url: &str, device_token: &str) -> String {
+    let url = api_base_url.trim_end_matches('/');
+    let mcp_path = find_executable("devfleet-mcp")
+        .or_else(|| find_binary_in_path("node").map(|_| "node".to_string()))
+        .unwrap_or_else(|| "node".to_string());
+    let args = if mcp_path == "node" {
+        vec!["dist-mcp/devfleet-mcp.mjs"]
+    } else {
+        vec![] as Vec<&str>
+    };
+    let config = json!({
+        "mcpServers": {
+            "devfleet": {
+                "command": mcp_path,
+                "args": args,
+                "env": {
+                    "DEVFLEET_API_URL": url,
+                    "DEVFLEET_TOKEN": device_token,
+                }
+            }
+        }
+    });
+    serde_json::to_string_pretty(&config).unwrap_or_else(|_| "{}".to_string())
 }
 
 fn validate_task(task: &ExecuteTask) -> Result<(), String> {

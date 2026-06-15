@@ -23,6 +23,7 @@ test('MCP 服务公开真实多设备调度工具', async () => {
       'devfleet_get_task',
       'devfleet_list_devices',
       'devfleet_merge_task',
+      'devfleet_next_task',
       'devfleet_wait_for_task',
     ]);
   } finally {

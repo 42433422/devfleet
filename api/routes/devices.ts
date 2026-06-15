@@ -102,6 +102,43 @@ router.post('/deactivate', async (req: Request, res: Response): Promise<void> =>
   res.status(200).json({ success: true });
 });
 
+router.get('/me/pending-task', async (req: Request, res: Response): Promise<void> => {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+  if (!token) {
+    res.status(401).json({ error: '缺少设备令牌' });
+    return;
+  }
+  const device = db.devices.findByDeviceToken(token);
+  if (!device) {
+    res.status(404).json({ error: '设备不存在或已解除绑定' });
+    return;
+  }
+  const runningSubs = db.subTasks.findAllByDeviceId(device.id).filter((sub) => sub.status === 'running');
+  if (runningSubs.length === 0) {
+    res.status(200).json({ task: null });
+    return;
+  }
+  const sub = runningSubs[0];
+  const task = db.tasks.findById(sub.task_id);
+  if (!task) {
+    res.status(200).json({ task: null });
+    return;
+  }
+  res.status(200).json({
+    task: {
+      id: task.id,
+      subtask_id: sub.id,
+      title: task.title,
+      description: task.description,
+      repo_url: task.repo_url,
+      base_branch: task.branch,
+      work_branch: sub.branch_name,
+      tool: sub.tool_name,
+    },
+  });
+});
+
 router.use(authMiddleware);
 
 router.get('/', async (req: Request, res: Response): Promise<void> => {
