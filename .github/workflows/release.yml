@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'macos-latest'
+            args: '--target aarch64-apple-darwin'
+          - platform: 'macos-latest'
+            args: '--target x86_64-apple-darwin'
+          - platform: 'ubuntu-22.04'
+            args: ''
+          - platform: 'windows-latest'
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: 'npm'
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-action@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && (contains(matrix.args, 'aarch64') && 'aarch64-apple-darwin' || 'x86_64-apple-darwin') || '' }}
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'DevFleet v__VERSION__'
+          releaseBody: |
+            ## DevFleet v__VERSION__
+
+            多设备协同开发控制平台
+
+            ### 下载安装
+            - **macOS**: 下载 .dmg 文件并拖到 Applications 文件夹
+            - **Windows**: 下载 .msi 或 .exe 安装包运行安装
+            - **Linux**: 下载 .AppImage 或 .deb 包运行
+
+            ### 新功能
+            - 设备管理：扫码绑定、输入码绑定、主设备设置
+            - 任务控制台：创建任务、查看日志、分支合并
+            - 免登录：一键进入体验
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}
