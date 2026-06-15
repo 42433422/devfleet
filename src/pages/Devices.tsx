@@ -1,8 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Plus, Link as LinkIcon, Power, PowerOff, Wifi, WifiOff, RefreshCw, QrCode, Copy, Check, Trash2, Star, AlertCircle } from 'lucide-react';
 import { useDevicesStore, type Device, type ToolName } from '@/store/devices';
 import { DEV_TOOL_LABELS, DEV_TOOLS } from '@/lib/devTools';
 import ToolBadge from '@/components/ToolBadge';
+import ServerAddressPanel from '@/components/ServerAddressPanel';
+import { buildDeviceBindInstructions, resolveShareableApiUrl } from '@/lib/serverAddress';
+import { isDesktopApp } from '@/lib/agent';
 
 const statusConfig: Record<Device['status'], { color: string; text: string; icon: React.ReactNode }> = {
   online: { color: 'text-green-400', text: '在线', icon: <Wifi size={12} /> },
@@ -39,8 +42,30 @@ export default function Devices() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [copiedBundle, setCopiedBundle] = useState(false);
+  const [lanIp, setLanIp] = useState<string | null>(null);
   const [actionError, setActionError] = useState('');
   const [devToolSaving, setDevToolSaving] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadLan = async () => {
+      if (!isDesktopApp()) return;
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const ip = await invoke<string | null>('get_lan_address');
+        if (!cancelled && ip) setLanIp(ip);
+      } catch {
+        // ignore
+      }
+    };
+    void loadLan();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const shareableServerUrl = useMemo(() => resolveShareableApiUrl(lanIp).url, [lanIp]);
 
   useEffect(() => {
     fetchDevices();
@@ -68,6 +93,17 @@ export default function Devices() {
     await navigator.clipboard.writeText(bindCode);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleCopyBundle = async () => {
+    if (!bindCode || !shareableServerUrl) return;
+    await navigator.clipboard.writeText(buildDeviceBindInstructions({
+      serverUrl: shareableServerUrl,
+      bindCode,
+      expiresAt: bindExpiresAt ? formatTime(bindExpiresAt) : undefined,
+    }));
+    setCopiedBundle(true);
+    setTimeout(() => setCopiedBundle(false), 2000);
   };
 
   const runDeviceAction = async (action: () => Promise<void>) => {
@@ -141,6 +177,10 @@ export default function Devices() {
         </div>
       )}
 
+      <div className="mb-6">
+        <ServerAddressPanel />
+      </div>
+
       {showAdd && (
         <div className="mb-6 bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-5 animate-fade-in">
           <div className="flex items-center justify-between mb-4">
@@ -193,20 +233,35 @@ export default function Devices() {
                 <p className="text-xs text-zinc-500 mt-3">在设备代理中输入右侧绑定码</p>
               </div>
               <div className="space-y-4">
-                <div className="p-4 bg-zinc-950/80 border border-zinc-800/60 rounded-lg">
-                  <p className="text-xs text-zinc-500 mb-2">绑定码</p>
-                  <div className="flex items-center gap-2">
-                    <p className="font-mono text-sm text-brand tracking-wider flex-1">{bindCode}</p>
-                    <button
-                      onClick={handleCopy}
-                      className="p-1.5 rounded-md text-zinc-500 hover:text-white hover:bg-zinc-800/60 transition-all duration-200"
-                    >
-                      {copied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
-                    </button>
+                <div className="p-4 bg-zinc-950/80 border border-zinc-800/60 rounded-lg space-y-3">
+                  <div>
+                    <p className="text-xs text-zinc-500 mb-2">服务器地址（给其他设备）</p>
+                    <p className="font-mono text-sm text-white break-all">{shareableServerUrl || '请先在上方配置穿透地址或确认局域网地址'}</p>
                   </div>
+                  <div>
+                    <p className="text-xs text-zinc-500 mb-2">绑定码</p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-mono text-sm text-brand tracking-wider flex-1">{bindCode}</p>
+                      <button
+                        onClick={handleCopy}
+                        className="p-1.5 rounded-md text-zinc-500 hover:text-white hover:bg-zinc-800/60 transition-all duration-200"
+                      >
+                        {copied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
+                      </button>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={!shareableServerUrl}
+                    onClick={handleCopyBundle}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-brand/15 hover:bg-brand/25 disabled:opacity-40 text-brand rounded-lg text-xs font-medium"
+                  >
+                    {copiedBundle ? <Check size={14} /> : <Copy size={14} />}
+                    复制服务器地址 + 绑定码说明
+                  </button>
                 </div>
                 <p className="text-xs text-zinc-500">
-                  <span className="text-amber-400">真实接入：</span>在目标设备打开 DevFleet 的“本机代理”并输入此一次性绑定码
+                  <span className="text-amber-400">真实接入：</span>在目标设备打开 DevFleet 的「本机设备代理」，填入上方服务器地址与此绑定码
                 </p>
                 {bindExpiresAt && <p className="text-xs text-zinc-600">有效期至：{formatTime(bindExpiresAt)}</p>}
                 <button

@@ -82,7 +82,7 @@ body {
   animation: shimmer 1.5s infinite;
 }
 
-/* 右下角 — 多个独立胶囊角标（每个品牌单独一枚，不合并） */
+/* 右下角 — 4 个独立工具胶囊（Trae / Codex / Cursor / Claude） */
 .devfleet-corner-stack {
   position: fixed;
   bottom: 20px;
@@ -91,18 +91,15 @@ body {
   display: flex;
   flex-direction: column-reverse;
   align-items: flex-end;
-  gap: 8px;
-}
-
-.devfleet-pill-badge-wrap {
-  position: relative;
+  gap: 6px;
 }
 
 .devfleet-pill-badge {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
   gap: 4px;
+  width: 130px;
   height: 28px;
   padding: 8px 8px 8px 10px;
   border-radius: 6px;
@@ -123,14 +120,22 @@ body {
 }
 
 .devfleet-pill-badge-logo {
-  flex-shrink: 0;
+  flex: 1;
+  min-width: 0;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
 }
 
-.devfleet-wordmark {
+.devfleet-official-brand {
   display: block;
+  height: 12px;
+  width: auto;
+  max-width: 96px;
+  object-fit: contain;
+}
+
+.devfleet-official-brand--invert {
+  filter: brightness(0) invert(1);
 }
 
 .devfleet-pill-badge-share {
@@ -144,7 +149,7 @@ body {
   color: #d1d3db;
 }
 
-.devfleet-pill-badge-dismiss {
+.devfleet-corner-stack-dismiss {
   position: absolute;
   top: -8px;
   right: -8px;
@@ -160,17 +165,16 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1;
 }
 
-.devfleet-pill-badge-wrap:hover .devfleet-pill-badge-dismiss,
-.devfleet-pill-badge-wrap:focus-within .devfleet-pill-badge-dismiss {
+.devfleet-corner-stack:hover .devfleet-corner-stack-dismiss,
+.devfleet-corner-stack:focus-within .devfleet-corner-stack-dismiss {
   opacity: 1;
   visibility: visible;
 }
 
 @media (hover: none) and (pointer: coarse) {
-  .devfleet-pill-badge-dismiss {
+  .devfleet-corner-stack-dismiss {
     opacity: 1;
     visibility: visible;
   }

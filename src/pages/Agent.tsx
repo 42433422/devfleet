@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertCircle, ArrowLeft, CheckCircle2, Laptop, Link2, Play, Power, RefreshCw, Square, Unlink } from 'lucide-react';
+import { AlertCircle, ArrowLeft, CheckCircle2, Clipboard, Laptop, Link2, Play, Power, RefreshCw, Square, Unlink } from 'lucide-react';
 import { agentApi, isDesktopApp, type AgentStatus } from '@/lib/agent';
 import { DEV_TOOL_LABELS, normalizeDevTool } from '@/lib/devTools';
+import { getApiBaseUrl } from '@/lib/apiBase';
 import ToolBadge from '@/components/ToolBadge';
 
 const defaultWorkspace = navigator.platform.toLowerCase().includes('win') ? 'C:\\DevFleet\\workspaces' : `${navigator.platform.toLowerCase().includes('mac') ? '/Users/Shared' : '/tmp'}/DevFleet/workspaces`;
@@ -11,13 +12,21 @@ export default function Agent() {
   const desktop = isDesktopApp();
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [form, setForm] = useState({
-    apiBaseUrl: import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001',
+    apiBaseUrl: getApiBaseUrl(),
     bindCode: '',
     deviceName: navigator.platform || '开发设备',
     workspaceRoot: defaultWorkspace,
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [pastedHint, setPastedHint] = useState('');
+
+  useEffect(() => {
+    const saved = localStorage.getItem('devfleet_api_url');
+    if (saved && saved !== 'http://localhost:3001') {
+      setForm((current) => ({ ...current, apiBaseUrl: saved }));
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!desktop) return;
@@ -39,11 +48,34 @@ export default function Agent() {
     setBusy(true);
     setError('');
     try {
-      setStatus(await agentApi.bind({ ...form, bindCode: form.bindCode.trim().toUpperCase() }));
+      const apiBaseUrl = form.apiBaseUrl.trim().replace(/\/$/, '');
+      localStorage.setItem('devfleet_api_url', apiBaseUrl);
+      setStatus(await agentApi.bind({ ...form, apiBaseUrl, bindCode: form.bindCode.trim().toUpperCase() }));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const pasteFromClipboard = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      const serverMatch = text.match(/服务器地址[：:]\s*(https?:\/\/\S+)/i);
+      const codeMatch = text.match(/绑定码[：:]\s*([A-Z0-9]{6})/i);
+      if (!serverMatch && !codeMatch) {
+        setPastedHint('剪贴板里未找到 DevFleet 接入说明，请向主设备复制完整说明');
+        return;
+      }
+      setForm((current) => ({
+        ...current,
+        apiBaseUrl: serverMatch?.[1] || current.apiBaseUrl,
+        bindCode: codeMatch?.[1] || current.bindCode,
+      }));
+      setPastedHint('已从剪贴板填入服务器地址和绑定码');
+      window.setTimeout(() => setPastedHint(''), 2500);
+    } catch {
+      setPastedHint('无法读取剪贴板，请手动粘贴');
     }
   };
 
@@ -91,10 +123,17 @@ export default function Agent() {
 
         {!status?.configured ? (
           <form onSubmit={bind} className="bg-zinc-900/70 border border-zinc-800 rounded-2xl p-6 space-y-4">
-            <div className="flex items-center gap-2 text-sm text-zinc-300 mb-2"><Link2 size={15} className="text-brand" />输入主设备生成的一次性绑定码</div>
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-sm text-zinc-300"><Link2 size={15} className="text-brand" />输入主设备提供的地址与绑定码</div>
+              <button type="button" onClick={pasteFromClipboard} className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-xs text-zinc-300">
+                <Clipboard size={13} />从剪贴板粘贴
+              </button>
+            </div>
+            {pastedHint && <p className="text-xs text-brand/90">{pastedHint}</p>}
             <label className="block">
               <span className="block text-xs text-zinc-500 mb-1.5">DevFleet 服务器地址</span>
-              <input value={form.apiBaseUrl} onChange={(event) => setForm({ ...form, apiBaseUrl: event.target.value })} required className="w-full px-3 py-2.5 bg-zinc-950 border border-zinc-800 rounded-lg text-sm focus:outline-none focus:border-brand/50" />
+              <input value={form.apiBaseUrl} onChange={(event) => setForm({ ...form, apiBaseUrl: event.target.value })} required placeholder="https://你的穿透域名 或 http://192.168.x.x:3001" className="w-full px-3 py-2.5 bg-zinc-950 border border-zinc-800 rounded-lg text-sm focus:outline-none focus:border-brand/50" />
+              <span className="block text-[11px] text-zinc-600 mt-1.5">向主设备「设备管理」索取可复制地址；localhost 仅适用于服务端就在本机的情况。</span>
             </label>
             <div className="grid md:grid-cols-2 gap-4">
               <label className="block">

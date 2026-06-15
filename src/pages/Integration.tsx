@@ -7,16 +7,18 @@ import {
   buildTraeMcpJson,
   defaultMcpPath,
 } from '@/lib/mcpInstall';
+import { getApiBaseUrl } from '@/lib/apiBase';
+import ServerAddressPanel from '@/components/ServerAddressPanel';
 
 export default function Integration() {
   const { token } = useAuthStore();
   const [mcpPath, setMcpPath] = useState(defaultMcpPath());
-  const [apiUrl, setApiUrl] = useState(localStorage.getItem('devfleet_api_url') || import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001');
+  const [apiUrl, setApiUrl] = useState(getApiBaseUrl());
   const [copied, setCopied] = useState('');
 
   useEffect(() => {
-    localStorage.setItem('devfleet_api_url', apiUrl.replace(/\/$/, ''));
-  }, [apiUrl]);
+    setApiUrl(getApiBaseUrl());
+  }, []);
 
   const mcpOptions = useMemo(() => ({
     mcpPath,
@@ -54,6 +56,11 @@ export default function Integration() {
         <p className="text-xs text-zinc-500 mt-1">在主设备配置 Trae / Codex / Cursor / Claude Code，用于派发任务、等待完成、合并各工作设备的 Git 分支</p>
       </div>
 
+      <div className="mb-6">
+        <ServerAddressPanel compact />
+        <p className="text-[11px] text-zinc-600 mt-2">工作设备接入地址请在「设备管理」配置；下方 MCP 使用本机地址 {apiUrl} 即可。</p>
+      </div>
+
       <div className="grid lg:grid-cols-2 gap-4 mb-4">
         <label className="block bg-zinc-900/60 border border-zinc-800 rounded-xl p-4">
           <span className="block text-xs text-zinc-500 mb-1.5">MCP 文件绝对路径</span>
@@ -61,9 +68,9 @@ export default function Integration() {
           <span className="block text-[11px] text-zinc-600 mt-2">从 GitHub Release 下载 `devfleet-mcp.zip` 并解压后填写。</span>
         </label>
         <label className="block bg-zinc-900/60 border border-zinc-800 rounded-xl p-4">
-          <span className="block text-xs text-zinc-500 mb-1.5">DevFleet API 地址</span>
-          <input value={apiUrl} onChange={(event) => setApiUrl(event.target.value)} className="w-full px-3 py-2.5 bg-zinc-950 border border-zinc-800 rounded-lg text-xs font-mono text-white focus:outline-none focus:border-brand/50" />
-          <span className="block text-[11px] text-zinc-600 mt-2">所有设备必须能访问同一个 HTTPS/WSS 服务地址。</span>
+          <span className="block text-xs text-zinc-500 mb-1.5">本机 MCP API 地址</span>
+          <input value={apiUrl} readOnly className="w-full px-3 py-2.5 bg-zinc-950 border border-zinc-800 rounded-lg text-xs font-mono text-zinc-400 focus:outline-none" />
+          <span className="block text-[11px] text-zinc-600 mt-2">MCP 跑在主设备本机，通常保持 localhost 即可。</span>
         </label>
       </div>
 

@@ -1,6 +1,7 @@
 import { useDevicesStore, type DeviceStatus, type ToolStatus } from '@/store/devices';
 import { useTasksStore, type LogEntry, type SubTaskStatus, type Task } from '@/store/tasks';
 import { getApiBaseUrl } from '@/lib/api';
+import { apiBaseToWsBase } from '@/lib/serverAddress';
 
 type WSMessage =
   | { type: 'device_status'; device_id: string; status: DeviceStatus; tools?: ToolStatus[] }
@@ -33,7 +34,7 @@ class WebSocketClient {
     this.isConnecting = true;
 
     const wsHost = host || getApiBaseUrl().replace(/^https?:\/\//, '') || 'localhost:3001';
-    const configuredBase = (import.meta.env.VITE_WS_BASE_URL || getApiBaseUrl().replace(/^http/, 'ws') || '').replace(/\/$/, '');
+    const configuredBase = (import.meta.env.VITE_WS_BASE_URL || apiBaseToWsBase(getApiBaseUrl()) || '').replace(/\/$/, '');
     const wsBase = configuredBase || `ws://${wsHost}`;
     const url = `${wsBase}/ws/client?token=${encodeURIComponent(token)}`;
 

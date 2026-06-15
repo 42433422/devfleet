@@ -1,4 +1,5 @@
 mod agent;
+mod network;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -25,6 +26,7 @@ pub fn run() {
             agent::agent_unbind,
             agent::agent_open_tool,
             agent::agent_merge_task,
+            network::get_lan_address,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
