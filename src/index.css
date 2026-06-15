@@ -81,3 +81,97 @@ body {
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
 }
+
+/* 右下角 — 多个独立胶囊角标（每个品牌单独一枚，不合并） */
+.devfleet-corner-stack {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.devfleet-pill-badge-wrap {
+  position: relative;
+}
+
+.devfleet-pill-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 28px;
+  padding: 8px 8px 8px 10px;
+  border-radius: 6px;
+  background-color: #000;
+  color: #fff;
+  text-decoration: none;
+  box-sizing: border-box;
+  box-shadow:
+    0 0 0.5px 0 rgba(0, 0, 0, 0.12),
+    0 1px 3px 0 rgba(0, 0, 0, 0.08),
+    0 4px 8px 0 rgba(0, 0, 0, 0.12);
+  transition: background-color 0.2s ease;
+}
+
+.devfleet-pill-badge:hover,
+.devfleet-pill-badge:focus-visible {
+  background-color: #2a2d31;
+}
+
+.devfleet-pill-badge-logo {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.devfleet-wordmark {
+  display: block;
+}
+
+.devfleet-pill-badge-share {
+  flex-shrink: 0;
+  color: rgba(78, 82, 87, 1);
+  transition: color 0.2s ease;
+}
+
+.devfleet-pill-badge:hover .devfleet-pill-badge-share,
+.devfleet-pill-badge:focus-visible .devfleet-pill-badge-share {
+  color: #d1d3db;
+}
+
+.devfleet-pill-badge-dismiss {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s ease, visibility 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1;
+}
+
+.devfleet-pill-badge-wrap:hover .devfleet-pill-badge-dismiss,
+.devfleet-pill-badge-wrap:focus-within .devfleet-pill-badge-dismiss {
+  opacity: 1;
+  visibility: visible;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .devfleet-pill-badge-dismiss {
+    opacity: 1;
+    visibility: visible;
+  }
+}
