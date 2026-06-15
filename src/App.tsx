@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '@/store/auth';
 import { wsClient } from '@/lib/websocket';
@@ -20,11 +20,25 @@ function AppShell({ children }: { children: React.ReactNode }) {
 }
 
 function Protected({ children }: { children: React.ReactNode }) {
-  const { token } = useAuthStore();
-  const location = useLocation();
-  if (!token) {
-    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  const { token, guestLogin } = useAuthStore();
+  const [loading, setLoading] = useState(!token);
+
+  useEffect(() => {
+    if (!token) {
+      guestLogin().finally(() => setLoading(false));
+    }
+  }, [token, guestLogin]);
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-bg-primary text-zinc-400 text-sm">
+        正在进入...
+      </div>
+    );
   }
+
+  if (!token) return null;
+
   return <AppShell>{children}</AppShell>;
 }
 
@@ -44,8 +58,7 @@ function WSConnector() {
 }
 
 function AuthRedirect() {
-  const { token } = useAuthStore();
-  return <Navigate to={token ? '/devices' : '/login'} replace />;
+  return <Navigate to="/devices" replace />;
 }
 
 export default function App() {

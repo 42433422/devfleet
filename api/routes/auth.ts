@@ -54,6 +54,13 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
   res.status(200).json({ token, user: { id: user.id, email: user.email } });
 });
 
+router.post('/guest', async (_req: Request, res: Response): Promise<void> => {
+  const guestEmail = `guest_${Date.now()}@devfleet.local`;
+  const user = db.users.create({ email: guestEmail, password_hash: '' });
+  const token = signToken(user);
+  res.status(200).json({ token, user: { id: user.id, email: user.email } });
+});
+
 router.post('/logout', authMiddleware, async (_req: Request, res: Response): Promise<void> => {
   res.status(200).json({ success: true });
 });

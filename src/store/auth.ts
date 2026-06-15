@@ -12,6 +12,7 @@ interface AuthState {
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
   register: (email: string, password: string) => Promise<void>;
+  guestLogin: () => Promise<void>;
 }
 
 const getStoredToken = () => localStorage.getItem('devfleet_token');
@@ -72,6 +73,18 @@ export const useAuthStore = create<AuthState>((set) => {
       const token = data.token || data.access_token;
       if (!token) throw new Error('注册响应缺少 token');
       const user = data.user || parseUserFromToken(token) || { id: '1', email };
+      localStorage.setItem('devfleet_token', token);
+      localStorage.setItem('devfleet_user', JSON.stringify(user));
+      set({ token, user });
+    },
+
+    guestLogin: async () => {
+      const data = await api<{ token?: string; access_token?: string; user?: User }>('/api/auth/guest', {
+        method: 'POST',
+      });
+      const token = data.token || data.access_token;
+      if (!token) throw new Error('访客登录响应缺少 token');
+      const user = data.user || parseUserFromToken(token) || { id: '1', email: 'guest@devfleet.local' };
       localStorage.setItem('devfleet_token', token);
       localStorage.setItem('devfleet_user', JSON.stringify(user));
       set({ token, user });

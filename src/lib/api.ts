@@ -7,6 +7,25 @@ interface RequestOptions extends Omit<RequestInit, 'body'> {
   body?: Record<string, unknown>;
 }
 
+async function guestLogin(): Promise<string | null> {
+  try {
+    const res = await fetch(apiUrl('/api/auth/guest'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const token = data.token || data.access_token;
+    if (!token) return null;
+    localStorage.setItem('devfleet_token', token);
+    const user = data.user || { id: '1', email: 'guest@devfleet.local' };
+    localStorage.setItem('devfleet_user', JSON.stringify(user));
+    return token;
+  } catch {
+    return null;
+  }
+}
+
 export const api = async <T = Record<string, unknown>>(
   url: string,
   options: RequestOptions = {}
@@ -22,18 +41,28 @@ export const api = async <T = Record<string, unknown>>(
     ? JSON.stringify(options.body)
     : options.body;
 
-  const res = await fetch(apiUrl(url), {
+  let res = await fetch(apiUrl(url), {
     ...options,
     headers,
     body: bodyContent as RequestInit['body'],
   });
 
   if (res.status === 401) {
-    localStorage.removeItem('devfleet_token');
-    if (!location.pathname.startsWith('/login')) {
-      location.href = '/login';
+    const newToken = await guestLogin();
+    if (newToken) {
+      headers['Authorization'] = `Bearer ${newToken}`;
+      res = await fetch(apiUrl(url), {
+        ...options,
+        headers,
+        body: bodyContent as RequestInit['body'],
+      });
+    } else {
+      localStorage.removeItem('devfleet_token');
+      if (!location.pathname.startsWith('/login')) {
+        location.href = '/login';
+      }
+      throw new Error('未授权，请重新登录');
     }
-    throw new Error('未授权，请重新登录');
   }
 
   let data: Record<string, unknown> | null = null;
