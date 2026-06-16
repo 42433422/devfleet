@@ -204,6 +204,7 @@ const preflight = async () => {
     name: string;
     status: string;
     devTool: string;
+    capabilities?: Record<string, unknown>;
     tools: Array<{ toolName: string; status: string }>;
   }> }>('/api/devices');
 
@@ -217,7 +218,25 @@ const preflight = async () => {
     throw new Error('没有在线 Trae 工作设备。请在设备管理中将 dev_tool 设为 trae。');
   }
 
-  const targetDevice = traeDevices[0];
+  if (!autoTouch) {
+    const headless = traeDevices.filter((device) => {
+      const caps = device.capabilities as Record<string, unknown> | undefined;
+      return caps?.e2e_agent === true;
+    });
+    if (headless.length > 0 && headless.length === traeDevices.length) {
+      throw new Error(
+        '当前只有 E2E 模拟代理在线（e2e-agent.mjs），无法真实打开 Trae。\n'
+        + '请先停止 e2e-agent 进程，在 DevFleet 桌面端打开「本机设备代理」并连接，再重试（不要加 --auto-touch）。',
+      );
+    }
+  }
+
+  const targetDevice = autoTouch
+    ? traeDevices[0]
+    : (traeDevices.find((device) => {
+      const caps = device.capabilities as Record<string, unknown> | undefined;
+      return caps?.e2e_agent !== true;
+    }) ?? traeDevices[0]);
 
   const broken = traeDevices.filter((device) => {
     const trae = device.tools.find((tool) => tool.toolName === 'trae');

@@ -218,7 +218,8 @@ export function reconcileTask(userId: string, taskId: string) {
 }
 
 export function rescheduleDeviceTasks(userId: string, deviceId: string): void {
-  const subs = db.subTasks.findAllByDeviceId(deviceId).filter((s) => s.status === 'running' || s.status === 'pending');
+  // 设备 WS 短暂断开（Computer Use 等长操作）时，勿立即判失败 running 子任务
+  const subs = db.subTasks.findAllByDeviceId(deviceId).filter((s) => s.status === 'pending');
   for (const sub of subs) {
     const task = db.tasks.findById(sub.task_id);
     if (!task || task.user_id !== userId) continue;

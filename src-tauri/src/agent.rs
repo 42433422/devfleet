@@ -505,6 +505,9 @@ impl AgentState {
 
                 establish_trae_git_baseline(&task_dir, tx, task).await?;
 
+                let _ = computer_use::prepare_trae_workspace_settings(Path::new(&config.workspace_root));
+                let _ = computer_use::prepare_trae_workspace_settings(&task_dir);
+
                 let trae_prompt = if task.description.trim().is_empty() {
                     prompt.clone()
                 } else {
@@ -515,21 +518,57 @@ impl AgentState {
                     )
                 };
 
-                let cu_ok = match computer_use::start_trae_task(&task_dir, &trae_prompt) {
-                    Ok(()) => true,
-                    Err(first_error) => {
+                send_log(
+                    tx,
+                    task,
+                    "[pipeline:computer_use] 正在自动控制 Trae（打开工作区 → 信任 → 新任务 → 粘贴）…",
+                    "info",
+                );
+
+                let task_dir_for_cu = task_dir.clone();
+                let trae_prompt_for_cu = trae_prompt.clone();
+                let keepalive_tx = tx.clone();
+                let keepalive_task = task.clone();
+                let keepalive = tokio::spawn(async move {
+                    let mut tick = 0u32;
+                    loop {
+                        tokio::time::sleep(Duration::from_secs(8)).await;
+                        tick += 1;
+                        send_log(
+                            &keepalive_tx,
+                            &keepalive_task,
+                            &format!(
+                                "[pipeline:computer_use] 正在控制 Trae UI（第 {tick} 次心跳）…"
+                            ),
+                            "info",
+                        );
+                    }
+                });
+                let cu_ok = match tokio::task::spawn_blocking(move || {
+                    computer_use::start_trae_task(&task_dir_for_cu, &trae_prompt_for_cu)
+                })
+                .await
+                {
+                    Ok(Ok(())) => true,
+                    Ok(Err(first_error)) => {
                         send_log(
                             tx,
                             task,
                             &format!(
-                                "[pipeline:computer_use] 首次自动控制失败，2.5s 后重试: {first_error}"
+                                "[pipeline:computer_use] 首次自动控制失败，3.5s 后重试: {first_error}"
                             ),
                             "warn",
                         );
                         tokio::time::sleep(Duration::from_millis(3500)).await;
-                        match computer_use::start_trae_task(&task_dir, &trae_prompt) {
-                            Ok(()) => true,
-                            Err(retry_error) => {
+                        let task_dir_retry = task_dir.clone();
+                        let trae_prompt_retry = trae_prompt.clone();
+                        match tokio::task::spawn_blocking(move || {
+                            computer_use::start_trae_task(&task_dir_retry, &trae_prompt_retry)
+                        })
+                        .await
+                        {
+                            Ok(Ok(())) => true,
+                            Ok(Err(retry_error)) => {
                                 send_log(
                                     tx,
                                     task,
@@ -540,9 +579,31 @@ impl AgentState {
                                 );
                                 false
                             }
+                            Err(join_error) => {
+                                send_log(
+                                    tx,
+                                    task,
+                                    &format!(
+                                        "[pipeline:computer_use] 自动控制线程异常: {join_error}"
+                                    ),
+                                    "warn",
+                                );
+                                false
+                            }
                         }
                     }
+                    Err(join_error) => {
+                        send_log(
+                            tx,
+                            task,
+                            &format!("[pipeline:computer_use] 自动控制线程异常: {join_error}"),
+                            "warn",
+                        );
+                        false
+                    }
                 };
+                keepalive.abort();
+                let _ = keepalive.await;
 
                 if cu_ok {
                     send_log(

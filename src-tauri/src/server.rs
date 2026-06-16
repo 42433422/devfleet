@@ -188,15 +188,18 @@ fn server_healthy() -> bool {
 
 fn start_embedded_server(app: &AppHandle) -> Option<Child> {
     let script = resolve_server_script(app)?;
+    let server_dir = script.parent()?.to_path_buf();
     let data_dir = app.path().app_data_dir().ok()?;
     let db_file = data_dir.join("devfleet.db");
     std::fs::create_dir_all(&data_dir).ok()?;
 
     let node = resolve_node_executable().unwrap_or_else(|| "node".into());
+    log::info!("[DevFleet] embedded server node: {node}");
     let mut command = std::process::Command::new(node);
     configure_hidden_command(&mut command);
     command
-        .arg(script)
+        .current_dir(&server_dir)
+        .arg(&script)
         .env("PORT", "3001")
         .env("DEVFLEET_DB_FILE", db_file.to_string_lossy().into_owned());
 

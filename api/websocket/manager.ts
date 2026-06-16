@@ -239,6 +239,8 @@ export function attachWebSocket(wss: WSServer) {
         if (deviceWS.get(device.id) !== ws) return;
         const closedSocket = ws;
         deviceWS.delete(device.id);
+        const hasRunning = db.subTasks.findAllByDeviceId(device.id).some((s) => s.status === 'running');
+        const offlineDelayMs = hasRunning ? 120_000 : 8_000;
         setTimeout(() => {
           const current = deviceWS.get(device.id);
           if (current && current !== closedSocket && current.readyState === current.OPEN) return;
@@ -250,7 +252,7 @@ export function attachWebSocket(wss: WSServer) {
             device_id: device.id,
             status: 'offline',
           });
-        }, 8000);
+        }, offlineDelayMs);
       });
 
       ws.on('error', (err) => {

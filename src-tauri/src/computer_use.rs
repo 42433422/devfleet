@@ -16,7 +16,19 @@ const TRAE_PROCESS_NAMES: [&str; 5] = [
     "Trae",
 ];
 
+const TRAE_WORKSPACE_SETTINGS: &str = "{\n  \"security.workspace.trust.enabled\": false\n}\n";
+
+pub fn prepare_trae_workspace_settings(workspace: &Path) -> Result<(), String> {
+    let vscode_dir = workspace.join(".vscode");
+    std::fs::create_dir_all(&vscode_dir)
+        .map_err(|error| format!("创建 .vscode 目录失败: {error}"))?;
+    std::fs::write(vscode_dir.join("settings.json"), TRAE_WORKSPACE_SETTINGS)
+        .map_err(|error| format!("写入工作区信任设置失败: {error}"))?;
+    Ok(())
+}
+
 pub fn start_trae_task(workspace: &Path, prompt: &str) -> Result<(), String> {
+    prepare_trae_workspace_settings(workspace)?;
     #[cfg(target_os = "macos")]
     {
         start_trae_task_macos(workspace, prompt)
@@ -106,11 +118,26 @@ fn run_osascript(script: &str) -> Result<(), String> {
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let detail = if stderr.is_empty() { stdout } else { stderr };
-    Err(if detail.is_empty() {
-        format!("osascript 退出码 {}", output.status.code().unwrap_or(-1))
+    Err(format_osascript_error(&detail, output.status.code().unwrap_or(-1)))
+}
+
+#[cfg(target_os = "macos")]
+fn format_osascript_error(detail: &str, exit_code: i32) -> String {
+    let base = if detail.is_empty() {
+        format!("osascript 退出码 {exit_code}")
     } else {
-        detail
-    })
+        detail.to_string()
+    };
+    if base.contains("-25211")
+        || base.contains("辅助访问")
+        || base.to_ascii_lowercase().contains("assistive")
+        || base.to_ascii_lowercase().contains("not allowed assistive")
+    {
+        return format!(
+            "{base}。请在「系统设置 → 隐私与安全性 → 辅助功能」中勾选 DevFleet（及 Trae），然后完全退出并重新打开 DevFleet App。"
+        );
+    }
+    base
 }
 
 #[cfg(target_os = "windows")]
@@ -248,6 +275,36 @@ tell application "System Events"
         if (count of windows) is 0 then error "Trae window not ready"
 
         delay 1.5
+
+        -- 关闭 Trae/VS Code「是否信任此文件夹」弹窗，否则会挡住新任务与粘贴
+        set dismissedTrust to false
+        repeat with trustAttempt from 1 to 8
+            repeat with w in windows
+                repeat with e in entire contents of w
+                    try
+                        set elementName to name of e
+                        set elementRole to role of e
+                        if elementRole is "AXButton" or elementRole is "button" then
+                            if elementName contains "我信任" or elementName contains "I trust" or elementName contains "trust the author" then
+                                click e
+                                set dismissedTrust to true
+                                delay 1.5
+                                exit repeat
+                            end if
+                        end if
+                        if elementRole is "AXCheckBox" or elementRole is "checkbox" then
+                            if elementName contains "agent-workspace" or elementName contains "父文件夹" or elementName contains "parent folder" then
+                                click e
+                            end if
+                        end if
+                    end try
+                end repeat
+                if dismissedTrust then exit repeat
+            end repeat
+            if dismissedTrust then exit repeat
+            delay 0.8
+        end repeat
+
         set triggeredNewTask to false
 
         repeat with w in windows
@@ -403,6 +460,7 @@ mod tests {
         let script = build_trae_new_task_script("hello\nworld", "Trae CN");
         assert!(script.contains("\"TRAE CN\""));
         assert!(script.contains("tell application \"Trae CN\" to activate"));
+        assert!(script.contains("我信任"));
         assert!(script.contains("triggeredNewTask"));
         assert!(script.contains("entire contents"));
         assert!(script.contains("command down, shift down"));
