@@ -1,6 +1,21 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+const TRAE_BUNDLE_NAMES: [&str; 4] = [
+    "Trae CN.app",
+    "TRAE SOLO CN.app",
+    "Trae.app",
+    "TRAE SOLO.app",
+];
+
+const TRAE_PROCESS_NAMES: [&str; 5] = [
+    "TRAE CN",
+    "Trae CN",
+    "TRAE SOLO CN",
+    "TRAE SOLO",
+    "Trae",
+];
+
 pub fn start_trae_task(workspace: &Path, prompt: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
@@ -23,8 +38,9 @@ pub fn start_trae_task(workspace: &Path, prompt: &str) -> Result<(), String> {
 #[cfg(target_os = "macos")]
 fn start_trae_task_macos(workspace: &Path, prompt: &str) -> Result<(), String> {
     let app = find_trae_app_bundle().ok_or_else(|| "未找到 Trae / Trae CN 应用".to_string())?;
+    let application_name = trae_application_name_from_bundle(&app);
     open_workspace_in_trae(&app, workspace)?;
-    let script = build_trae_new_task_script(prompt);
+    let script = build_trae_new_task_script(prompt, &application_name);
     run_osascript(&script).map_err(|error| {
         format!(
             "Trae UI 自动控制失败: {error}。请在 macOS 系统设置中允许 DevFleet/Trae 使用“辅助功能”，或手动打开工作区后点“新任务”。"
@@ -173,18 +189,35 @@ fn resource_script_candidates(exe_dir: &Path) -> [PathBuf; 4] {
 }
 
 #[cfg(target_os = "macos")]
-fn build_trae_new_task_script(prompt: &str) -> String {
+fn trae_application_name_from_bundle(app: &Path) -> String {
+    app.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.trim_end_matches(".app").to_string())
+        .unwrap_or_else(|| "Trae CN".to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn build_trae_new_task_script(prompt: &str, application_name: &str) -> String {
     let prompt = applescript_string(prompt);
+    let process_list = TRAE_PROCESS_NAMES
+        .iter()
+        .map(|name| format!("\"{name}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
     format!(
         r#"set devfleetPrompt to {prompt}
 set oldClipboard to ""
 try
     set oldClipboard to the clipboard
 end try
+set the clipboard to devfleetPrompt
+
+tell application "{application_name}" to activate
+delay 2.5
 
 tell application "System Events"
     set traeProcessName to ""
-    repeat with candidateName in {{"TRAE CN", "Trae CN", "TRAE SOLO CN", "TRAE SOLO", "Trae"}}
+    repeat with candidateName in {{{process_list}}}
         if exists process (candidateName as text) then
             set traeProcessName to candidateName as text
             exit repeat
@@ -194,12 +227,32 @@ tell application "System Events"
 
     tell process traeProcessName
         set frontmost to true
-        delay 1.2
-        key code 45 using {{control down, command down}}
-        delay 0.8
-        set the clipboard to devfleetPrompt
+        delay 1.0
+
+        set clickedNewTask to false
+        try
+            repeat with w in windows
+                repeat with btn in (buttons of w)
+                    try
+                        set btnName to name of btn
+                        if btnName contains "新任务" or btnName contains "New Task" or btnName contains "新建任务" then
+                            click btn
+                            set clickedNewTask to true
+                            exit repeat
+                        end if
+                    end try
+                end repeat
+                if clickedNewTask then exit repeat
+            end repeat
+        end try
+
+        if clickedNewTask is false then
+            key code 45 using {{control down, command down}}
+        end if
+
+        delay 1.5
         keystroke "v" using command down
-        delay 0.4
+        delay 0.5
         key code 36
     end tell
 end tell
@@ -262,15 +315,18 @@ fn find_trae_app_bundle() -> Option<PathBuf> {
 fn find_trae_app_under_volumes() -> Option<PathBuf> {
     let entries = std::fs::read_dir("/Volumes").ok()?;
     for entry in entries.flatten() {
-        for name in [
-            "Trae CN.app",
-            "TRAE SOLO CN.app",
-            "Trae.app",
-            "TRAE SOLO.app",
-        ] {
-            let path = entry.path().join(name);
-            if path.is_dir() {
-                return Some(path);
+        let volume_root = entry.path();
+        for name in TRAE_BUNDLE_NAMES {
+            let direct = volume_root.join(name);
+            if direct.is_dir() {
+                return Some(direct);
+            }
+            let children = std::fs::read_dir(&volume_root).ok()?;
+            for child in children.flatten() {
+                let nested = child.path().join(name);
+                if nested.is_dir() {
+                    return Some(nested);
+                }
             }
         }
     }
@@ -283,11 +339,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn script_uses_new_task_shortcut_and_pastes_prompt() {
-        let script = build_trae_new_task_script("hello\nworld");
-        assert!(script.contains("key code 45 using {control down, command down}"));
+    fn script_prefers_trae_cn_process_and_activate() {
+        let script = build_trae_new_task_script("hello\nworld", "Trae CN");
+        assert!(script.contains("\"TRAE CN\""));
+        assert!(script.contains("tell application \"Trae CN\" to activate"));
+        assert!(script.contains("clickedNewTask"));
+        assert!(script.contains("新任务"));
         assert!(script.contains("keystroke \"v\" using command down"));
         assert!(script.contains("\"hello\" & linefeed & \"world\""));
+    }
+
+    #[test]
+    fn application_name_from_bundle_strips_app_suffix() {
+        assert_eq!(
+            trae_application_name_from_bundle(Path::new("/Volumes/Trae CN 1/Trae CN.app")),
+            "Trae CN"
+        );
     }
 }
 

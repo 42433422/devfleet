@@ -67,6 +67,11 @@ export function normalizeToolRuntimeStatus(status: string): ToolRuntimeStatus {
   return 'not_started';
 }
 
+export function formatToolRuntimeLabel(status: string, currentTask?: string): string {
+  if (status === 'running' && currentTask) return '执行中';
+  return TOOL_RUNTIME_LABELS[normalizeToolRuntimeStatus(status)];
+}
+
 export function canStartTool(tool: {
   toolName: DevTool | string;
   status: string;

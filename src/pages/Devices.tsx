@@ -365,6 +365,7 @@ export default function Devices() {
                         <ToolBadge
                           tool={t.toolName}
                           status={t.status}
+                          currentTask={t.currentTask}
                         />
                       </div>
                     ))

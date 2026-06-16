@@ -35,6 +35,7 @@ export interface SubTaskDesc {
 }
 
 export function splitTaskIntoSubs(description: string, count = 3, sequential = false): SubTaskDesc[] {
+  // UI 手动创建任务时的 fallback 拆分；MCP / AI 派发路径不使用此函数。
   const trimmed = description.trim();
   const lines = trimmed.split(/\n+|。|；|;|\./).map((l) => l.trim()).filter(Boolean);
 

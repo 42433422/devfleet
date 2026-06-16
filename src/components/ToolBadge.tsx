@@ -1,7 +1,7 @@
 import { Code2, Sparkles, Terminal, Braces, type LucideIcon } from 'lucide-react';
 import {
+  formatToolRuntimeLabel,
   normalizeToolRuntimeStatus,
-  TOOL_RUNTIME_LABELS,
   type ToolRuntimeStatus,
 } from '@/lib/devTools';
 
@@ -28,9 +28,10 @@ const statusStyles: Record<ToolRuntimeStatus, { bg: string; text: string; indica
 interface ToolBadgeProps {
   tool: string;
   status: string;
+  currentTask?: string;
 }
 
-export default function ToolBadge({ tool, status }: ToolBadgeProps) {
+export default function ToolBadge({ tool, status, currentTask }: ToolBadgeProps) {
   const Icon = toolIcons[tool] || Code2;
   const runtime = normalizeToolRuntimeStatus(status);
   const styles = statusStyles[runtime];
@@ -44,7 +45,7 @@ export default function ToolBadge({ tool, status }: ToolBadgeProps) {
       <div className="flex items-center gap-1">
         <span className={`w-1.5 h-1.5 rounded-full ${styles.indicator} ${runtime === 'started' ? 'animate-pulse' : ''}`} />
         <span className={`text-[10px] font-medium ${styles.text}`}>
-          {TOOL_RUNTIME_LABELS[runtime]}
+          {formatToolRuntimeLabel(status, currentTask)}
         </span>
       </div>
     </div>

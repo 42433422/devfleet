@@ -309,6 +309,33 @@ impl AgentState {
         let mut tool_status = time::interval(Duration::from_secs(30));
         tool_status.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
 
+        let publish_tool_status = |state: &Self| -> Result<Value, String> {
+            let running_task = state.inner.running_task.lock().ok().and_then(|value| value.clone());
+            let running_dev_tool = state
+                .inner
+                .running_dev_tool
+                .lock()
+                .ok()
+                .and_then(|value| value.clone());
+            let tools = scan_tools(running_task.as_deref(), running_dev_tool.as_deref());
+            set_mutex(&state.inner.tools, tools.clone());
+            Ok(json!({
+              "type": "tool_status",
+              "tools": tools.into_iter().map(|tool| json!({
+                "tool_name": tool.tool_name,
+                "status": tool.status,
+                "current_task": tool.current_task,
+              })).collect::<Vec<_>>(),
+              "capabilities": probe_capabilities(),
+            }))
+        };
+
+        let initial_status = publish_tool_status(self)?;
+        writer
+            .send(Message::Text(initial_status.to_string().into()))
+            .await
+            .map_err(|error| error.to_string())?;
+
         loop {
             tokio::select! {
               _ = heartbeat.tick() => {
@@ -323,25 +350,7 @@ impl AgentState {
                   let _ = writer.close().await;
                   return Ok(());
                 }
-                let running_task = self.inner.running_task.lock().ok().and_then(|value| value.clone());
-                let running_dev_tool = self
-                    .inner
-                    .running_dev_tool
-                    .lock()
-                    .ok()
-                    .and_then(|value| value.clone());
-                let tools = scan_tools(running_task.as_deref(), running_dev_tool.as_deref());
-                set_mutex(&self.inner.tools, tools.clone());
-                let capabilities = probe_capabilities();
-                let payload = json!({
-                  "type": "tool_status",
-                  "tools": tools.into_iter().map(|tool| json!({
-                    "tool_name": tool.tool_name,
-                    "status": tool.status,
-                    "current_task": tool.current_task,
-                  })).collect::<Vec<_>>(),
-                  "capabilities": capabilities,
-                });
+                let payload = publish_tool_status(self)?;
                 writer.send(Message::Text(payload.to_string().into())).await.map_err(|error| error.to_string())?;
               }
               Some(payload) = outbound_rx.recv() => {
@@ -464,7 +473,12 @@ impl AgentState {
                 }
             }
             "trae" => {
-                send_log(tx, task, "Trae 混合模式：写入任务文件并打开 IDE", "info");
+                send_log(
+                    tx,
+                    task,
+                    "[pipeline:computer_use] Trae 混合模式：写入任务文件并自动 Computer Use",
+                    "info",
+                );
                 send_progress(tx, task, 30, "running");
 
                 let devfleet_dir = task_dir.join(".devfleet");
@@ -489,40 +503,81 @@ impl AgentState {
                     .await
                     .map_err(|error| format!("写入 MCP 配置失败: {error}"))?;
 
-                match computer_use::start_trae_task(&task_dir, &prompt) {
-                    Ok(()) => send_log(
-                        tx,
-                        task,
-                        "已通过内置 Computer Use 打开 Trae 工作区、点击新任务并写入任务",
-                        "info",
-                    ),
-                    Err(error) => {
+                establish_trae_git_baseline(&task_dir, tx, task).await?;
+
+                let trae_prompt = if task.description.trim().is_empty() {
+                    prompt.clone()
+                } else {
+                    format!(
+                        "DevFleet 子任务：{}\n\n{}",
+                        task.title.trim(),
+                        task.description.trim()
+                    )
+                };
+
+                let cu_ok = match computer_use::start_trae_task(&task_dir, &trae_prompt) {
+                    Ok(()) => true,
+                    Err(first_error) => {
                         send_log(
                             tx,
                             task,
-                            &format!("Trae Computer Use 自动控制失败: {error}"),
+                            &format!(
+                                "[pipeline:computer_use] 首次自动控制失败，2.5s 后重试: {first_error}"
+                            ),
                             "warn",
                         );
-                        match launch_tool("trae", &task_dir) {
-                            Ok(()) => send_log(tx, task, "已回退为仅打开 Trae 工作区", "info"),
-                            Err(error) => send_log(
-                                tx,
-                                task,
-                                &format!("Trae 启动失败: {error}，请手动打开工作区并点新任务"),
-                                "warn",
-                            ),
+                        tokio::time::sleep(Duration::from_millis(2500)).await;
+                        match computer_use::start_trae_task(&task_dir, &trae_prompt) {
+                            Ok(()) => true,
+                            Err(retry_error) => {
+                                send_log(
+                                    tx,
+                                    task,
+                                    &format!(
+                                        "[pipeline:computer_use] 自动控制失败: {retry_error}"
+                                    ),
+                                    "warn",
+                                );
+                                false
+                            }
                         }
+                    }
+                };
+
+                if cu_ok {
+                    send_log(
+                        tx,
+                        task,
+                        "[pipeline:computer_use] 已自动打开 Trae、点击新任务并粘贴 prompt（无需用户手动复制）",
+                        "info",
+                    );
+                } else {
+                    match launch_tool("trae", &task_dir) {
+                        Ok(()) => send_log(
+                            tx,
+                            task,
+                            "[pipeline:computer_use] 已回退为仅打开 Trae 工作区，请主设备 AI 调用 devfleet_computer_use_start_trae_task 补救",
+                            "warn",
+                        ),
+                        Err(error) => send_log(
+                            tx,
+                            task,
+                            &format!(
+                                "[pipeline:computer_use] Trae 启动失败: {error}，请主设备 AI 调用 devfleet_computer_use_start_trae_task"
+                            ),
+                            "warn",
+                        ),
                     }
                 }
                 send_log(
                     tx,
                     task,
-                    "任务已写入 .devfleet/TASK.md；Trae 可通过新任务输入或 devfleet_next_task MCP 工具获取任务",
+                    "[pipeline:trae] 任务已写入 .devfleet/TASK.md，Trae Agent 正在改码…",
                     "info",
                 );
                 send_progress(tx, task, 40, "running");
 
-                send_log(tx, task, "等待 Trae Agent 修改代码...", "info");
+                send_log(tx, task, "[pipeline:wait] 等待 Trae Agent 修改代码...", "info");
                 let timeout_secs: u64 = 600;
                 let poll_interval_secs: u64 = 10;
                 let start = std::time::Instant::now();
@@ -530,12 +585,9 @@ impl AgentState {
 
                 while start.elapsed().as_secs() < timeout_secs {
                     tokio::time::sleep(Duration::from_secs(poll_interval_secs)).await;
-                    match run_command(Some(&task_dir), "git", &["status", "--porcelain"]).await {
-                        Ok(output) if !output.trim().is_empty() => {
-                            has_changes = true;
-                            break;
-                        }
-                        _ => {}
+                    if git_has_meaningful_changes(&task_dir).await? {
+                        has_changes = true;
+                        break;
                     }
                     let elapsed_secs = start.elapsed().as_secs();
                     let progress = 40 + ((elapsed_secs * 40) / timeout_secs).min(40) as u8;
@@ -543,9 +595,9 @@ impl AgentState {
                 }
 
                 if !has_changes {
-                    return Err("等待 Trae Agent 超时，未检测到代码变更".to_string());
+                    return Err("等待 Trae Agent 超时，未检测到代码变更（排除 .devfleet/.trae 元数据）".to_string());
                 }
-                send_log(tx, task, "检测到 Trae Agent 代码变更", "info");
+                send_log(tx, task, "[pipeline:trae] 检测到 Trae Agent 代码变更", "info");
             }
             _ => {
                 if matches!(dev_tool, "claude_code") {
@@ -935,7 +987,7 @@ fn scan_tools(current_task: Option<&str>, active_dev_tool: Option<&str>) -> Vec<
             };
             let process_names: &[&str] = match name {
                 "claude_code" => &["claude", "claude.exe"],
-                "trae" => &["trae", "trae.exe"],
+                "trae" => &["TRAE CN", "Trae CN", "TRAE SOLO CN", "trae", "trae.exe"],
                 "cursor" => &["cursor", "cursor.exe", "agent"],
                 _ => &["codex", "codex.exe"],
             };
@@ -1178,6 +1230,96 @@ async fn checkout_work_branch(
     Ok(())
 }
 
+async fn establish_trae_git_baseline(
+    task_dir: &Path,
+    tx: &mpsc::UnboundedSender<Value>,
+    task: &ExecuteTask,
+) -> Result<(), String> {
+    run_command(
+        Some(task_dir),
+        "git",
+        &["config", "user.name", "DevFleet Agent"],
+    )
+    .await?;
+    run_command(
+        Some(task_dir),
+        "git",
+        &["config", "user.email", "agent@devfleet.local"],
+    )
+    .await?;
+    run_command(Some(task_dir), "git", &["add", "-A"]).await?;
+    let changes = run_command(Some(task_dir), "git", &["status", "--porcelain"]).await?;
+    if changes.trim().is_empty() {
+        return Ok(());
+    }
+    run_command(
+        Some(task_dir),
+        "git",
+        &["commit", "-m", "chore(devfleet): task workspace setup"],
+    )
+    .await?;
+    send_log(
+        tx,
+        task,
+        "已建立 Trae 工作区 Git 基线（后续仅检测业务代码变更）",
+        "info",
+    );
+    Ok(())
+}
+
+async fn git_has_meaningful_changes(task_dir: &Path) -> Result<bool, String> {
+    let output = run_command(
+        Some(task_dir),
+        "git",
+        &[
+            "status",
+            "--porcelain",
+            "--",
+            ".",
+            ":!.devfleet",
+            ":!.trae",
+        ],
+    )
+    .await?;
+    Ok(!output.trim().is_empty())
+}
+
+async fn git_ref_exists(cwd: &Path, reference: &str) -> bool {
+    run_command(
+        Some(cwd),
+        "git",
+        &["rev-parse", "--verify", &format!("{reference}^{{commit}}")],
+    )
+    .await
+    .is_ok()
+}
+
+async fn resolve_merge_ref(cwd: &Path, branch_name: &str) -> Result<String, String> {
+    let origin_ref = format!("origin/{branch_name}");
+    if git_ref_exists(cwd, &origin_ref).await {
+        return Ok(origin_ref);
+    }
+    let _ = run_command(
+        Some(cwd),
+        "git",
+        &[
+            "fetch",
+            "origin",
+            &format!("{branch_name}:{branch_name}"),
+        ],
+    )
+    .await;
+    if git_ref_exists(cwd, &origin_ref).await {
+        return Ok(origin_ref);
+    }
+    if git_ref_exists(cwd, branch_name).await {
+        return Ok(branch_name.to_string());
+    }
+    Err(format!(
+        "找不到可合并的分支 {branch_name}（已尝试 origin/{branch_name} 与本地 {branch_name}）"
+    ))
+}
+
 async fn push_branch_if_remote(
     task_dir: &Path,
     branch: &str,
@@ -1354,22 +1496,22 @@ pub async fn agent_merge_task(
         return Err("主设备工作区存在未提交修改，请先提交或暂存后再合并".to_string());
     }
 
-    run_command(Some(cwd), "git", &["fetch", "--all", "--prune"]).await?;
+    let _ = run_command(Some(cwd), "git", &["fetch", "--all", "--prune"]).await;
     run_command(Some(cwd), "git", &["checkout", &branch]).await?;
-    run_command(Some(cwd), "git", &["pull", "--ff-only", "origin", &branch]).await?;
+    let _ = run_command(
+        Some(cwd),
+        "git",
+        &["pull", "--ff-only", "origin", &branch],
+    )
+    .await;
 
     for branch_name in &subtask_branches {
-        match run_command(
-            Some(cwd),
-            "git",
-            &["merge", "--no-edit", &format!("origin/{branch_name}")],
-        )
-        .await
-        {
+        let merge_ref = resolve_merge_ref(cwd, branch_name).await?;
+        match run_command(Some(cwd), "git", &["merge", "--no-edit", &merge_ref]).await {
             Ok(_) => {}
             Err(error) => {
                 let _ = run_command(Some(cwd), "git", &["merge", "--abort"]).await;
-                return Err(format!("合并 origin/{branch_name} 失败: {error}"));
+                return Err(format!("合并 {merge_ref} 失败: {error}"));
             }
         }
     }

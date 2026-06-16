@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Check, Clipboard, Code2, PlugZap, ShieldCheck, Sparkles, Terminal, Braces, RefreshCw, Monitor } from 'lucide-react';
+import { Check, Clipboard, Code2, PlugZap, ShieldCheck, Sparkles, Terminal, Braces, RefreshCw, Monitor, Bot } from 'lucide-react';
 import { useAuthStore } from '@/store/auth';
 import { useDevicesStore } from '@/store/devices';
-import { DEV_TOOL_LABELS, TOOL_RUNTIME_LABELS, type DevTool } from '@/lib/devTools';
+import { DEV_TOOL_LABELS, executorLabel } from '@/lib/devTools';
+import ToolBadge from '@/components/ToolBadge';
 import {
   buildCodexMcpCommand,
   buildCursorInstallLinks,
@@ -13,6 +14,9 @@ import {
 import { getMcpApiBaseUrl } from '@/lib/apiBase';
 import { openDeeplink, openTraeInstall } from '@/lib/openExternal';
 import { mcpClientApi, type McpClientStatus, type McpClientTool } from '@/lib/mcpClient';
+import { buildAiCommanderPlaybook } from '@/lib/aiPlaybook';
+import { buildMcpAutoSetupPrompt } from '@/lib/mcpSetupPrompt';
+import { defaultMergeWorkspace } from '@/lib/mergeTask';
 import ServerAddressPanel from '@/components/ServerAddressPanel';
 
 export default function Integration() {
@@ -26,6 +30,8 @@ export default function Integration() {
   const [statusBusy, setStatusBusy] = useState(false);
   const [clientStatuses, setClientStatuses] = useState<Partial<Record<McpClientTool, McpClientStatus>>>({});
   const [traeVariant, setTraeVariant] = useState<TraeVariant>('cn');
+  const [playbookCopied, setPlaybookCopied] = useState(false);
+  const [mcpSetupCopied, setMcpSetupCopied] = useState(false);
   const mcpOptions = useMemo(() => ({
     mcpPath,
     apiUrl,
@@ -41,6 +47,41 @@ export default function Integration() {
   );
   const cursorInstall = useMemo(() => buildCursorInstallLinks(mcpOptions), [mcpOptions]);
   const preview = useCallback((content: string) => redactSecret(content, token || ''), [token]);
+  const traeDevice = useMemo(
+    () => devices.find((d) => d.status === 'online' && d.devTool === 'trae'),
+    [devices],
+  );
+  const aiPlaybook = useMemo(
+    () =>
+      buildAiCommanderPlaybook({
+        deviceHint: traeDevice?.id || '<online-trae-device-id>',
+        mergeWorkspace: defaultMergeWorkspace(),
+      }),
+    [traeDevice?.id],
+  );
+  const mcpSetupPrompt = useMemo(
+    () =>
+      buildMcpAutoSetupPrompt({
+        mcpPath,
+        apiUrl,
+        token: token || '',
+        platform: processPlatform(),
+        traeVariant,
+      }),
+    [apiUrl, mcpPath, token, traeVariant],
+  );
+
+  const copyMcpSetupPrompt = async () => {
+    await navigator.clipboard.writeText(mcpSetupPrompt);
+    setMcpSetupCopied(true);
+    window.setTimeout(() => setMcpSetupCopied(false), 1500);
+  };
+
+  const copyPlaybook = async () => {
+    await navigator.clipboard.writeText(aiPlaybook);
+    setPlaybookCopied(true);
+    window.setTimeout(() => setPlaybookCopied(false), 1500);
+  };
 
   const refreshStatuses = useCallback(async () => {
     if (!mcpClientApi.isDesktop()) return;
@@ -74,6 +115,13 @@ export default function Integration() {
   useEffect(() => {
     void refreshStatuses();
   }, [refreshStatuses]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void fetchDevices();
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [fetchDevices]);
 
   const copy = async (name: string, value: string) => {
     await navigator.clipboard.writeText(value);
@@ -127,6 +175,39 @@ export default function Integration() {
       <div className="mb-6">
         <ServerAddressPanel compact />
         <p className="text-[11px] text-zinc-600 mt-2">工作设备接入地址请在「设备管理」配置；下方 MCP 使用本机地址 {apiUrl} 即可。</p>
+      </div>
+
+      <div className="mb-6 bg-gradient-to-br from-brand/10 via-zinc-900/80 to-zinc-900/60 border border-brand/25 rounded-xl overflow-hidden">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 px-5 py-4 border-b border-brand/15">
+          <div>
+            <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+              <Bot size={16} className="text-brand" />
+              复制给 AI 助手 · 自动完成 MCP 接入
+            </h2>
+            <p className="text-xs text-zinc-400 mt-1.5 max-w-xl">
+              复制一段话粘贴到 Cursor、Trae、Claude、ChatGPT 等任意 AI，让它直接写入配置并调用
+              {' '}
+              <code className="text-brand/90">devfleet_list_devices</code>
+              {' '}
+              验证——无需手动改 JSON。
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void copyMcpSetupPrompt()}
+            disabled={!token}
+            className="flex items-center justify-center gap-2 px-4 py-2.5 bg-brand hover:bg-brand/90 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg text-sm text-black font-semibold shrink-0"
+          >
+            {mcpSetupCopied ? <Check size={16} /> : <Clipboard size={16} />}
+            {mcpSetupCopied ? '已复制，去粘贴给 AI' : '一键复制配置话术'}
+          </button>
+        </div>
+        <pre className="p-5 text-[11px] font-mono text-zinc-400 leading-relaxed overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap">
+          {preview(mcpSetupPrompt)}
+        </pre>
+        {!token && (
+          <p className="px-5 pb-4 text-[11px] text-amber-400/90">请先登录 DevFleet，话术中将包含你的 DEVFLEET_TOKEN。</p>
+        )}
       </div>
 
       <div className="grid lg:grid-cols-2 gap-4 mb-4">
@@ -223,47 +304,89 @@ export default function Integration() {
 
       {devices.length > 0 && (
         <div className="mb-4 bg-zinc-900/60 border border-zinc-800 rounded-xl p-5">
-          <h2 className="text-sm font-medium text-white mb-3">已接入设备的工具状态</h2>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {(['trae', 'codex', 'cursor', 'claude_code'] as DevTool[]).map((tool) => {
-              const toolDevices = devices.filter((d) =>
-                d.tools.some((t) => t.toolName === tool && t.status !== 'not_installed'),
-              );
-              const bestStatus = toolDevices.length > 0
-                ? toolDevices.some((d) => d.tools.some((t) => t.toolName === tool && t.status === 'running'))
-                  ? 'started'
-                  : 'not_started'
-                : 'not_installed';
-              const styles: Record<string, { bg: string; text: string; indicator: string }> = {
-                not_installed: { bg: 'bg-zinc-800/60', text: 'text-zinc-500', indicator: 'bg-zinc-600' },
-                not_started: { bg: 'bg-amber-500/10', text: 'text-amber-400', indicator: 'bg-amber-500' },
-                started: { bg: 'bg-green-500/10', text: 'text-green-400', indicator: 'bg-green-500' },
-              };
-              const s = styles[bestStatus];
-              const Icon = { trae: Sparkles, codex: Terminal, cursor: Code2, claude_code: Braces }[tool];
-              return (
-                <div key={tool} className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg ${s.bg}`}>
-                  <Icon size={14} strokeWidth={1.5} className={s.text} />
-                  <div className="flex-1 min-w-0">
-                    <span className="text-xs font-medium text-zinc-300">{DEV_TOOL_LABELS[tool]}</span>
-                    <div className="flex items-center gap-1 mt-0.5">
-                      <span className={`w-1.5 h-1.5 rounded-full ${s.indicator} ${bestStatus === 'started' ? 'animate-pulse' : ''}`} />
-                      <span className={`text-[10px] ${s.text}`}>{TOOL_RUNTIME_LABELS[bestStatus]}</span>
-                    </div>
-                  </div>
-                  {toolDevices.length > 0 && (
-                    <span className="text-[10px] text-zinc-600">{toolDevices.length} 台</span>
-                  )}
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h2 className="text-sm font-medium text-white">已接入设备的工具状态</h2>
+              <p className="text-[11px] text-zinc-600 mt-1">
+                由工作设备代理实测（进程检测 + 可执行文件探测）上报；与上方 MCP 配置状态无关
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void fetchDevices()}
+              className="p-2 text-zinc-500 hover:text-white"
+              title="刷新设备工具状态"
+            >
+              <RefreshCw size={14} />
+            </button>
+          </div>
+          <div className="space-y-4">
+            {devices.map((device) => (
+              <div key={device.id} className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className={`w-2 h-2 rounded-full ${device.status === 'online' ? 'bg-green-500 animate-pulse' : 'bg-zinc-600'}`} />
+                  <span className="text-sm font-medium text-white">{device.name}</span>
+                  <span className="text-[10px] text-zinc-600">
+                    {device.status === 'online' ? '在线' : device.status === 'connecting' ? '连接中' : '离线'}
+                  </span>
+                  <span className="text-[10px] text-brand ml-auto">
+                    改码：{executorLabel(device.devTool || 'trae')}
+                  </span>
                 </div>
-              );
-            })}
+                {device.status !== 'online' ? (
+                  <p className="text-xs text-zinc-600">设备离线，无实测工具状态</p>
+                ) : device.tools.length === 0 ? (
+                  <p className="text-xs text-zinc-600">等待代理上报首次实测…</p>
+                ) : (
+                  <div className="grid sm:grid-cols-2 gap-2">
+                    {device.tools.map((tool) => (
+                      <div
+                        key={tool.toolName}
+                        className={tool.toolName === (device.devTool || 'trae') ? 'ring-1 ring-brand/40 rounded-lg' : ''}
+                      >
+                        <ToolBadge
+                          tool={tool.toolName}
+                          status={tool.status}
+                          currentTask={tool.currentTask}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         </div>
       )}
 
-      <div className="flex items-start gap-3 px-4 py-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+      <div className="flex items-start gap-3 px-4 py-3 bg-amber-500/10 border border-amber-500/20 rounded-lg mb-4">
         <ShieldCheck size={16} className="text-amber-400 mt-0.5" />
         <p className="text-xs text-amber-200/80">令牌仅配置在主设备。工作设备的开发工具在「设备管理」指定（默认 Trae），与 MCP 接入无关。</p>
+      </div>
+
+      <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl overflow-hidden mb-4">
+        <div className="flex items-start justify-between gap-4 px-5 py-4 border-b border-zinc-800">
+          <div>
+            <h2 className="text-sm font-medium text-white flex items-center gap-2">
+              <Monitor size={14} className="text-brand" />
+              AI 指挥官剧本
+            </h2>
+            <p className="text-[11px] text-zinc-500 mt-1">
+              复制给 Cursor / Trae AI：按闭环执行，dispatch 后工作设备 Agent 自动 Computer Use，禁止让用户手动打开 Trae。
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void copyPlaybook()}
+            className="flex items-center gap-1.5 px-3 py-2 bg-brand/90 hover:bg-brand rounded-lg text-xs text-black font-medium shrink-0"
+          >
+            {playbookCopied ? <Check size={12} /> : <Clipboard size={12} />}
+            {playbookCopied ? '已复制' : '复制剧本'}
+          </button>
+        </div>
+        <pre className="p-5 text-[11px] font-mono text-zinc-400 leading-relaxed overflow-x-auto max-h-80 overflow-y-auto whitespace-pre-wrap">
+          {aiPlaybook}
+        </pre>
       </div>
     </div>
   );

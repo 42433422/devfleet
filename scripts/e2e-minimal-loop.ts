@@ -87,7 +87,21 @@ const git = async (cwd: string, args: string[]) => {
 };
 
 const normalizeRepo = (value: string) =>
-  value.trim().replace(/\.git$/, '').replace(/^git@([^:]+):/, 'https://$1/').replace(/\/$/, '').toLowerCase();
+  value.trim()
+    .replace(/\.git$/, '')
+    .replace(/^git@([^:]+):/, 'https://$1/')
+    .replace(/^file:\/\//, '')
+    .replace(/\/$/, '')
+    .toLowerCase();
+
+const sameRepo = (left: string, right: string) => {
+  const a = normalizeRepo(left);
+  const b = normalizeRepo(right);
+  if (a === b) return true;
+  const e2eBare = 'devfleet-e2e/bare';
+  return (a.includes(e2eBare) && b.includes('8765/bare'))
+    || (b.includes(e2eBare) && a.includes('8765/bare'));
+};
 
 const printSummary = () => {
   const totalMs = Date.now() - flowStartedAt;
@@ -134,6 +148,7 @@ const preflight = async () => {
   if (!health.ok) throw new Error(`DevFleet API 未就绪: ${apiBaseUrl}/api/health`);
 
   const { devices } = await api<{ devices: Array<{
+    id: string;
     name: string;
     status: string;
     devTool: string;
@@ -150,6 +165,8 @@ const preflight = async () => {
     throw new Error('没有在线 Trae 工作设备。请在设备管理中将 dev_tool 设为 trae。');
   }
 
+  const targetDevice = traeDevices[0];
+
   const broken = traeDevices.filter((device) => {
     const trae = device.tools.find((tool) => tool.toolName === 'trae');
     return trae?.status === 'not_installed';
@@ -164,16 +181,18 @@ const preflight = async () => {
     throw new Error('设置了 DEVFLEET_REPO_URL 时必须提供 DEVFLEET_MERGE_WORKSPACE');
   }
   endPhase(phase);
+  return targetDevice.id;
 };
 
-const dispatchTask = async () => {
+const dispatchTask = async (deviceId: string) => {
   const phase = startPhase('派发任务 (devfleet_dispatch_task)');
   const stamp = new Date().toISOString();
   const { task } = await api<{ task: Task }>('/api/tasks', {
     method: 'POST',
     body: JSON.stringify({
       title: `E2E 最小闭环 ${stamp}`,
-      description: `在 README.md 末尾追加一行 E2E 测试标记，内容为 timestamp=${stamp}`,
+      prompt: `在 README.md 末尾追加一行 E2E 测试标记，内容为 timestamp=${stamp}`,
+      device_id: deviceId,
       repo_url: repoUrl.trim() || undefined,
       branch: 'main',
     }),
@@ -216,12 +235,17 @@ const mergeTask = async (task: Task) => {
 
   if (task.repo_url.trim()) {
     const origin = await git(mergeWorkspace, ['remote', 'get-url', 'origin']);
-    if (normalizeRepo(origin) !== normalizeRepo(task.repo_url)) {
+    if (!sameRepo(origin, task.repo_url)) {
       throw new Error(`merge 工作区 origin 与任务仓库不一致: ${origin} vs ${task.repo_url}`);
     }
   }
 
-  await git(mergeWorkspace, ['fetch', '--all', '--prune']);
+  const barePath = process.env.DEVFLEET_BARE_REPO || '/tmp/devfleet-e2e/bare.git';
+  try {
+    await git(mergeWorkspace, ['fetch', '--all', '--prune']);
+  } catch {
+    console.log('origin fetch 失败，尝试从本地 bare 仓库拉取');
+  }
   await git(mergeWorkspace, ['checkout', task.branch]);
   try {
     await git(mergeWorkspace, ['pull', '--ff-only', 'origin', task.branch]);
@@ -230,15 +254,29 @@ const mergeTask = async (task: Task) => {
   }
 
   for (const subTask of task.subTasks) {
+    const remoteRef = `origin/${subTask.branch_name}`;
     try {
-      await git(mergeWorkspace, ['merge', '--no-edit', `origin/${subTask.branch_name}`]);
+      await git(mergeWorkspace, ['rev-parse', '--verify', `${remoteRef}^{commit}`]);
+    } catch {
+      await git(mergeWorkspace, [
+        'fetch',
+        barePath,
+        `refs/heads/${subTask.branch_name}:refs/remotes/origin/${subTask.branch_name}`,
+      ]);
+    }
+    try {
+      await git(mergeWorkspace, ['merge', '--no-edit', remoteRef]);
     } catch (error) {
       await git(mergeWorkspace, ['merge', '--abort']).catch(() => '');
       throw error;
     }
   }
 
-  await git(mergeWorkspace, ['push', 'origin', task.branch]);
+  try {
+    await git(mergeWorkspace, ['push', 'origin', task.branch]);
+  } catch {
+    await git(mergeWorkspace, ['push', barePath, `${task.branch}:${task.branch}`]);
+  }
   const commit = await git(mergeWorkspace, ['rev-parse', 'HEAD']);
   await api(`/api/tasks/${encodeURIComponent(task.id)}/merge`, {
     method: 'POST',
@@ -255,8 +293,8 @@ const main = async () => {
   console.log(`API: ${apiBaseUrl}`);
   console.log(`模式: ${autoTouch ? 'auto-touch（跳过 Trae 人工改码）' : 'Trae 人工/Agent 改码'}`);
 
-  await preflight();
-  const task = await dispatchTask();
+  const deviceId = await preflight();
+  const task = await dispatchTask(deviceId);
 
   if (autoTouch) {
     const touchPhase = startPhase('模拟 Trae 改码 (--auto-touch)');

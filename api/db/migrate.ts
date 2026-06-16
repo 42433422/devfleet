@@ -1,5 +1,5 @@
 import fs from 'fs';
-import path from 'path';
+import type { DevFleetDatabase } from './sqlite.js';
 
 interface LegacyDb {
   users?: Array<{
@@ -40,7 +40,7 @@ export function migrateIfNeeded(dbPath: string): void {
   }
 }
 
-export function importJsonIfPending(database: { prepare: (sql: string) => { run: (...args: unknown[]) => unknown; get: (...args: unknown[]) => unknown; all: (...args: unknown[]) => unknown[] }; exec: (sql: string) => void; transaction: (fn: () => void) => () => void }, dbPath: string): void {
+export function importJsonIfPending(database: DevFleetDatabase, dbPath: string): void {
   const marker = `${dbPath}.migrate-from-json`;
   if (!fs.existsSync(marker)) return;
 

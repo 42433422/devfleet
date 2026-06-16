@@ -85,7 +85,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 MCP 提供以下工具：
 
 - `devfleet_list_devices`：读取真实在线和工具状态。
-- `devfleet_dispatch_task`：向在线设备派发 Git 代码任务。
+- `devfleet_dispatch_task`：每次调用向指定设备派发**一个**子任务（AI 自行拆分与指定 device_id）；UI 手动创建仍走自动拆分 fallback。
 - `devfleet_get_task`：读取任务、日志、分支和进度。
 - `devfleet_wait_for_task`：等待多设备任务完成。
 - `devfleet_merge_task`：在主设备真实 fetch、merge、push，成功后才标记已合并。

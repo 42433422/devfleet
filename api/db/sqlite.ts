@@ -1,9 +1,11 @@
 import fs from 'fs';
 import path from 'path';
-import { DatabaseSync } from 'node:sqlite';
+import Database from 'better-sqlite3';
 import { SCHEMA_SQL } from './schema.js';
 import { migrateIfNeeded, importJsonIfPending } from './migrate.js';
 import { applySchemaUpgrades } from './schema-upgrades.js';
+
+export type DevFleetDatabase = Database.Database;
 
 function resolveDbPath(): string {
   const fromEnv = process.env.DEVFLEET_DB_FILE?.trim();
@@ -19,7 +21,7 @@ function resolveDbPath(): string {
 
 const DATA_DIR = path.dirname(resolveDbPath());
 
-let dbInstance: DatabaseSync | null = null;
+let dbInstance: DevFleetDatabase | null = null;
 let openDbPath: string | null = null;
 
 function ensureDataDir() {
@@ -28,11 +30,11 @@ function ensureDataDir() {
   }
 }
 
-function applySchema(database: DatabaseSync) {
+function applySchema(database: DevFleetDatabase) {
   database.exec(SCHEMA_SQL);
 }
 
-export function getDatabase(): DatabaseSync {
+export function getDatabase(): DevFleetDatabase {
   const targetPath = resolveDbPath();
   if (dbInstance && openDbPath !== targetPath) {
     closeDatabase();
@@ -42,8 +44,10 @@ export function getDatabase(): DatabaseSync {
   ensureDataDir();
   migrateIfNeeded(targetPath);
 
-  dbInstance = new DatabaseSync(targetPath);
+  dbInstance = new Database(targetPath);
   openDbPath = targetPath;
+  dbInstance.pragma('journal_mode = WAL');
+  dbInstance.pragma('foreign_keys = ON');
   applySchema(dbInstance);
   applySchemaUpgrades(dbInstance);
   importJsonIfPending(dbInstance, targetPath);
@@ -70,7 +74,7 @@ export function getDbPath(): string {
   return resolveDbPath();
 }
 
-export function withTransaction(database: DatabaseSync, fn: () => void): void {
+export function withTransaction(database: DevFleetDatabase, fn: () => void): void {
   database.exec('BEGIN IMMEDIATE');
   try {
     fn();

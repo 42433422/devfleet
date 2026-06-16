@@ -103,13 +103,17 @@ server.registerTool('devfleet_computer_use_start_trae_task', {
 });
 
 server.registerTool('devfleet_dispatch_task', {
-  title: '向多台设备派发代码任务',
-  description: '把真实代码任务派发到在线工作设备。Trae 设备由 Trae Agent（混合模式）改码；Cursor 设备由 Cursor Agent CLI 改码；Codex/Claude 由 Codex CLI 改码；各设备 push 独立 Git 分支。',
+  title: '向指定设备派发一个子任务',
+  description: '每次调用只创建一个子任务：AI 自行决定内容、目标设备和依赖。首次调用创建任务并派发；后续调用传 task_id 向同一任务追加子任务。后端不拆分任务。',
   inputSchema: {
-    title: z.string().min(1).describe('任务标题'),
-    description: z.string().min(1).describe('详细实现要求，建议按句子列出可并行的子任务'),
-    repo_url: z.string().optional().describe('Git 仓库地址（可选；留空则使用工作设备本地任务目录）'),
-    branch: z.string().default('main').describe('基础分支'),
+    title: z.string().min(1).describe('子任务标题（首次调用时亦作为任务标题）'),
+    prompt: z.string().min(1).describe('该子任务的具体实现要求，写入工作设备 Agent'),
+    device_id: z.string().min(1).describe('目标工作设备 ID（devfleet_list_devices 返回）'),
+    task_id: z.string().optional().describe('已有任务 ID；省略则创建新任务'),
+    repo_url: z.string().optional().describe('Git 仓库地址（首次创建任务时必填或留空用本地目录）'),
+    branch: z.string().default('main').describe('基础分支（首次创建任务时使用）'),
+    subtask_title: z.string().optional().describe('子任务标题；默认与 title 相同'),
+    depends_on: z.array(z.string()).optional().describe('前置子任务 ID 列表，由 AI 指定依赖顺序'),
   },
 }, async (input) => result(await api('/api/tasks', {
   method: 'POST',

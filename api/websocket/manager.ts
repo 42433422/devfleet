@@ -147,6 +147,9 @@ export function attachWebSocket(wss: WSServer) {
           }
 
           if (msg.type === 'tool_status') {
+            if (!msg.capabilities || typeof msg.capabilities !== 'object') {
+              return;
+            }
             db.tools.bulkUpsert(device.id, msg.tools || []);
             if (msg.capabilities) {
               const caps = { ...msg.capabilities, updated_at: new Date().toISOString() };

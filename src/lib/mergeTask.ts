@@ -24,6 +24,10 @@ export function buildMergeMcpPrompt(input: MergeTaskInput): string {
 ## 待合并分支
 ${branches || '- （无子任务分支）'}
 
+## 说明
+Trae 工作设备在 dispatch 后已自动 Computer Use，无需用户手动打开 Trae。
+若子任务已全部 completed，直接合并即可。
+
 ## 请调用 MCP 工具
 devfleet_merge_task({
   "task_id": "${input.taskId}",
@@ -31,7 +35,7 @@ devfleet_merge_task({
   "push": ${push}
 })
 
-合并成功后告诉我 commit SHA。`;
+合并成功后告诉我 commit SHA 与各阶段耗时。`;
 }
 
 export function defaultMergeWorkspace(): string {

@@ -8,6 +8,7 @@ import { agentApi, isDesktopApp } from '@/lib/agent';
 import { buildMergeMcpPrompt, defaultMergeWorkspace } from '@/lib/mergeTask';
 import { api } from '@/lib/api';
 import ToolBadge from '@/components/ToolBadge';
+import TaskPipeline from '@/components/TaskPipeline';
 
 function formatTime(t: string) {
   try {
@@ -220,6 +221,8 @@ export default function TaskDetail() {
             <p className="text-sm text-zinc-400">{currentTask.description}</p>
           )}
         </div>
+
+        <TaskPipeline task={currentTask} />
 
         <div className="h-2 bg-zinc-800/60 rounded-full overflow-hidden mb-4">
           <div

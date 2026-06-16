@@ -9,6 +9,7 @@ import {
   isSubBlocked,
   reconcileTask,
   executorMissing,
+  parseDependsOn,
 } from '../lib/dispatch.js';
 import { hasDevice } from '../websocket/manager.js';
 
@@ -134,20 +135,149 @@ router.get('/:id/logs', async (req: Request, res: Response): Promise<void> => {
 
 router.post('/', async (req: Request, res: Response): Promise<void> => {
   const userId = req.user!.id;
-  const body = (req.body || {}) as {
-    title?: string;
-    description?: string;
-    repo_url?: string;
-    branch?: string;
-    sequential?: boolean;
-    assignments?: Array<{ device_id: string; sub_index?: number }>;
-  };
-  const title = (body.title || '').trim() || '开发任务';
-  const description = (body.description || '').trim() || '完成开发';
-  const repo_url = (body.repo_url || '').trim();
-  const branch = (body.branch || 'main').trim() || 'main';
+  const body = (req.body || {}) as Record<string, unknown>;
+
+  if (typeof body.device_id === 'string' && body.device_id.trim()) {
+    await handleAiSubtaskDispatch(userId, body, res);
+    return;
+  }
+
+  await handleUiAutoSplitTask(userId, body, res);
+});
+
+async function handleAiSubtaskDispatch(
+  userId: string,
+  body: Record<string, unknown>,
+  res: Response,
+): Promise<void> {
+  const deviceId = String(body.device_id || '').trim();
+  const title = String(body.title || '').trim();
+  const prompt = String(body.prompt || body.description || '').trim();
+  const taskId = String(body.task_id || '').trim();
+  const repo_url = String(body.repo_url || '').trim();
+  const branch = String(body.branch || body.base_branch || 'main').trim() || 'main';
+  const subtaskTitle = String(body.subtask_title || title).trim();
+  const dependsOn = parseDependsOn(body.depends_on);
+
+  if (!title) {
+    res.status(400).json({ error: 'title 不能为空' });
+    return;
+  }
+  if (!prompt) {
+    res.status(400).json({ error: 'prompt（或 description）不能为空' });
+    return;
+  }
+
+  const device = db.devices.findById(deviceId);
+  if (!device || device.user_id !== userId) {
+    res.status(400).json({ error: '设备不存在或不属于当前用户' });
+    return;
+  }
+  if (!hasDevice(deviceId)) {
+    res.status(400).json({ error: `设备 ${device.name} 未在线，请启动 DevFleet 本机代理` });
+    return;
+  }
+  if (executorMissing(deviceId)) {
+    const devTool = normalizeDevTool(device.dev_tool);
+    const need = devTool === 'cursor'
+      ? 'Cursor Agent CLI（agent login）'
+      : devTool === 'trae'
+        ? 'Trae IDE（混合模式）'
+        : 'Codex CLI（codex login）';
+    res.status(400).json({ error: `工作设备 ${device.name} 缺少自动改码执行器：${need}` });
+    return;
+  }
+
+  let task = taskId ? db.tasks.findById(taskId) : null;
+  if (taskId) {
+    if (!task || task.user_id !== userId) {
+      res.status(404).json({ error: '任务不存在' });
+      return;
+    }
+    if (task.status === 'merged') {
+      res.status(400).json({ error: '任务已合并，无法继续派发子任务' });
+      return;
+    }
+  } else {
+    if (repo_url && !(repo_url.startsWith('https://') || repo_url.startsWith('http://') || repo_url.startsWith('git@'))) {
+      res.status(400).json({ error: '仓库地址必须是 HTTP(S) 或 SSH Git 地址，或留空使用工作设备本地目录' });
+      return;
+    }
+    task = db.tasks.create({
+      user_id: userId,
+      title,
+      description: prompt,
+      status: 'running',
+      repo_url,
+      branch,
+    });
+  }
+
+  const existingSubs = db.subTasks.findAllByTaskId(task!.id);
+  const subIdx = existingSubs.length;
+  if (dependsOn.length > 0) {
+    const validIds = new Set(existingSubs.map((sub) => sub.id));
+    const invalid = dependsOn.filter((id) => !validIds.has(id));
+    if (invalid.length > 0) {
+      res.status(400).json({ error: `depends_on 包含无效子任务 ID: ${invalid.join(', ')}` });
+      return;
+    }
+  }
+
+  const toolName = normalizeDevTool(device.dev_tool);
+  const sub = db.subTasks.create({
+    task_id: task!.id,
+    device_id: device.id,
+    tool_name: toolName,
+    status: 'pending',
+    branch_name: branchNameFromTask(task!.id, subIdx, toolName),
+    progress: 0,
+    title: subtaskTitle,
+    description: prompt,
+    depends_on: dependsOn,
+    sort_order: subIdx,
+    attempt_count: 0,
+    max_attempts: 2,
+  });
+
+  const repoHint = task!.repo_url
+    ? `仓库：${task!.repo_url}`
+    : '未提供远程仓库，将使用工作设备本地目录';
+  const deps = dependsOn.length;
+  appendLog(
+    userId,
+    task!.id,
+    sub.id,
+    `子任务「${sub.title}」已派发至 ${device.name}（${sub.tool_name}），分支 ${sub.branch_name}。${deps > 0 ? `等待 ${deps} 个前置子任务完成。` : '依赖已满足，等待派发。'} ${repoHint}`,
+    'info',
+    sub.device_id,
+  );
+
+  dispatchReadySubs(userId, task!.id);
+  reconcileTask(userId, task!.id);
+
+  const serialized = serializeTask(task!.id);
+  broadcast(userId, {
+    type: taskId ? 'task_updated' : 'task_created',
+    task_id: task!.id,
+    ...serialized,
+  });
+  res.status(200).json({ task: serialized, subtask: serializeSubTask(sub) });
+}
+
+async function handleUiAutoSplitTask(
+  userId: string,
+  body: Record<string, unknown>,
+  res: Response,
+): Promise<void> {
+  const title = String(body.title || '').trim() || '开发任务';
+  const description = String(body.description || '').trim() || '完成开发';
+  const repo_url = String(body.repo_url || '').trim();
+  const branch = String(body.branch || 'main').trim() || 'main';
   const sequential = Boolean(body.sequential);
-  const assignments = Array.isArray(body.assignments) ? body.assignments : [];
+  const assignments = Array.isArray(body.assignments)
+    ? (body.assignments as Array<{ device_id: string; sub_index?: number }>)
+    : [];
 
   if (repo_url && !(repo_url.startsWith('https://') || repo_url.startsWith('http://') || repo_url.startsWith('git@'))) {
     res.status(400).json({ error: '仓库地址必须是 HTTP(S) 或 SSH Git 地址，或留空使用工作设备本地目录' });
@@ -259,7 +389,7 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
   const serialized = serializeTask(task.id);
   broadcast(userId, { type: 'task_created', task_id: task.id, ...serialized });
   res.status(200).json({ task: serialized });
-});
+}
 
 router.post('/:id/subtasks/:subtaskId/progress', async (req: Request, res: Response): Promise<void> => {
   const userId = req.user!.id;

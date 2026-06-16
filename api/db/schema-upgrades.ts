@@ -1,4 +1,4 @@
-import type { DatabaseSync } from 'node:sqlite';
+import type { DevFleetDatabase } from './sqlite.js';
 
 const COLUMN_UPGRADES: Array<{ table: string; column: string; ddl: string }> = [
   { table: 'devices', column: 'capabilities', ddl: 'ALTER TABLE devices ADD COLUMN capabilities TEXT' },
@@ -13,12 +13,12 @@ const COLUMN_UPGRADES: Array<{ table: string; column: string; ddl: string }> = [
   { table: 'log_entries', column: 'task_id', ddl: 'ALTER TABLE log_entries ADD COLUMN task_id TEXT' },
 ];
 
-function hasColumn(database: DatabaseSync, table: string, column: string): boolean {
+function hasColumn(database: DevFleetDatabase, table: string, column: string): boolean {
   const rows = database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
   return rows.some((row) => row.name === column);
 }
 
-export function applySchemaUpgrades(database: DatabaseSync): void {
+export function applySchemaUpgrades(database: DevFleetDatabase): void {
   for (const upgrade of COLUMN_UPGRADES) {
     if (!hasColumn(database, upgrade.table, upgrade.column)) {
       database.exec(upgrade.ddl);

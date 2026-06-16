@@ -566,7 +566,577 @@ section {
   line-height: 1.7;
 }
 
-/* ===== DEMO SECTION ===== */
+/* ===== DEMO THEATER ===== */
+.demo-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 28px;
+  flex-wrap: wrap;
+}
+
+.demo-btn {
+  appearance: none;
+  border: 1px solid var(--accent);
+  background: var(--accent-glow);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 10px 20px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.25s;
+}
+
+.demo-btn:hover {
+  background: var(--accent);
+  color: #041510;
+  box-shadow: 0 0 24px var(--accent-glow);
+}
+
+.demo-btn.secondary {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--fg-muted);
+}
+
+.demo-btn.secondary:hover {
+  border-color: var(--fg-muted);
+  color: var(--fg);
+  background: var(--bg-elevated);
+  box-shadow: none;
+}
+
+.demo-status {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+.demo-status.error { color: var(--warning); }
+.demo-status.ok { color: var(--accent); }
+
+.demo-mode-tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+}
+
+.demo-mode-tag.live {
+  color: var(--accent);
+  border-color: rgba(0, 229, 160, 0.35);
+  background: var(--accent-glow);
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+.demo-theater {
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr 1fr;
+  gap: 16px;
+  margin-top: 32px;
+  min-height: 520px;
+}
+
+.demo-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 480px;
+  transition: border-color 0.35s, box-shadow 0.35s;
+}
+
+.demo-panel.active {
+  border-color: rgba(0, 229, 160, 0.45);
+  box-shadow: 0 0 32px rgba(0, 229, 160, 0.08);
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+}
+
+.panel-title {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-muted);
+  letter-spacing: 0.5px;
+}
+
+.panel-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+}
+
+.panel-badge.live {
+  color: var(--accent);
+  border-color: rgba(0, 229, 160, 0.35);
+  background: var(--accent-glow);
+}
+
+.panel-body {
+  padding: 16px;
+  flex: 1;
+  overflow: auto;
+  font-size: 13px;
+}
+
+/* Cursor AI panel */
+.chat-stream { display: flex; flex-direction: column; gap: 12px; }
+
+.chat-bubble {
+  border-radius: 12px;
+  padding: 12px 14px;
+  line-height: 1.65;
+  opacity: 0;
+  transform: translateY(8px);
+  animation: chatIn 0.45s ease forwards;
+}
+
+@keyframes chatIn {
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.chat-bubble.user {
+  background: rgba(59, 157, 255, 0.08);
+  border: 1px solid rgba(59, 157, 255, 0.18);
+  align-self: flex-end;
+  max-width: 92%;
+}
+
+.chat-bubble.ai {
+  background: rgba(0, 229, 160, 0.06);
+  border: 1px solid rgba(0, 229, 160, 0.16);
+  max-width: 100%;
+}
+
+.chat-bubble.tool {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.chat-bubble.thinking {
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--fg-muted);
+  font-size: 12px;
+  padding: 8px 12px;
+}
+
+.chat-bubble .label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  margin-bottom: 6px;
+}
+
+.tool-call-name { color: var(--accent); font-weight: 700; }
+.tool-call-meta { color: var(--fg-muted); margin-top: 6px; }
+
+.typing-dots {
+  display: inline-flex;
+  gap: 4px;
+  vertical-align: middle;
+}
+
+.typing-dots span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: typingDot 1.2s infinite;
+}
+
+.typing-dots span:nth-child(2) { animation-delay: 0.15s; }
+.typing-dots span:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes typingDot {
+  0%, 60%, 100% { opacity: 0.25; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-3px); }
+}
+
+/* Fleet hub panel */
+.device-list { display: flex; flex-direction: column; gap: 10px; }
+
+.device-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  transition: all 0.35s;
+}
+
+.device-row.online {
+  border-color: rgba(0, 229, 160, 0.35);
+  box-shadow: inset 0 0 0 1px rgba(0, 229, 160, 0.08);
+}
+
+.device-row.busy {
+  border-color: rgba(255, 107, 53, 0.35);
+}
+
+.device-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-dim);
+  flex-shrink: 0;
+}
+
+.device-row.online .device-dot {
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent-glow);
+}
+
+.device-row.busy .device-dot {
+  background: var(--warning);
+  animation: pulse-dot 1.2s infinite;
+}
+
+.device-info { flex: 1; min-width: 0; }
+.device-name { font-weight: 600; font-size: 13px; }
+.device-meta { font-family: var(--font-mono); font-size: 11px; color: var(--fg-dim); margin-top: 2px; }
+
+.device-progress {
+  height: 4px;
+  background: var(--bg-elevated);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-top: 8px;
+}
+
+.device-progress > span {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--accent-dim), var(--accent));
+  transition: width 0.6s ease;
+}
+
+.task-card {
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px dashed var(--border);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  opacity: 0;
+  transform: translateY(6px);
+  transition: all 0.4s;
+}
+
+.task-card.show {
+  opacity: 1;
+  transform: translateY(0);
+  border-color: rgba(0, 229, 160, 0.35);
+  color: var(--fg);
+}
+
+/* Trae panel */
+.trae-window {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: #111118;
+}
+
+.trae-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  background: #1a1a24;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+
+.trae-layout {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  min-height: 280px;
+}
+
+.trae-sidebar {
+  border-right: 1px solid var(--border);
+  padding: 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+
+.trae-file {
+  padding: 4px 6px;
+  border-radius: 4px;
+  margin-bottom: 4px;
+}
+
+.trae-file.active {
+  background: rgba(0, 229, 160, 0.12);
+  color: var(--accent);
+}
+
+.trae-editor {
+  padding: 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.7;
+  color: #c8c8d8;
+}
+
+.trae-line { opacity: 0.55; }
+.trae-line.highlight { opacity: 1; color: var(--accent); animation: lineGlow 0.8s ease; }
+
+@keyframes lineGlow {
+  from { background: rgba(0, 229, 160, 0.2); }
+  to { background: transparent; }
+}
+
+.trae-input {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  color: var(--fg-muted);
+  min-height: 64px;
+  position: relative;
+}
+
+.trae-input.filled {
+  color: var(--fg);
+  border-color: rgba(0, 229, 160, 0.35);
+}
+
+.trae-input .caret {
+  display: inline-block;
+  width: 2px;
+  height: 14px;
+  background: var(--accent);
+  vertical-align: text-bottom;
+  animation: blink 1s step-end infinite;
+}
+
+.trae-input.typing .caret { display: none; }
+
+.trae-agent-bar {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(168, 85, 247, 0.08);
+  border: 1px solid rgba(168, 85, 247, 0.2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--purple);
+  opacity: 0;
+  transform: translateY(4px);
+  transition: all 0.35s;
+}
+
+.trae-agent-bar.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.merge-flash {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--accent-glow);
+  border: 1px solid rgba(0, 229, 160, 0.3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+  opacity: 0;
+  transform: scale(0.98);
+  transition: all 0.4s;
+}
+
+.merge-flash.show {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.experience-banner {
+  margin-top: 24px;
+  padding: 16px 18px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: linear-gradient(135deg, rgba(0,229,160,0.06), rgba(59,157,255,0.04));
+  font-size: 14px;
+  color: var(--fg-muted);
+  line-height: 1.75;
+}
+
+.experience-banner strong { color: var(--fg); font-weight: 600; }
+.experience-banner .bad { color: var(--warning); }
+.experience-banner .good { color: var(--accent); }
+
+/* AI Playbook — 网页即规格 */
+.ai-playbook {
+  margin-top: 28px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.ai-playbook-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.ai-playbook-head h3 {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.5px;
+}
+
+.ai-playbook-head p {
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin-top: 4px;
+}
+
+.ai-playbook-copy {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.ai-playbook-copy:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.ai-playbook-body {
+  padding: 0;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.ai-playbook pre {
+  margin: 0;
+  padding: 18px 20px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.75;
+  color: #b8b8cc;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ai-playbook .hl-kw { color: var(--purple); }
+.ai-playbook .hl-fn { color: var(--accent); }
+.ai-playbook .hl-cm { color: var(--fg-dim); }
+.ai-playbook .hl-str { color: var(--info); }
+.ai-playbook .hl-num { color: var(--warning); }
+
+/* Timing strip */
+.demo-timing {
+  margin-top: 20px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: all 0.5s;
+}
+
+.demo-timing.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.timing-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.timing-item {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.timing-item .name { color: var(--fg-muted); font-size: 11px; }
+.timing-item .val { color: var(--accent); font-size: 18px; font-weight: 700; margin-top: 4px; }
+
+.step-pills {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+
+.step-pill {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  transition: all 0.35s;
+}
+
+.step-pill.done {
+  border-color: rgba(0, 229, 160, 0.35);
+  color: var(--accent);
+  background: var(--accent-glow);
+}
+
+.step-pill.active {
+  border-color: var(--warning);
+  color: var(--warning);
+  background: rgba(255, 107, 53, 0.08);
+}
+
+/* ===== DEMO (legacy terminal fallback) ===== */
 .demo-terminal {
   background: var(--bg);
   border: 1px solid var(--border);
@@ -681,6 +1251,8 @@ section {
   .tools-grid { grid-template-columns: 1fr; }
   .compare-table { font-size: 12px; }
   .compare-table thead th, .compare-table tbody td { padding: 10px 12px; }
+  .demo-theater { grid-template-columns: 1fr; min-height: auto; }
+  .demo-panel { min-height: 320px; }
 }
 
 /* ===== SCROLLBAR ===== */
@@ -824,8 +1396,8 @@ section {
   <div class="container">
     <div class="reveal">
       <p class="section-tag">// MCP Integration</p>
-      <h2 class="section-title">7 个 MCP 工具，<br>AI 的舰队操控台</h2>
-      <p class="section-desc">标准 MCP 协议，兼容 Trae、Cursor、Claude Code、Codex。AI 像调用函数一样调度你的设备舰队。</p>
+      <h2 class="section-title">9 个 MCP 工具，<br>AI 的舰队操控台</h2>
+      <p class="section-desc">标准 MCP 协议，兼容 Trae、Cursor、Claude Code、Codex。含 Computer Use 自动向 Trae 输入框写入任务。</p>
     </div>
 
     <div class="tools-grid">
@@ -860,9 +1432,9 @@ section {
         <p>工作设备上的 AI Agent 读取当前分配给自己的任务，开始执行。</p>
       </div>
       <div class="tool-card reveal">
-        <div class="tool-name">devfleet_report_task_progress</div>
-        <h3>回写执行进度</h3>
-        <p>工作设备上的 AI Agent 回报阶段性进度和日志，完成后自动提交推送。</p>
+        <div class="tool-name">devfleet_computer_use_start_trae_task</div>
+        <h3>Computer Use 发任务</h3>
+        <p>自动打开 Trae 工作区、点击「新任务」并写入 prompt，无需手动复制粘贴。</p>
       </div>
     </div>
   </div>
@@ -968,48 +1540,168 @@ section {
   <div class="container">
     <div class="reveal">
       <p class="section-tag">// Live Demo</p>
-      <h2 class="section-title">看看 AI 怎么用</h2>
+      <h2 class="section-title">网页演示：AI 怎么用 DevFleet</h2>
+      <p class="section-desc">这不是「调 MCP 工具清单」，而是一条<strong> AI 指挥官闭环</strong>：看设备 → 派发 → Computer Use 把任务写进 Trae → 等完成 → 自动 merge，并实时展示各阶段耗时。</p>
+      <div class="experience-banner">
+        <strong>蓝图目标：</strong>用户只说一句「重构 README 并跑 E2E」，
+        <span class="bad">不要</span> 让用户手动打开 Trae、复制 prompt、盯 MCP 报错；
+        <span class="good">要</span> 由 AI 自动 <code>list_devices → dispatch → computer_use → wait → merge</code>，网页演示即真实体验规格。
+      </div>
     </div>
 
-    <div class="demo-terminal reveal">
-      <div class="terminal-header">
-        <span class="terminal-dot red"></span>
-        <span class="terminal-dot yellow"></span>
-        <span class="terminal-dot green"></span>
-        <span class="terminal-title">trae — DevFleet MCP Session</span>
+    <div class="demo-controls reveal">
+      <button class="demo-btn" id="demoStart" type="button">▶ 开始演示</button>
+      <button class="demo-btn secondary" id="demoReplay" type="button">↻ 重新播放</button>
+      <span class="demo-mode-tag" id="demoModeTag">演示模式</span>
+      <span class="demo-status" id="demoStatus">就绪 · 点击开始</span>
+    </div>
+
+    <div class="step-pills reveal" id="stepPills">
+      <span class="step-pill" data-step="list">① list_devices</span>
+      <span class="step-pill" data-step="dispatch">② dispatch_task</span>
+      <span class="step-pill" data-step="computer">③ computer_use</span>
+      <span class="step-pill" data-step="trae">④ Trae 改码</span>
+      <span class="step-pill" data-step="wait">⑤ wait_for_task</span>
+      <span class="step-pill" data-step="merge">⑥ merge_task</span>
+    </div>
+
+    <div class="demo-theater reveal">
+      <!-- Cursor AI -->
+      <div class="demo-panel" id="panelAi">
+        <div class="panel-head">
+          <span class="panel-title">Cursor · AI Commander</span>
+          <span class="panel-badge" id="aiBadge">MCP</span>
+        </div>
+        <div class="panel-body">
+          <div class="chat-stream" id="chatStream"></div>
+        </div>
       </div>
-      <div class="terminal-body">
-        <div><span class="prompt">▸ </span><span class="cmd">用户：帮我重构这个项目，把认证、API、测试三个模块分开改</span></div>
-        <br>
-        <div><span class="output">AI 正在分析项目结构...</span></div>
-        <div><span class="output">检测到 3 台在线设备：</span></div>
-        <div><span class="info">&nbsp;&nbsp;🖥️ office-pc (Trae) — 在线</span></div>
-        <div><span class="info">&nbsp;&nbsp;💻 home-mac (Cursor) — 在线</span></div>
-        <div><span class="info">&nbsp;&nbsp;☁️ cloud (Claude Code) — 在线</span></div>
-        <br>
-        <div><span class="success">✓ 调用 devfleet_dispatch_task</span></div>
-        <div><span class="output">&nbsp;&nbsp;→ office-pc: 重构认证模块，改用 JWT + refresh token</span></div>
-        <div><span class="output">&nbsp;&nbsp;→ home-mac: 重构 API 层，拆分为独立路由模块</span></div>
-        <div><span class="output">&nbsp;&nbsp;→ cloud: 补充单元测试，覆盖率目标 80%</span></div>
-        <br>
-        <div><span class="success">✓ 调用 devfleet_wait_for_task</span></div>
-        <div><span class="output">&nbsp;&nbsp;等待中... office-pc ████████░░ 80%</span></div>
-        <div><span class="output">&nbsp;&nbsp;等待中... home-mac &nbsp;██████████ 100% ✓</span></div>
-        <div><span class="output">&nbsp;&nbsp;等待中... cloud &nbsp;&nbsp;&nbsp;&nbsp;██████░░░░ 60%</span></div>
-        <br>
-        <div><span class="success">✓ 全部完成</span></div>
-        <br>
-        <div><span class="success">✓ 调用 devfleet_merge_task</span></div>
-        <div><span class="output">&nbsp;&nbsp;git fetch origin devfleet/trae/sub-1-a3f2</span></div>
-        <div><span class="output">&nbsp;&nbsp;git fetch origin devfleet/cursor/sub-2-b7e1</span></div>
-        <div><span class="output">&nbsp;&nbsp;git fetch origin devfleet/claude/sub-3-c9d4</span></div>
-        <div><span class="output">&nbsp;&nbsp;git merge --no-ff devfleet/trae/sub-1-a3f2 ✓</span></div>
-        <div><span class="output">&nbsp;&nbsp;git merge --no-ff devfleet/cursor/sub-2-b7e1 ✓</span></div>
-        <div><span class="output">&nbsp;&nbsp;git merge --no-ff devfleet/claude/sub-3-c9d4 ✓</span></div>
-        <div><span class="output">&nbsp;&nbsp;git push origin main ✓</span></div>
-        <br>
-        <div><span class="success">✓ 3个模块全部重构完成，已合并到 main 分支</span></div>
-        <div><span class="prompt">▸ </span><span class="cursor-blink"></span></div>
+
+      <!-- DevFleet Hub -->
+      <div class="demo-panel" id="panelFleet">
+        <div class="panel-head">
+          <span class="panel-title">DevFleet · Fleet Hub</span>
+          <span class="panel-badge live" id="fleetBadge">localhost:3001</span>
+        </div>
+        <div class="panel-body">
+          <div class="device-list" id="deviceList">
+            <div class="device-row" data-device="mac">
+              <span class="device-dot"></span>
+              <div class="device-info">
+                <div class="device-name">Home Mac</div>
+                <div class="device-meta">trae · offline</div>
+                <div class="device-progress"><span></span></div>
+              </div>
+            </div>
+            <div class="device-row" data-device="office">
+              <span class="device-dot"></span>
+              <div class="device-info">
+                <div class="device-name">Office PC</div>
+                <div class="device-meta">cursor · offline</div>
+                <div class="device-progress"><span></span></div>
+              </div>
+            </div>
+            <div class="device-row" data-device="cloud">
+              <span class="device-dot"></span>
+              <div class="device-info">
+                <div class="device-name">Cloud Server</div>
+                <div class="device-meta">claude_code · offline</div>
+                <div class="device-progress"><span></span></div>
+              </div>
+            </div>
+          </div>
+          <div class="task-card" id="taskCard">
+            <div>task_id: e2e-demo-7f3a…</div>
+            <div>branch: devfleet/trae/sub-1-7f3a</div>
+            <div>repo: /tmp/devfleet-e2e/bare.git</div>
+            <div>status: <span id="taskStatusText">pending</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Trae Worker -->
+      <div class="demo-panel" id="panelTrae">
+        <div class="panel-head">
+          <span class="panel-title">Trae CN · Worker</span>
+          <span class="panel-badge" id="traeBadge">Computer Use</span>
+        </div>
+        <div class="panel-body">
+          <div class="trae-window">
+            <div class="trae-titlebar">
+              <span class="terminal-dot red"></span>
+              <span class="terminal-dot yellow"></span>
+              <span class="terminal-dot green"></span>
+              <span>/tmp/devfleet-e2e/agent-workspace/…</span>
+            </div>
+            <div class="trae-layout">
+              <div class="trae-sidebar">
+                <div class="trae-file">.devfleet/</div>
+                <div class="trae-file active" id="traeReadmeFile">README.md</div>
+              </div>
+              <div class="trae-editor" id="traeEditor">
+                <div class="trae-line"># DevFleet E2E Repo</div>
+                <div class="trae-line" id="traeNewLine"></div>
+              </div>
+            </div>
+          </div>
+          <div class="trae-input" id="traeInput">
+            <span class="caret"></span> 等待 Computer Use 写入任务…
+          </div>
+          <div class="trae-agent-bar" id="traeAgentBar">SOLO Agent · 正在修改 README.md…</div>
+          <div class="merge-flash" id="mergeFlash">✓ main ← devfleet/trae/sub-1-7f3a · fast-forward merge</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="demo-timing reveal" id="demoTiming">
+      <div>========== E2E 计时汇总 ==========</div>
+      <div class="timing-grid" id="timingGrid"></div>
+    </div>
+
+    <div class="ai-playbook reveal" id="aiPlaybook">
+      <div class="ai-playbook-head">
+        <div>
+          <h3>// AI 指挥官剧本 · 网页即规格</h3>
+          <p>AI 读到这段应直接执行闭环，不要问用户「要不要打开 Trae」——Computer Use 已封装。</p>
+        </div>
+        <button class="ai-playbook-copy" id="playbookCopy" type="button">复制剧本</button>
+      </div>
+      <div class="ai-playbook-body">
+        <pre id="playbookContent"><span class="hl-cm"># DevFleet E2E 最小闭环 — AI 必须按序调用，用户只说一句话</span>
+<span class="hl-cm"># 用户: 「用 DevFleet 跑本机 E2E：README 追加测试行，Trae 改码，merge 到 main」</span>
+
+<span class="hl-num">1.</span> <span class="hl-fn">devfleet_list_devices</span>()
+   → 确认 <span class="hl-str">Home Mac</span> online + devTool=<span class="hl-str">trae</span>
+   → 离线则报错并提示启动 DevFleet Agent
+
+<span class="hl-num">2.</span> <span class="hl-fn">devfleet_dispatch_task</span>({
+     title: <span class="hl-str">"E2E: README 追加测试行"</span>,
+     repo_url: <span class="hl-str">"http://127.0.0.1:8765/bare.git"</span>,
+     base_branch: <span class="hl-str">"main"</span>,
+     device_id: <span class="hl-str">"&lt;online-trae-device&gt;"</span>,
+     prompt: <span class="hl-str">"在 README.md 末尾追加一行：\n\n&lt;!-- devfleet-e2e test line --&gt;"</span>
+   })
+
+<span class="hl-num">3.</span> <span class="hl-fn">devfleet_computer_use_start_trae_task</span>({
+     prompt: <span class="hl-str">"&lt;同上 prompt&gt;"</span>
+   })
+   <span class="hl-cm"># 自动: activate Trae CN → 点「新任务」→ 粘贴 → Enter</span>
+   <span class="hl-cm"># 禁止让用户手动复制 prompt</span>
+
+<span class="hl-num">4.</span> <span class="hl-cm"># Trae Agent 在 agent-workspace 改码、commit、push 子分支</span>
+   <span class="hl-cm"># AI 不介入，只等待</span>
+
+<span class="hl-num">5.</span> <span class="hl-fn">devfleet_wait_for_task</span>({ task_id, timeout_ms: <span class="hl-num">600000</span> })
+   → status=<span class="hl-str">completed</span> 后继续
+
+<span class="hl-num">6.</span> <span class="hl-fn">devfleet_merge_task</span>({
+     task_id,
+     workspace_path: <span class="hl-str">"/tmp/devfleet-e2e/merge-workspace"</span>,
+     push: <span class="hl-kw">true</span>
+   })
+   → 汇报各步耗时 + merge commit hash
+
+<span class="hl-cm"># 期望体验: MCP 调用 ms 级 · Computer Use ~2s · Trae 改码 ~10-60s · 全程零手动</span></pre>
       </div>
     </div>
   </div>
@@ -1022,16 +1714,358 @@ section {
 </footer>
 
 <script>
-// Scroll reveal
+// ===== Scroll reveal =====
 const observer = new IntersectionObserver((entries) => {
   entries.forEach(entry => {
-    if (entry.isIntersecting) {
-      entry.target.classList.add('visible');
-    }
+    if (entry.isIntersecting) entry.target.classList.add('visible');
   });
 }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
-
 document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+
+// ===== Live Demo Engine（网页 = 真实体验蓝图）=====
+(() => {
+  const $ = (sel) => document.querySelector(sel);
+  const $$ = (sel) => document.querySelectorAll(sel);
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  const DEMO = {
+    taskId: 'e2e-demo-7f3a9c2b',
+    branch: 'devfleet/trae/sub-1-7f3a',
+    marker: '<!-- devfleet-e2e test line -->',
+    prompt: '在 README.md 末尾追加一行：\\n\\n<!-- devfleet-e2e test line -->',
+    timings: {},
+    // E2E 实测 MCP 量级（演示用，避免动画时间误导）
+    preset: { list: 9, dispatch: 3, wait: 1200, merge: 847 },
+  };
+
+  const els = {
+    start: $('#demoStart'),
+    replay: $('#demoReplay'),
+    status: $('#demoStatus'),
+    modeTag: $('#demoModeTag'),
+    fleetBadge: $('#fleetBadge'),
+    chat: $('#chatStream'),
+    pills: $$('#stepPills .step-pill'),
+    panelAi: $('#panelAi'),
+    panelFleet: $('#panelFleet'),
+    panelTrae: $('#panelTrae'),
+    taskCard: $('#taskCard'),
+    taskStatus: $('#taskStatusText'),
+    traeInput: $('#traeInput'),
+    traeEditor: $('#traeEditor'),
+    traeNewLine: $('#traeNewLine'),
+    traeAgentBar: $('#traeAgentBar'),
+    mergeFlash: $('#mergeFlash'),
+    traeBadge: $('#traeBadge'),
+    timingBox: $('#demoTiming'),
+    timingGrid: $('#timingGrid'),
+    devices: {
+      mac: document.querySelector('[data-device="mac"]'),
+      office: document.querySelector('[data-device="office"]'),
+      cloud: document.querySelector('[data-device="cloud"]'),
+    },
+  };
+
+  let running = false;
+  let abort = false;
+  let liveApi = false;
+
+  const probeLiveApi = async () => {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 1500);
+      const res = await fetch('http://localhost:3001/api/health', { signal: ctrl.signal });
+      clearTimeout(t);
+      liveApi = res.ok;
+    } catch {
+      liveApi = false;
+    }
+    if (liveApi) {
+      els.modeTag.textContent = 'LIVE · API 在线';
+      els.modeTag.classList.add('live');
+      els.fleetBadge.textContent = 'localhost:3001 · live';
+    } else {
+      els.modeTag.textContent = '演示模式';
+      els.modeTag.classList.remove('live');
+      els.fleetBadge.textContent = 'localhost:3001';
+    }
+  };
+
+  probeLiveApi();
+
+  const setStatus = (text, kind = '') => {
+    els.status.textContent = text;
+    els.status.className = 'demo-status' + (kind ? ` ${kind}` : '');
+  };
+
+  const setPill = (step, state) => {
+    els.pills.forEach((p) => {
+      if (p.dataset.step !== step) return;
+      p.classList.remove('active', 'done');
+      if (state) p.classList.add(state);
+    });
+  };
+
+  const activatePanel = (panel) => {
+    $$('.demo-panel').forEach((p) => p.classList.remove('active'));
+    panel?.classList.add('active');
+  };
+
+  const addBubble = (type, label, html) => {
+    const div = document.createElement('div');
+    div.className = `chat-bubble ${type}`;
+    div.innerHTML = `<div class="label">${label}</div>${html}`;
+    els.chat.appendChild(div);
+    els.chat.scrollTop = els.chat.scrollHeight;
+    return div;
+  };
+
+  const addThinking = async (ms = 700) => {
+    const bubble = addBubble('thinking', 'Cursor Agent', `
+      <span class="typing-dots"><span></span><span></span><span></span></span> 规划中…`);
+    await sleep(ms);
+    bubble.remove();
+  };
+
+  const finishRun = (ok = true) => {
+    running = false;
+    els.start.disabled = false;
+    if (!ok && !abort) setStatus('演示中断', 'error');
+  };
+
+  const setDevice = (key, { online, busy, meta, progress }) => {
+    const row = els.devices[key];
+    if (!row) return;
+    row.classList.remove('online', 'busy');
+    if (online) row.classList.add('online');
+    if (busy) row.classList.add('busy');
+    if (meta) row.querySelector('.device-meta').textContent = meta;
+    if (progress != null) row.querySelector('.device-progress > span').style.width = `${progress}%`;
+  };
+
+  const resetDevices = () => {
+    setDevice('mac', { meta: 'trae · offline', progress: 0 });
+    setDevice('office', { meta: 'cursor · offline', progress: 0 });
+    setDevice('cloud', { meta: 'claude_code · offline', progress: 0 });
+    Object.values(els.devices).forEach((r) => r.classList.remove('online', 'busy'));
+  };
+
+  const resetUi = () => {
+    abort = false;
+    els.chat.innerHTML = '';
+    els.pills.forEach((p) => p.classList.remove('active', 'done'));
+    $$('.demo-panel').forEach((p) => p.classList.remove('active'));
+    els.taskCard.classList.remove('show');
+    els.taskStatus.textContent = 'pending';
+    els.traeInput.className = 'trae-input';
+    els.traeInput.innerHTML = '<span class="caret"></span> 等待 Computer Use 写入任务…';
+    els.traeNewLine.textContent = '';
+    els.traeNewLine.className = 'trae-line';
+    els.traeAgentBar.classList.remove('show');
+    els.mergeFlash.classList.remove('show');
+    els.traeBadge.textContent = 'Computer Use';
+    els.traeBadge.classList.remove('live');
+    els.timingBox.classList.remove('show');
+    els.timingGrid.innerHTML = '';
+    resetDevices();
+    DEMO.timings = {};
+  };
+
+  const typeText = async (el, text, speed = 18) => {
+    el.classList.add('typing', 'filled');
+    el.textContent = '';
+    for (let i = 0; i < text.length; i += 1) {
+      if (abort) return;
+      el.textContent += text[i];
+      await sleep(speed);
+    }
+  };
+
+  const fmtMs = (ms) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(2)}s`);
+
+  const showTimings = () => {
+    const rows = [
+      ['list_devices', DEMO.timings.list],
+      ['dispatch_task', DEMO.timings.dispatch],
+      ['computer_use', DEMO.timings.computer],
+      ['Trae 改码', DEMO.timings.trae],
+      ['wait_for_task', DEMO.timings.wait],
+      ['merge_task', DEMO.timings.merge],
+      ['总耗时', DEMO.timings.total],
+    ];
+    els.timingGrid.innerHTML = rows.map(([name, val]) => `
+      <div class="timing-item">
+        <div class="name">${name}</div>
+        <div class="val">${fmtMs(val || 0)}</div>
+      </div>`).join('');
+    els.timingBox.classList.add('show');
+  };
+
+  const runDemo = async () => {
+    if (running) return;
+    running = true;
+    abort = false;
+    resetUi();
+    const tAll = performance.now();
+    els.start.disabled = true;
+    activatePanel(els.panelAi);
+
+    addBubble('user', 'You', '用 DevFleet 跑本机最小闭环：README 追加测试行，Trae 改码，最后 merge 到 main。');
+    await addThinking(650);
+    if (abort) { finishRun(false); return; }
+
+    // ① list_devices
+    setPill('list', 'active');
+    activatePanel(els.panelAi);
+    setStatus('① devfleet_list_devices…');
+    const t0 = performance.now();
+    await sleep(350);
+    addBubble('ai', 'Cursor Agent', '先查看舰队状态，确认 Trae 工作设备在线。');
+    await sleep(400);
+    addBubble('tool', 'MCP · devfleet_list_devices', `
+      <div class="tool-call-name">devfleet_list_devices()</div>
+      <div class="tool-call-meta">{ "devices": [ { "name": "Home Mac", "status": "online", "devTool": "trae" } ] }</div>`);
+    activatePanel(els.panelFleet);
+    setDevice('mac', { online: true, meta: 'trae · online', progress: 0 });
+    DEMO.timings.list = liveApi ? Math.max(DEMO.preset.list, Math.round(performance.now() - t0)) : DEMO.preset.list;
+    setPill('list', 'done');
+    await sleep(450);
+    if (abort) { finishRun(false); return; }
+
+    // ② dispatch_task
+    setPill('dispatch', 'active');
+    activatePanel(els.panelAi);
+    setStatus('② devfleet_dispatch_task…');
+    const t1 = performance.now();
+    addBubble('ai', 'Cursor Agent', '设备在线，派发 Git 任务到 Home Mac / Trae。');
+    await sleep(380);
+    addBubble('tool', 'MCP · devfleet_dispatch_task', `
+      <div class="tool-call-name">devfleet_dispatch_task({ ... })</div>
+      <div class="tool-call-meta">title: "E2E: README 追加测试行"<br>repo: bare.git · branch: main</div>`);
+    activatePanel(els.panelFleet);
+    els.taskCard.classList.add('show');
+    els.taskStatus.textContent = 'running';
+    setDevice('mac', { online: true, busy: true, meta: 'trae · running · sub-1-7f3a', progress: 12 });
+    DEMO.timings.dispatch = liveApi ? Math.max(DEMO.preset.dispatch, Math.round(performance.now() - t1)) : DEMO.preset.dispatch;
+    setPill('dispatch', 'done');
+    await sleep(450);
+    if (abort) { finishRun(false); return; }
+
+    // ③ computer_use
+    setPill('computer', 'active');
+    activatePanel(els.panelTrae);
+    setStatus('③ Computer Use → Trae 新任务…');
+    const t2 = performance.now();
+    addBubble('ai', 'Cursor Agent', '不让你手动复制 prompt——调用 Computer Use 打开 Trae、点「新任务」并写入。');
+    await sleep(420);
+    addBubble('tool', 'MCP · computer_use_start_trae_task', `
+      <div class="tool-call-name">devfleet_computer_use_start_trae_task</div>
+      <div class="tool-call-meta">activate Trae CN · 匹配进程 TRAE CN · 点击「新任务」 · Cmd+V · Enter</div>`);
+    els.traeBadge.textContent = 'Computer Use';
+    els.traeBadge.classList.add('live');
+    await sleep(600);
+    await typeText(els.traeInput, DEMO.prompt.replace(/\\n/g, '\n'), 14);
+    DEMO.timings.computer = Math.round(performance.now() - t2);
+    setPill('computer', 'done');
+    await sleep(350);
+    if (abort) { finishRun(false); return; }
+
+    // ④ Trae 改码
+    setPill('trae', 'active');
+    setStatus('④ Trae Agent 执行改码…');
+    const t3 = performance.now();
+    els.traeAgentBar.classList.add('show');
+    els.traeBadge.textContent = 'SOLO Agent';
+    setDevice('mac', { online: true, busy: true, meta: 'trae · coding README.md', progress: 45 });
+    await sleep(1100);
+    els.traeNewLine.textContent = DEMO.marker;
+    els.traeNewLine.className = 'trae-line highlight';
+    setDevice('mac', { online: true, busy: true, meta: 'trae · git commit', progress: 78 });
+    await sleep(850);
+    els.traeInput.textContent = '✓ 任务完成，已保存 README.md';
+    DEMO.timings.trae = Math.round(performance.now() - t3);
+    setPill('trae', 'done');
+    await sleep(350);
+    if (abort) { finishRun(false); return; }
+
+    // ⑤ wait_for_task
+    setPill('wait', 'active');
+    activatePanel(els.panelAi);
+    setStatus('⑤ devfleet_wait_for_task 轮询…');
+    const t4 = performance.now();
+    addBubble('tool', 'MCP · devfleet_wait_for_task', `
+      <div class="tool-call-name">devfleet_wait_for_task({ task_id })</div>
+      <div class="tool-call-meta">polling… progress 78% → 100% · status: completed</div>`);
+    activatePanel(els.panelFleet);
+    setDevice('mac', { online: true, meta: 'trae · completed', progress: 100 });
+    els.taskStatus.textContent = 'completed';
+    DEMO.timings.wait = liveApi ? Math.max(DEMO.preset.wait, Math.round(performance.now() - t4)) : DEMO.preset.wait;
+    setPill('wait', 'done');
+    await sleep(450);
+    if (abort) { finishRun(false); return; }
+
+    // ⑥ merge_task
+    setPill('merge', 'active');
+    activatePanel(els.panelAi);
+    setStatus('⑥ devfleet_merge_task 合并分支…');
+    const t5 = performance.now();
+    addBubble('ai', 'Cursor Agent', '子任务全部完成，在主设备 merge-workspace 合并并 push main。');
+    await sleep(380);
+    addBubble('tool', 'MCP · devfleet_merge_task', `
+      <div class="tool-call-name">devfleet_merge_task({ workspace_path, push: true })</div>
+      <div class="tool-call-meta">fetch → merge origin/${DEMO.branch} → push main</div>`);
+    activatePanel(els.panelFleet);
+    els.mergeFlash.classList.add('show');
+    els.taskStatus.textContent = 'merged';
+    DEMO.timings.merge = liveApi ? Math.max(DEMO.preset.merge, Math.round(performance.now() - t5)) : DEMO.preset.merge;
+    DEMO.timings.total = Object.values(DEMO.timings).reduce((a, b) => a + b, 0);
+    setPill('merge', 'done');
+    showTimings();
+    addBubble('ai', 'Cursor Agent', `闭环完成。list ${fmtMs(DEMO.timings.list)} · dispatch ${fmtMs(DEMO.timings.dispatch)} · Computer Use ${fmtMs(DEMO.timings.computer)} · Trae ${fmtMs(DEMO.timings.trae)} · merge ${fmtMs(DEMO.timings.merge)} · 总计 ${fmtMs(DEMO.timings.total)}。`);
+    setStatus('演示完成 · 这就是 AI 应获得的 DevFleet 体验', 'ok');
+    finishRun(true);
+  };
+
+  els.start?.addEventListener('click', () => runDemo());
+  els.replay?.addEventListener('click', () => {
+    abort = true;
+    running = false;
+    els.start.disabled = false;
+    resetUi();
+    setStatus('就绪 · 点击开始');
+    setTimeout(() => runDemo(), 300);
+  });
+
+  $('#playbookCopy')?.addEventListener('click', async () => {
+    const raw = `# DevFleet E2E 最小闭环
+1. devfleet_list_devices() → 确认 Home Mac online + trae
+2. devfleet_dispatch_task({ repo_url, prompt, device_id })
+3. devfleet_computer_use_start_trae_task({ prompt })  # 禁止让用户手动复制
+4. devfleet_wait_for_task({ task_id, timeout_ms: 600000 })
+5. devfleet_merge_task({ task_id, workspace_path, push: true })`;
+    try {
+      await navigator.clipboard.writeText(raw);
+      const btn = $('#playbookCopy');
+      btn.textContent = '已复制 ✓';
+      setTimeout(() => { btn.textContent = '复制剧本'; }, 2000);
+    } catch {
+      /* ignore */
+    }
+  });
+
+  // 滚到演示区自动播放一次
+  let autoPlayed = false;
+  const demoObserver = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (entry.isIntersecting && !autoPlayed && !running) {
+        autoPlayed = true;
+        setTimeout(() => runDemo(), 600);
+      }
+    });
+  }, { threshold: 0.35 });
+  const demoSection = document.getElementById('demo');
+  if (demoSection) demoObserver.observe(demoSection);
+})();
 </script>
 
 </body>
