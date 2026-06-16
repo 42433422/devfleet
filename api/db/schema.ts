@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS devices (
   connection_allowed INTEGER NOT NULL DEFAULT 1,
   is_primary INTEGER NOT NULL DEFAULT 0,
   dev_tool TEXT,
+  capabilities TEXT,
   last_seen TEXT NOT NULL
 );
 
@@ -62,6 +63,13 @@ CREATE TABLE IF NOT EXISTS sub_tasks (
   status TEXT NOT NULL DEFAULT 'pending',
   branch_name TEXT NOT NULL,
   progress INTEGER NOT NULL DEFAULT 0,
+  title TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  depends_on TEXT NOT NULL DEFAULT '[]',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 2,
+  last_error TEXT,
   created_at TEXT NOT NULL,
   completed_at TEXT
 );
@@ -74,7 +82,9 @@ CREATE TABLE IF NOT EXISTS log_entries (
   sub_task_id TEXT NOT NULL REFERENCES sub_tasks(id) ON DELETE CASCADE,
   content TEXT NOT NULL,
   level TEXT NOT NULL DEFAULT 'info',
-  timestamp TEXT NOT NULL
+  timestamp TEXT NOT NULL,
+  device_id TEXT,
+  task_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_log_entries_sub_task_id ON log_entries(sub_task_id);

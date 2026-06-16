@@ -2,10 +2,13 @@ import http from 'http';
 import { WebSocketServer } from 'ws';
 import app from './app.js';
 import { flushDB } from './db/store.js';
+import { bootstrapDatabase } from './lib/dbBootstrap.js';
 import { attachWebSocket } from './websocket/manager.js';
 import { shutdownBuiltinTunnel, startBuiltinTunnel } from './tunnel/manager.js';
 
 const PORT = Number(process.env.PORT) || 3001;
+
+bootstrapDatabase();
 
 const server = http.createServer(app);
 

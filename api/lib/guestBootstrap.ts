@@ -31,7 +31,7 @@ export function ensureGuestSession(): User {
       bind_code: genBindCode(),
       bind_code_expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
       status: 'offline',
-      activated: false,
+      activated: true,
       dev_tool: 'trae',
       is_primary: true,
     });
