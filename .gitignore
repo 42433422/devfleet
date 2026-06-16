@@ -12,6 +12,7 @@ dist
 dist-mcp
 dist-server
 dist-full
+dist-server-pack
 src-tauri/target
 dist-ssr
 *.app
@@ -24,6 +25,7 @@ dist-ssr
 api/data/*.db
 api/data/*.db-shm
 api/data/*.db-wal
+src-tauri/api/data/
 
 # Editor directories and files
 .vscode/*

@@ -230,14 +230,14 @@ router.post('/me/task-report', async (req: Request, res: Response): Promise<void
   }
 
   reconcileTask(device.user_id, taskId);
-  const task = db.tasks.findById(taskId);
+  const updatedTask = db.tasks.findById(taskId);
   res.status(200).json({
     success: true,
     subTask: serializeSubTask(updated),
-    task: task ? {
-      id: task.id,
-      title: task.title,
-      status: task.status,
+    task: updatedTask ? {
+      id: updatedTask.id,
+      title: updatedTask.title,
+      status: updatedTask.status,
       subTasks: db.subTasks.findAllByTaskId(taskId).map(serializeSubTask),
     } : null,
   });

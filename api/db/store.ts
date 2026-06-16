@@ -256,8 +256,8 @@ export const db = {
       sql().prepare(
         `INSERT INTO devices (
           id, user_id, name, bind_code, bind_code_expires_at, device_token_hash,
-          status, activated, connection_allowed, is_primary, dev_tool, last_seen
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          status, activated, connection_allowed, is_primary, dev_tool, last_seen, capabilities
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         device.id,
         device.user_id,
@@ -271,6 +271,7 @@ export const db = {
         device.is_primary ? 1 : 0,
         device.dev_tool ?? null,
         device.last_seen,
+        device.capabilities ?? null,
       );
       return device;
     },

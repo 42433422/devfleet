@@ -13,6 +13,17 @@ const statusConfig: Record<Device['status'], { color: string; text: string; icon
   connecting: { color: 'text-amber-400', text: '连接中', icon: <RefreshCw size={12} className="animate-spin" /> },
 };
 
+function formatCapabilities(d: Device) {
+  const caps = d.capabilities;
+  if (!caps) return '能力未上报（设备上线后自动探测）';
+  const parts: string[] = [];
+  if (caps.node_version) parts.push(`Node ${caps.node_version}`);
+  parts.push(caps.docker ? `Docker${caps.docker_version ? ` ${caps.docker_version}` : ''}` : '无 Docker');
+  parts.push(caps.gpu ? (caps.gpu_name || 'GPU') : '无 GPU');
+  if (caps.platform) parts.push(`${caps.platform}/${caps.arch || '?'}`);
+  return parts.join(' · ');
+}
+
 function formatTime(t: string) {
   try {
     const d = new Date(t);
@@ -320,7 +331,10 @@ export default function Devices() {
                   </div>
                 </div>
 
-                <p className="text-[10px] text-zinc-600 mb-3">最近活跃：{formatTime(d.lastSeen)}</p>
+                <p className="text-[10px] text-zinc-600 mb-1">最近活跃：{formatTime(d.lastSeen)}</p>
+                <p className="text-[10px] text-zinc-500 mb-3 leading-relaxed" title="Node / Docker / GPU">
+                  {formatCapabilities(d)}
+                </p>
 
                 <label className="block mb-3">
                   <span className="block text-[10px] text-zinc-500 mb-1.5">开发工具（主设备指定）</span>

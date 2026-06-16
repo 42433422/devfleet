@@ -1,0 +1,1038 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DevFleet — AI 多设备并行编码调度系统</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Noto+Sans+SC:wght@300;400;500;700;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f;
+  --bg-card: #12121a;
+  --bg-elevated: #1a1a28;
+  --fg: #e8e8f0;
+  --fg-muted: #6b6b80;
+  --fg-dim: #3d3d52;
+  --accent: #00e5a0;
+  --accent-glow: rgba(0, 229, 160, 0.15);
+  --accent-dim: #00b37d;
+  --warning: #ff6b35;
+  --info: #3b9dff;
+  --purple: #a855f7;
+  --border: #1e1e30;
+  --radius: 12px;
+  --font-display: 'Space Mono', monospace;
+  --font-body: 'Noto Sans SC', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body);
+  line-height: 1.7;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ===== NOISE OVERLAY ===== */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0.03;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ===== GRID BACKGROUND ===== */
+.grid-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background-image:
+    linear-gradient(rgba(0,229,160,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,229,160,0.03) 1px, transparent 1px);
+  background-size: 60px 60px;
+  mask-image: radial-gradient(ellipse 80% 60% at 50% 30%, black 20%, transparent 70%);
+}
+
+/* ===== CONTAINER ===== */
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 24px;
+  position: relative;
+  z-index: 1;
+}
+
+/* ===== HERO ===== */
+.hero {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  position: relative;
+  padding: 80px 24px;
+}
+
+.hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  border: 1px solid var(--accent-dim);
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  margin-bottom: 32px;
+  animation: fadeInDown 0.8s ease-out;
+}
+
+.hero-badge .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 var(--accent-glow); }
+  50% { opacity: 0.6; box-shadow: 0 0 0 8px transparent; }
+}
+
+.hero-title {
+  font-family: var(--font-display);
+  font-size: clamp(48px, 8vw, 96px);
+  font-weight: 700;
+  letter-spacing: -2px;
+  line-height: 1;
+  margin-bottom: 8px;
+  animation: fadeInUp 0.8s ease-out 0.1s both;
+}
+
+.hero-title .accent { color: var(--accent); }
+
+.hero-sub {
+  font-size: clamp(16px, 2.5vw, 22px);
+  font-weight: 300;
+  color: var(--fg-muted);
+  max-width: 640px;
+  margin: 20px auto 48px;
+  animation: fadeInUp 0.8s ease-out 0.2s both;
+}
+
+.hero-sub strong {
+  color: var(--fg);
+  font-weight: 500;
+}
+
+/* ===== HERO VISUAL ===== */
+.hero-visual {
+  width: 100%;
+  max-width: 900px;
+  animation: fadeInUp 1s ease-out 0.3s both;
+}
+
+.fleet-diagram {
+  position: relative;
+  width: 100%;
+  padding: 40px 0;
+}
+
+.fleet-hub {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.hub-icon {
+  width: 80px;
+  height: 80px;
+  border-radius: 20px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 36px;
+  box-shadow: 0 0 40px var(--accent-glow), 0 0 80px rgba(0,229,160,0.08);
+  position: relative;
+}
+
+.hub-icon::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 24px;
+  border: 1px solid rgba(0,229,160,0.3);
+  animation: hub-ring 3s ease-in-out infinite;
+}
+
+@keyframes hub-ring {
+  0%, 100% { transform: scale(1); opacity: 0.5; }
+  50% { transform: scale(1.15); opacity: 0; }
+}
+
+.hub-label {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--accent);
+  letter-spacing: 1px;
+}
+
+.fleet-nodes {
+  display: flex;
+  justify-content: center;
+  gap: 32px;
+  margin-top: 40px;
+  flex-wrap: wrap;
+}
+
+.fleet-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  position: relative;
+  animation: nodeAppear 0.6s ease-out both;
+}
+
+.fleet-node:nth-child(1) { animation-delay: 0.5s; }
+.fleet-node:nth-child(2) { animation-delay: 0.7s; }
+.fleet-node:nth-child(3) { animation-delay: 0.9s; }
+
+@keyframes nodeAppear {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.node-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  transition: all 0.3s;
+}
+
+.fleet-node:hover .node-icon {
+  border-color: var(--accent);
+  box-shadow: 0 0 20px var(--accent-glow);
+  transform: translateY(-4px);
+}
+
+.node-label {
+  font-size: 12px;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+}
+
+.node-tool {
+  font-size: 11px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+}
+
+/* Connection lines */
+.connection-lines {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* ===== SECTIONS ===== */
+section {
+  padding: 100px 0;
+  position: relative;
+}
+
+.section-tag {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--accent);
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  margin-bottom: 12px;
+}
+
+.section-title {
+  font-family: var(--font-display);
+  font-size: clamp(28px, 4vw, 44px);
+  font-weight: 700;
+  letter-spacing: -1px;
+  line-height: 1.2;
+  margin-bottom: 16px;
+}
+
+.section-desc {
+  font-size: 17px;
+  color: var(--fg-muted);
+  max-width: 600px;
+  line-height: 1.8;
+}
+
+/* ===== PROBLEM SECTION ===== */
+.problem-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 20px;
+  margin-top: 48px;
+}
+
+.problem-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 28px;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s;
+}
+
+.problem-card:hover {
+  border-color: var(--warning);
+  transform: translateY(-2px);
+}
+
+.problem-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--warning), transparent);
+}
+
+.problem-icon {
+  font-size: 28px;
+  margin-bottom: 16px;
+}
+
+.problem-card h3 {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  color: var(--fg);
+}
+
+.problem-card p {
+  font-size: 14px;
+  color: var(--fg-muted);
+  line-height: 1.7;
+}
+
+/* ===== HOW IT WORKS ===== */
+.flow-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-top: 48px;
+  position: relative;
+}
+
+.flow-steps::before {
+  content: '';
+  position: absolute;
+  left: 28px;
+  top: 40px;
+  bottom: 40px;
+  width: 2px;
+  background: linear-gradient(to bottom, var(--accent), var(--accent-dim), transparent);
+}
+
+.flow-step {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+  padding: 24px 0;
+  position: relative;
+}
+
+.step-number {
+  width: 56px;
+  height: 56px;
+  min-width: 56px;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  border: 2px solid var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--accent);
+  position: relative;
+  z-index: 1;
+}
+
+.step-content {
+  flex: 1;
+  padding-top: 4px;
+}
+
+.step-content h3 {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.step-content p {
+  font-size: 14px;
+  color: var(--fg-muted);
+  line-height: 1.7;
+  max-width: 500px;
+}
+
+.step-code {
+  margin-top: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 18px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--accent);
+  overflow-x: auto;
+  line-height: 1.6;
+}
+
+.step-code .comment { color: var(--fg-dim); }
+.step-code .keyword { color: var(--purple); }
+.step-code .string { color: var(--warning); }
+
+/* ===== MCP TOOLS ===== */
+.tools-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+  margin-top: 48px;
+}
+
+.tool-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  transition: all 0.3s;
+  position: relative;
+  overflow: hidden;
+}
+
+.tool-card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 30px var(--accent-glow);
+}
+
+.tool-card::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.tool-card:hover::after { opacity: 1; }
+
+.tool-name {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--accent);
+  margin-bottom: 8px;
+  font-weight: 700;
+}
+
+.tool-card h3 {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.tool-card p {
+  font-size: 13px;
+  color: var(--fg-muted);
+  line-height: 1.6;
+}
+
+/* ===== COMPARISON ===== */
+.compare-table {
+  width: 100%;
+  margin-top: 48px;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 14px;
+}
+
+.compare-table thead th {
+  padding: 14px 20px;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  border-bottom: 1px solid var(--border);
+}
+
+.compare-table thead th:first-child { color: var(--fg-muted); }
+
+.compare-table tbody td {
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-muted);
+}
+
+.compare-table tbody td:first-child {
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.compare-table .check { color: var(--accent); font-size: 16px; }
+.compare-table .cross { color: var(--fg-dim); font-size: 16px; }
+
+.compare-table tr:hover td {
+  background: var(--bg-card);
+}
+
+/* ===== VALUE SECTION ===== */
+.value-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px;
+  margin-top: 48px;
+}
+
+.value-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 32px;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s;
+}
+
+.value-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+
+.value-card .value-number {
+  font-family: var(--font-display);
+  font-size: 48px;
+  font-weight: 700;
+  color: var(--accent);
+  line-height: 1;
+  margin-bottom: 12px;
+}
+
+.value-card h3 {
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.value-card p {
+  font-size: 14px;
+  color: var(--fg-muted);
+  line-height: 1.7;
+}
+
+/* ===== DEMO SECTION ===== */
+.demo-terminal {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-top: 48px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.terminal-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+}
+
+.terminal-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.terminal-dot.red { background: #ff5f57; }
+.terminal-dot.yellow { background: #febc2e; }
+.terminal-dot.green { background: #28c840; }
+
+.terminal-title {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+.terminal-body {
+  padding: 20px;
+  line-height: 1.8;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.terminal-body .prompt { color: var(--accent); }
+.terminal-body .cmd { color: var(--fg); }
+.terminal-body .output { color: var(--fg-muted); }
+.terminal-body .success { color: var(--accent); }
+.terminal-body .warn { color: var(--warning); }
+.terminal-body .info { color: var(--info); }
+
+.cursor-blink {
+  display: inline-block;
+  width: 8px;
+  height: 16px;
+  background: var(--accent);
+  animation: blink 1s step-end infinite;
+  vertical-align: text-bottom;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* ===== FOOTER ===== */
+.footer {
+  text-align: center;
+  padding: 60px 24px;
+  border-top: 1px solid var(--border);
+}
+
+.footer-logo {
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.footer-logo .accent { color: var(--accent); }
+
+.footer p {
+  font-size: 13px;
+  color: var(--fg-dim);
+}
+
+/* ===== ANIMATIONS ===== */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(24px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeInDown {
+  from { opacity: 0; transform: translateY(-16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.reveal {
+  opacity: 0;
+  transform: translateY(30px);
+  transition: all 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.reveal.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ===== RESPONSIVE ===== */
+@media (max-width: 768px) {
+  .fleet-nodes { gap: 16px; }
+  .flow-steps::before { left: 20px; }
+  .step-number { width: 40px; height: 40px; min-width: 40px; font-size: 14px; }
+  .tools-grid { grid-template-columns: 1fr; }
+  .compare-table { font-size: 12px; }
+  .compare-table thead th, .compare-table tbody td { padding: 10px 12px; }
+}
+
+/* ===== SCROLLBAR ===== */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--fg-dim); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--fg-muted); }
+</style>
+</head>
+<body>
+
+<div class="grid-bg"></div>
+
+<!-- ===== HERO ===== -->
+<section class="hero">
+  <div class="hero-badge">
+    <span class="dot"></span>
+    Learning &middot; Work Track
+  </div>
+  <h1 class="hero-title">Dev<span class="accent">Fleet</span></h1>
+  <p class="hero-sub">AI 编码的<strong>多设备舰队</strong>——让 AI 自己调度多台电脑并行写代码，完成后自动合并</p>
+
+  <div class="hero-visual">
+    <div class="fleet-diagram">
+      <div class="fleet-hub">
+        <div class="hub-icon">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+            <path d="M2 17l10 5 10-5"/>
+            <path d="M2 12l10 5 10-5"/>
+          </svg>
+        </div>
+        <span class="hub-label">AI DISPATCHER</span>
+      </div>
+
+      <div class="fleet-nodes">
+        <div class="fleet-node">
+          <div class="node-icon">🖥️</div>
+          <span class="node-label">Office PC</span>
+          <span class="node-tool">Trae</span>
+        </div>
+        <div class="fleet-node">
+          <div class="node-icon">💻</div>
+          <span class="node-label">Home Mac</span>
+          <span class="node-tool">Cursor</span>
+        </div>
+        <div class="fleet-node">
+          <div class="node-icon">☁️</div>
+          <span class="node-label">Cloud Server</span>
+          <span class="node-tool">Claude Code</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== PROBLEM ===== -->
+<section id="problem">
+  <div class="container">
+    <div class="reveal">
+      <p class="section-tag">// The Problem</p>
+      <h2 class="section-title">AI 很聪明，<br>但只有一双手</h2>
+      <p class="section-desc">AI 编码工具已经能独立完成复杂任务，但它们都被困在单台机器上。你有3台电脑，AI 只能用1台。</p>
+    </div>
+
+    <div class="problem-grid">
+      <div class="problem-card reveal">
+        <div class="problem-icon">🏝️</div>
+        <h3>设备孤岛</h3>
+        <p>每台设备上的 AI 编码工具互不通信。办公电脑、家用台式、云服务器——各自为战，无法协同。</p>
+      </div>
+      <div class="problem-card reveal">
+        <div class="problem-icon">⏳</div>
+        <h3>串行等待</h3>
+        <p>前端改完才能改后端，后端改完才能写测试。明明有3台电脑可以同时干活，却只能一台一台排队。</p>
+      </div>
+      <div class="problem-card reveal">
+        <div class="problem-icon">🤷</div>
+        <h3>手动合并</h3>
+        <p>即使你手动在每台电脑上分别启动 AI，最终还是要自己 Git merge。冲突处理、分支管理全靠人肉。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== HOW IT WORKS ===== -->
+<section id="how">
+  <div class="container">
+    <div class="reveal">
+      <p class="section-tag">// How It Works</p>
+      <h2 class="section-title">AI 指挥，<br>舰队执行</h2>
+      <p class="section-desc">AI 通过 MCP 协议调用 DevFleet 工具，自己决定怎么拆任务、分给谁、何时合并。</p>
+    </div>
+
+    <div class="flow-steps">
+      <div class="flow-step reveal">
+        <div class="step-number">1</div>
+        <div class="step-content">
+          <h3>AI 分析任务，自主拆分</h3>
+          <p>AI 理解需求后，自己决定如何将任务拆分为可并行的子任务。不是按换行符傻拆，而是真正理解代码结构。</p>
+          <div class="step-code">
+            <span class="comment">// AI 自主决策，不是规则拆分</span><br>
+            <span class="keyword">dispatch_task</span>({ <br>
+            &nbsp;&nbsp;description: <span class="string">"重构认证模块"</span>,<br>
+            &nbsp;&nbsp;device: <span class="string">"office-pc"</span><br>
+            })
+          </div>
+        </div>
+      </div>
+
+      <div class="flow-step reveal">
+        <div class="step-number">2</div>
+        <div class="step-content">
+          <h3>多设备并行执行</h3>
+          <p>任务通过 WebSocket 实时分发到在线设备。每台设备在自己的 Git 分支上独立工作，互不干扰。</p>
+          <div class="step-code">
+            <span class="info">office-pc</span> → <span class="success">devfleet/trae/sub-1-a3f2</span><br>
+            <span class="info">home-mac</span>&nbsp; → <span class="success">devfleet/cursor/sub-2-b7e1</span><br>
+            <span class="info">cloud</span>&nbsp;&nbsp;&nbsp;&nbsp; → <span class="success">devfleet/claude/sub-3-c9d4</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="flow-step reveal">
+        <div class="step-number">3</div>
+        <div class="step-content">
+          <h3>自动合并分支</h3>
+          <p>所有设备完成后，AI 调用合并工具自动 fetch、merge、push。冲突时回滚并报告，不会破坏代码库。</p>
+          <div class="step-code">
+            <span class="keyword">merge_task</span>({ task_id: <span class="string">"task-001"</span> })<br>
+            <span class="comment">// ✓ fetch → merge → push，全自动</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== MCP TOOLS ===== -->
+<section id="tools">
+  <div class="container">
+    <div class="reveal">
+      <p class="section-tag">// MCP Integration</p>
+      <h2 class="section-title">7 个 MCP 工具，<br>AI 的舰队操控台</h2>
+      <p class="section-desc">标准 MCP 协议，兼容 Trae、Cursor、Claude Code、Codex。AI 像调用函数一样调度你的设备舰队。</p>
+    </div>
+
+    <div class="tools-grid">
+      <div class="tool-card reveal">
+        <div class="tool-name">devfleet_list_devices</div>
+        <h3>查看舰队状态</h3>
+        <p>获取所有在线设备及其工具状态，AI 据此决定任务分配策略。</p>
+      </div>
+      <div class="tool-card reveal">
+        <div class="tool-name">devfleet_dispatch_task</div>
+        <h3>派发任务</h3>
+        <p>向指定在线设备派发 Git 代码任务，设备自动克隆仓库、创建分支、开始执行。</p>
+      </div>
+      <div class="tool-card reveal">
+        <div class="tool-name">devfleet_get_task</div>
+        <h3>查询任务进度</h3>
+        <p>读取任务状态、日志、分支信息和完成进度，实时掌握舰队动态。</p>
+      </div>
+      <div class="tool-card reveal">
+        <div class="tool-name">devfleet_wait_for_task</div>
+        <h3>等待任务完成</h3>
+        <p>阻塞等待多设备任务全部完成，支持超时保护。AI 可同时等待多个并行任务。</p>
+      </div>
+      <div class="tool-card reveal">
+        <div class="tool-name">devfleet_merge_task</div>
+        <h3>合并分支</h3>
+        <p>在主设备上真实执行 fetch、merge、push。冲突时自动 abort 并报告，安全可靠。</p>
+      </div>
+      <div class="tool-card reveal">
+        <div class="tool-name">devfleet_next_task</div>
+        <h3>获取待执行任务</h3>
+        <p>工作设备上的 AI Agent 读取当前分配给自己的任务，开始执行。</p>
+      </div>
+      <div class="tool-card reveal">
+        <div class="tool-name">devfleet_report_task_progress</div>
+        <h3>回写执行进度</h3>
+        <p>工作设备上的 AI Agent 回报阶段性进度和日志，完成后自动提交推送。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== COMPARISON ===== -->
+<section id="compare">
+  <div class="container">
+    <div class="reveal">
+      <p class="section-tag">// Comparison</p>
+      <h2 class="section-title">为什么是 DevFleet</h2>
+      <p class="section-desc">现有工具各有所长，但没有一个解决"AI 跨物理设备并行写代码"的问题。</p>
+    </div>
+
+    <table class="compare-table reveal">
+      <thead>
+        <tr>
+          <th>能力</th>
+          <th>CrewAI</th>
+          <th>GitHub Actions</th>
+          <th>Claude Code</th>
+          <th>DevFleet</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>多物理设备</td>
+          <td><span class="cross">✕</span></td>
+          <td><span class="check">✓</span></td>
+          <td><span class="cross">✕</span></td>
+          <td><span class="check">✓</span></td>
+        </tr>
+        <tr>
+          <td>AI 实时调度</td>
+          <td><span class="cross">✕</span></td>
+          <td><span class="cross">✕</span></td>
+          <td><span class="cross">✕</span></td>
+          <td><span class="check">✓</span></td>
+        </tr>
+        <tr>
+          <td>IDE 集成</td>
+          <td><span class="cross">✕</span></td>
+          <td><span class="cross">✕</span></td>
+          <td><span class="check">✓</span></td>
+          <td><span class="check">✓</span></td>
+        </tr>
+        <tr>
+          <td>实时交互调整</td>
+          <td><span class="cross">✕</span></td>
+          <td><span class="cross">✕</span></td>
+          <td><span class="check">✓</span></td>
+          <td><span class="check">✓</span></td>
+        </tr>
+        <tr>
+          <td>自动 Git 合并</td>
+          <td><span class="cross">✕</span></td>
+          <td><span class="check">✓</span></td>
+          <td><span class="cross">✕</span></td>
+          <td><span class="check">✓</span></td>
+        </tr>
+        <tr>
+          <td>MCP 协议</td>
+          <td><span class="cross">✕</span></td>
+          <td><span class="cross">✕</span></td>
+          <td><span class="cross">✕</span></td>
+          <td><span class="check">✓</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ===== VALUE ===== -->
+<section id="value">
+  <div class="container">
+    <div class="reveal">
+      <p class="section-tag">// Value</p>
+      <h2 class="section-title">从指挥一台机器，<br>到指挥一支舰队</h2>
+    </div>
+
+    <div class="value-cards">
+      <div class="value-card reveal">
+        <div class="value-number">3×</div>
+        <h3>并行加速</h3>
+        <p>3台设备同时编码，理论加速3倍。AI 自己决定拆分策略，最大化并行收益。</p>
+      </div>
+      <div class="value-card reveal">
+        <div class="value-number">0</div>
+        <h3>手动操作</h3>
+        <p>从任务分发到分支合并，全链路自动化。开发者只需描述需求，AI 完成剩余一切。</p>
+      </div>
+      <div class="value-card reveal">
+        <div class="value-number">∞</div>
+        <h3>设备扩展</h3>
+        <p>绑定新设备只需一个绑定码。设备越多，舰队越强。云服务器、同事电脑，随时加入。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== DEMO ===== -->
+<section id="demo">
+  <div class="container">
+    <div class="reveal">
+      <p class="section-tag">// Live Demo</p>
+      <h2 class="section-title">看看 AI 怎么用</h2>
+    </div>
+
+    <div class="demo-terminal reveal">
+      <div class="terminal-header">
+        <span class="terminal-dot red"></span>
+        <span class="terminal-dot yellow"></span>
+        <span class="terminal-dot green"></span>
+        <span class="terminal-title">trae — DevFleet MCP Session</span>
+      </div>
+      <div class="terminal-body">
+        <div><span class="prompt">▸ </span><span class="cmd">用户：帮我重构这个项目，把认证、API、测试三个模块分开改</span></div>
+        <br>
+        <div><span class="output">AI 正在分析项目结构...</span></div>
+        <div><span class="output">检测到 3 台在线设备：</span></div>
+        <div><span class="info">&nbsp;&nbsp;🖥️ office-pc (Trae) — 在线</span></div>
+        <div><span class="info">&nbsp;&nbsp;💻 home-mac (Cursor) — 在线</span></div>
+        <div><span class="info">&nbsp;&nbsp;☁️ cloud (Claude Code) — 在线</span></div>
+        <br>
+        <div><span class="success">✓ 调用 devfleet_dispatch_task</span></div>
+        <div><span class="output">&nbsp;&nbsp;→ office-pc: 重构认证模块，改用 JWT + refresh token</span></div>
+        <div><span class="output">&nbsp;&nbsp;→ home-mac: 重构 API 层，拆分为独立路由模块</span></div>
+        <div><span class="output">&nbsp;&nbsp;→ cloud: 补充单元测试，覆盖率目标 80%</span></div>
+        <br>
+        <div><span class="success">✓ 调用 devfleet_wait_for_task</span></div>
+        <div><span class="output">&nbsp;&nbsp;等待中... office-pc ████████░░ 80%</span></div>
+        <div><span class="output">&nbsp;&nbsp;等待中... home-mac &nbsp;██████████ 100% ✓</span></div>
+        <div><span class="output">&nbsp;&nbsp;等待中... cloud &nbsp;&nbsp;&nbsp;&nbsp;██████░░░░ 60%</span></div>
+        <br>
+        <div><span class="success">✓ 全部完成</span></div>
+        <br>
+        <div><span class="success">✓ 调用 devfleet_merge_task</span></div>
+        <div><span class="output">&nbsp;&nbsp;git fetch origin devfleet/trae/sub-1-a3f2</span></div>
+        <div><span class="output">&nbsp;&nbsp;git fetch origin devfleet/cursor/sub-2-b7e1</span></div>
+        <div><span class="output">&nbsp;&nbsp;git fetch origin devfleet/claude/sub-3-c9d4</span></div>
+        <div><span class="output">&nbsp;&nbsp;git merge --no-ff devfleet/trae/sub-1-a3f2 ✓</span></div>
+        <div><span class="output">&nbsp;&nbsp;git merge --no-ff devfleet/cursor/sub-2-b7e1 ✓</span></div>
+        <div><span class="output">&nbsp;&nbsp;git merge --no-ff devfleet/claude/sub-3-c9d4 ✓</span></div>
+        <div><span class="output">&nbsp;&nbsp;git push origin main ✓</span></div>
+        <br>
+        <div><span class="success">✓ 3个模块全部重构完成，已合并到 main 分支</span></div>
+        <div><span class="prompt">▸ </span><span class="cursor-blink"></span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== FOOTER ===== -->
+<footer class="footer">
+  <div class="footer-logo">Dev<span class="accent">Fleet</span></div>
+  <p>AI 多设备并行编码调度系统 — 学习工作赛道参赛作品</p>
+</footer>
+
+<script>
+// Scroll reveal
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      entry.target.classList.add('visible');
+    }
+  });
+}, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+
+document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+</script>
+
+</body>
+</html>

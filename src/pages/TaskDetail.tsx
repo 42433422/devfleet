@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, GitBranch, GitMerge, Calendar, Play, CheckCircle2, XCircle, Terminal, Trash2, AlertCircle, Clipboard, Check } from 'lucide-react';
-import { useTasksStore } from '@/store/tasks';
+import { ArrowLeft, GitBranch, GitMerge, Calendar, Play, CheckCircle2, XCircle, Terminal, Trash2, AlertCircle, Clipboard, Check, RefreshCw, Link2, Clock } from 'lucide-react';
+import { useTasksStore, type LogEntry } from '@/store/tasks';
 import { useDevicesStore } from '@/store/devices';
 import { DEV_TOOL_LABELS } from '@/lib/devTools';
 import { agentApi, isDesktopApp } from '@/lib/agent';
 import { buildMergeMcpPrompt, defaultMergeWorkspace } from '@/lib/mergeTask';
+import { api } from '@/lib/api';
 import ToolBadge from '@/components/ToolBadge';
 
 function formatTime(t: string) {
@@ -37,6 +38,9 @@ export default function TaskDetail() {
   const [mergeCopied, setMergeCopied] = useState(false);
   const [workspacePath, setWorkspacePath] = useState(defaultMergeWorkspace());
   const [actionError, setActionError] = useState('');
+  const [logView, setLogView] = useState<'timeline' | 'subs'>('timeline');
+  const [retrying, setRetrying] = useState<string | null>(null);
+  const timelineRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     fetchTask(id);
@@ -62,6 +66,43 @@ export default function TaskDetail() {
       }
     });
   }, [currentTask]);
+
+  const unifiedLogs = useMemo(() => {
+    if (!currentTask) return [] as LogEntry[];
+    return currentTask.subTasks
+      .flatMap((st) =>
+        st.logs.map((log) => ({
+          ...log,
+          subtask_id: st.id,
+          subtask_title: st.title || st.branch_name,
+          device_id: log.device_id || st.device_id,
+          device_name: log.device_name || st.device_name,
+        })),
+      )
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  }, [currentTask]);
+
+  useEffect(() => {
+    if (logView !== 'timeline' || !timelineRef.current) return;
+    const el = timelineRef.current;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distanceFromBottom < 48) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [unifiedLogs.length, logView]);
+
+  const handleRetrySub = async (subtaskId: string) => {
+    setRetrying(subtaskId);
+    setActionError('');
+    try {
+      await api(`/api/tasks/${id}/subtasks/${subtaskId}/retry`, { method: 'POST' });
+      await fetchTask(id);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : '重试失败');
+    } finally {
+      setRetrying(null);
+    }
+  };
 
   const allCompleted =
     currentTask && currentTask.subTasks.length > 0
@@ -251,9 +292,54 @@ export default function TaskDetail() {
         )}
       </div>
 
-      <h2 className="text-sm font-semibold text-white mb-4">子任务执行日志</h2>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-sm font-semibold text-white">执行日志</h2>
+        <div className="flex gap-1 p-0.5 bg-zinc-900 border border-zinc-800 rounded-lg">
+          <button
+            type="button"
+            onClick={() => setLogView('timeline')}
+            className={`px-3 py-1 text-xs rounded-md transition-colors ${logView === 'timeline' ? 'bg-brand text-black font-medium' : 'text-zinc-400 hover:text-white'}`}
+          >
+            统一时间线
+          </button>
+          <button
+            type="button"
+            onClick={() => setLogView('subs')}
+            className={`px-3 py-1 text-xs rounded-md transition-colors ${logView === 'subs' ? 'bg-brand text-black font-medium' : 'text-zinc-400 hover:text-white'}`}
+          >
+            按子任务
+          </button>
+        </div>
+      </div>
 
-      <div className="space-y-3">
+      {logView === 'timeline' && (
+        <div
+          ref={timelineRef}
+          className="mb-6 bg-zinc-950/80 border border-zinc-800/40 rounded-xl p-4 h-64 overflow-y-auto font-mono text-xs leading-relaxed"
+        >
+          {unifiedLogs.length === 0 ? (
+            <p className="text-zinc-600">等待各设备日志输出…（所有设备日志按时间合并显示）</p>
+          ) : (
+            unifiedLogs.map((l) => (
+              <div key={l.id} className="mb-1">
+                <span className="text-zinc-600">[{formatTime(l.timestamp)}]</span>{' '}
+                <span className="text-brand/80">[{l.device_name || l.device_id || '?'}]</span>{' '}
+                <span className="text-zinc-500">({l.subtask_title || l.subtask_id})</span>{' '}
+                <span className={
+                  l.level === 'error' ? 'text-red-400'
+                  : l.level === 'warn' ? 'text-amber-400'
+                  : l.level === 'debug' ? 'text-zinc-500'
+                  : 'text-zinc-300'
+                }>
+                  {l.content}
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      <div className={`space-y-3 ${logView === 'timeline' ? 'hidden' : ''}`}>
         {currentTask.subTasks.map((st) => {
           const device = devices.find((d) => d.id === st.device_id);
           const stStatus = statusConfig[st.status] || statusConfig.pending;
@@ -268,12 +354,26 @@ export default function TaskDetail() {
                     {stStatus.icon}
                   </div>
                   <div>
-                    <span className="text-sm font-medium text-white">{device?.name || st.device_id}</span>
+                    <span className="text-sm font-medium text-white">{st.title || device?.name || st.device_id}</span>
                     <span className="text-xs text-zinc-500 ml-2">· {st.branch_name}</span>
+                    {st.blocked && (
+                      <span className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber-500/10 text-amber-400 text-[10px] rounded">
+                        <Clock size={10} />
+                        等待依赖
+                      </span>
+                    )}
+                    {(st.attempt_count ?? 0) > 0 && (
+                      <span className="ml-2 text-[10px] text-zinc-600">
+                        尝试 {st.attempt_count}/{st.max_attempts ?? 2}
+                      </span>
+                    )}
                     <div className="mt-1.5 inline-flex">
                       <ToolBadge tool={st.tool_name} status={st.status === 'running' ? 'running' : st.status === 'completed' ? 'idle' : st.status === 'failed' ? 'not_installed' : 'idle'} />
-                      <span className="text-[10px] text-zinc-600 ml-2 self-center">{DEV_TOOL_LABELS[st.tool_name]}</span>
+                      <span className="text-[10px] text-zinc-600 ml-2 self-center">{device?.name || st.device_name} · {DEV_TOOL_LABELS[st.tool_name]}</span>
                     </div>
+                    {st.last_error && (
+                      <p className="text-[10px] text-red-400/80 mt-1">{st.last_error}</p>
+                    )}
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
@@ -288,8 +388,19 @@ export default function TaskDetail() {
                   </div>
                   <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${stStatus.bg} ${stStatus.text} flex items-center gap-1`}>
                     {stStatus.icon}
-                    {st.status === 'completed' ? '已完成' : st.status === 'failed' ? '失败' : st.status === 'running' ? '运行中' : '待处理'}
+                    {st.status === 'completed' ? '已完成' : st.status === 'failed' ? '失败' : st.status === 'running' ? '运行中' : st.blocked ? '等待依赖' : '待处理'}
                   </span>
+                  {st.status === 'failed' && (
+                    <button
+                      type="button"
+                      disabled={retrying === st.id}
+                      onClick={() => handleRetrySub(st.id)}
+                      className="flex items-center gap-1 px-2 py-1 bg-zinc-800 hover:bg-brand/20 hover:text-brand text-zinc-400 rounded text-[10px] transition-colors disabled:opacity-50"
+                    >
+                      <RefreshCw size={10} className={retrying === st.id ? 'animate-spin' : ''} />
+                      重试
+                    </button>
+                  )}
                 </div>
               </div>
 
