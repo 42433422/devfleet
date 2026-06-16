@@ -1138,7 +1138,26 @@ fn find_executable(tool: &str) -> Option<String> {
         #[cfg(target_os = "macos")]
         {
             let candidates = match tool {
-                "trae" => vec!["/Applications/Trae.app/Contents/MacOS/Trae"],
+                "trae" => {
+                    if let Some(app) = computer_use::find_trae_app_bundle() {
+                        return app
+                            .join("Contents/MacOS")
+                            .read_dir()
+                            .ok()
+                            .and_then(|entries| {
+                                entries
+                                    .flatten()
+                                    .find(|entry| entry.path().is_file())
+                                    .map(|entry| entry.path().to_string_lossy().into_owned())
+                            });
+                    }
+                    vec![
+                        "/Applications/Trae CN.app/Contents/MacOS/Trae CN",
+                        "/Applications/TRAE SOLO CN.app/Contents/MacOS/TRAE SOLO CN",
+                        "/Applications/Trae.app/Contents/MacOS/Trae",
+                        "/Applications/TRAE SOLO.app/Contents/MacOS/TRAE SOLO",
+                    ]
+                }
                 "cursor" => vec!["/Applications/Cursor.app/Contents/MacOS/Cursor"],
                 _ => vec![],
             };
@@ -1329,11 +1348,41 @@ async fn push_branch_if_remote(
     match run_command(Some(task_dir), "git", &["remote", "get-url", "origin"]).await {
         Ok(url) if !url.trim().is_empty() => {
             send_log(tx, task, "正在推送远程分支", "info");
-            run_command(Some(task_dir), "git", &["push", "-u", "origin", branch]).await?;
-            send_log(tx, task, "远程分支已推送", "info");
-            Ok(())
+            match run_command(Some(task_dir), "git", &["push", "-u", "origin", branch]).await {
+                Ok(()) => {
+                    send_log(tx, task, "远程分支已推送", "info");
+                    Ok(())
+                }
+                Err(error) => {
+                    let remote = url.trim();
+                    if remote.starts_with("file://") {
+                        run_command(
+                            Some(task_dir),
+                            "git",
+                            &["push", "-u", remote, &format!("HEAD:{branch}")],
+                        )
+                        .await?;
+                        send_log(tx, task, "已通过 file:// 远程推送分支", "info");
+                        Ok(())
+                    } else {
+                        Err(error)
+                    }
+                }
+            }
         }
         _ => {
+            let repo_url = task.repo_url.trim();
+            if repo_url.starts_with("file://") {
+                send_log(tx, task, "正在推送到 file:// 远程仓库", "info");
+                run_command(
+                    Some(task_dir),
+                    "git",
+                    &["push", "-u", repo_url, &format!("HEAD:{branch}")],
+                )
+                .await?;
+                send_log(tx, task, "远程分支已推送", "info");
+                return Ok(());
+            }
             send_log(
                 tx,
                 task,
@@ -1563,9 +1612,10 @@ fn validate_task(task: &ExecuteTask) -> Result<(), String> {
     if !repo_url.is_empty()
         && !(repo_url.starts_with("https://")
             || repo_url.starts_with("http://")
-            || repo_url.starts_with("git@"))
+            || repo_url.starts_with("git@")
+            || repo_url.starts_with("file://"))
     {
-        return Err("仓库地址必须是 HTTP(S) 或 SSH Git 地址，或留空使用本地目录".to_string());
+        return Err("仓库地址必须是 HTTP(S)、SSH、file:// Git 地址，或留空使用本地目录".to_string());
     }
     for branch in [&task.base_branch, &task.work_branch] {
         if branch.is_empty()
@@ -1625,6 +1675,7 @@ mod tests {
     fn accepts_git_repositories_and_safe_branches() {
         assert!(validate_task(&task("https://github.com/example/repo.git", "main")).is_ok());
         assert!(validate_task(&task("git@github.com:example/repo.git", "release/v1.0")).is_ok());
+        assert!(validate_task(&task("file:///tmp/devfleet-e2e/bare.git", "main")).is_ok());
         assert!(validate_task(&task("", "main")).is_ok());
     }
 

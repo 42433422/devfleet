@@ -99,6 +99,21 @@ export function dispatchReadySubs(userId: string, taskId: string): number {
   return dispatched;
 }
 
+/** 设备 WebSocket 上线后，补发此前因离线而未 execute_task 的 pending 子任务。 */
+export function dispatchPendingForDevice(userId: string, deviceId: string): string[] {
+  if (!hasDevice(deviceId)) return [];
+  const subs = db.subTasks.findAllByDeviceId(deviceId).filter((sub) => sub.status === 'pending');
+  const touched = new Set<string>();
+  for (const sub of subs) {
+    const task = db.tasks.findById(sub.task_id);
+    if (!task || task.user_id !== userId) continue;
+    const allSubs = db.subTasks.findAllByTaskId(task.id);
+    if (!areDependenciesMet(sub, allSubs)) continue;
+    if (dispatchSubTask(userId, task, sub)) touched.add(task.id);
+  }
+  return Array.from(touched);
+}
+
 export function handleSubTaskFailure(
   userId: string,
   taskId: string,

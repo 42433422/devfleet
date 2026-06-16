@@ -3,11 +3,14 @@
  * DevFleet 最小闭环 E2E：模拟 Cursor MCP 派发 → Trae 工作设备执行 → Git push → 主设备 merge。
  * 各阶段计时输出，便于本机验证 Cursor → Trae 全流程。
  */
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
+const scriptDir = dirname(fileURLToPath(import.meta.url));
 
 const apiBaseUrl = (process.env.DEVFLEET_API_URL || 'http://localhost:3001').replace(/\/$/, '');
 const token = process.env.DEVFLEET_TOKEN || '';
@@ -141,6 +144,55 @@ const autoTouchWorkspace = async (taskId: string) => {
 };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const listOnlineTraeDevices = async () => {
+  const { devices } = await api<{ devices: Array<{
+    id: string;
+    name: string;
+    status: string;
+    devTool: string;
+    tools: Array<{ toolName: string; status: string }>;
+  }> }>('/api/devices');
+  return devices.filter((device) => device.status === 'online' && device.devTool === 'trae');
+};
+
+const ensureE2eAgent = async () => {
+  const online = await listOnlineTraeDevices();
+  if (online.length > 0) {
+    console.log(`已有在线 Trae 设备: ${online.map((d) => d.name).join(', ')}`);
+    return;
+  }
+
+  const phase = startPhase('启动 E2E 设备代理 (e2e-agent.mjs)');
+  const agentScript = join(scriptDir, 'e2e-agent.mjs');
+  if (!existsSync(agentScript)) {
+    throw new Error(`未找到 ${agentScript}`);
+  }
+
+  spawn(process.execPath, [agentScript], {
+    detached: true,
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      DEVFLEET_API_URL: apiBaseUrl,
+      DEVFLEET_WORKSPACE_ROOT: workspaceRoot || '/tmp/devfleet-e2e/agent-workspace',
+      DEVFLEET_BARE_REPO: process.env.DEVFLEET_BARE_REPO || '/tmp/devfleet-e2e/bare.git',
+    },
+  }).unref();
+
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    await sleep(1000);
+    const ready = await listOnlineTraeDevices();
+    if (ready.length > 0) {
+      console.log(`E2E 代理已上线: ${ready.map((d) => d.name).join(', ')}`);
+      endPhase(phase);
+      return;
+    }
+  }
+  endPhase(phase);
+  throw new Error('E2E 设备代理 30s 内未上线。请确认 DevFleet API 运行且 agent.json 存在，或手动 export DEVFLEET_DEVICE_TOKEN');
+};
 
 const preflight = async () => {
   const phase = startPhase('预检 (health + 设备 + Trae)');
@@ -292,6 +344,10 @@ const main = async () => {
   console.log('DevFleet 最小闭环 E2E');
   console.log(`API: ${apiBaseUrl}`);
   console.log(`模式: ${autoTouch ? 'auto-touch（跳过 Trae 人工改码）' : 'Trae 人工/Agent 改码'}`);
+
+  if (autoTouch) {
+    await ensureE2eAgent();
+  }
 
   const deviceId = await preflight();
   const task = await dispatchTask(deviceId);

@@ -199,7 +199,7 @@ async function handleAiSubtaskDispatch(
       return;
     }
   } else {
-    if (repo_url && !(repo_url.startsWith('https://') || repo_url.startsWith('http://') || repo_url.startsWith('git@'))) {
+    if (repo_url && !(repo_url.startsWith('https://') || repo_url.startsWith('http://') || repo_url.startsWith('git@') || repo_url.startsWith('file://'))) {
       res.status(400).json({ error: '仓库地址必须是 HTTP(S) 或 SSH Git 地址，或留空使用工作设备本地目录' });
       return;
     }
@@ -279,7 +279,7 @@ async function handleUiAutoSplitTask(
     ? (body.assignments as Array<{ device_id: string; sub_index?: number }>)
     : [];
 
-  if (repo_url && !(repo_url.startsWith('https://') || repo_url.startsWith('http://') || repo_url.startsWith('git@'))) {
+  if (repo_url && !(repo_url.startsWith('https://') || repo_url.startsWith('http://') || repo_url.startsWith('git@') || repo_url.startsWith('file://'))) {
     res.status(400).json({ error: '仓库地址必须是 HTTP(S) 或 SSH Git 地址，或留空使用工作设备本地目录' });
     return;
   }

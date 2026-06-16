@@ -294,7 +294,7 @@ fn applescript_string(value: &str) -> String {
 }
 
 #[cfg(target_os = "macos")]
-fn find_trae_app_bundle() -> Option<PathBuf> {
+pub(crate) fn find_trae_app_bundle() -> Option<PathBuf> {
     let candidates = [
         "/Applications/Trae CN.app",
         "/Applications/TRAE SOLO CN.app",

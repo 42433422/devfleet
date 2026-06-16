@@ -4,6 +4,7 @@ import { verifyToken } from '../middleware/auth.js';
 import { normalizeDevTool } from '../lib/utils.js';
 import { parseCapabilities } from '../lib/capabilities.js';
 import {
+  dispatchPendingForDevice,
   dispatchReadySubs,
   handleSubTaskFailure,
   reconcileTask,
@@ -135,6 +136,9 @@ export function attachWebSocket(wss: WSServer) {
         device_id: device.id,
         status: 'online',
       });
+      for (const taskId of dispatchPendingForDevice(device.user_id, device.id)) {
+        reconcileTask(device.user_id, taskId);
+      }
 
       ws.on('message', (raw) => {
         try {
