@@ -650,6 +650,7 @@ fn build_trae_workspace_path_vars(workspace: &Path) -> String {
     format!(r#"set workspacePath to "{workspace_path}""#)
 }
 
+#[cfg(target_os = "macos")]
 fn build_trae_open_at_start_block(
     workspace: &Path,
     application_name: &str,
