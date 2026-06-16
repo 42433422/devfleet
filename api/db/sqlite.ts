@@ -7,6 +7,28 @@ import { applySchemaUpgrades } from './schema-upgrades.js';
 
 export type DevFleetDatabase = Database.Database;
 
+function defaultUserDataDir(): string {
+  if (process.platform === 'win32') {
+    const base = process.env.APPDATA?.trim()
+      || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
+    return path.join(base, 'com.devfleet.desktop');
+  }
+  if (process.platform === 'darwin') {
+    const home = process.env.HOME?.trim() || '';
+    return path.join(home, 'Library', 'Application Support', 'com.devfleet.desktop');
+  }
+  const home = process.env.HOME?.trim() || '';
+  const base = process.env.XDG_DATA_HOME?.trim() || path.join(home, '.local', 'share');
+  return path.join(base, 'com.devfleet.desktop');
+}
+
+function isPackagedServerCwd(): boolean {
+  const cwd = process.cwd();
+  return /DevFleet\.app[\\/]Contents[\\/]Resources[\\/]server/i.test(cwd)
+    || /[\\/]resources[\\/]server$/i.test(cwd)
+    || /Program Files.*[\\/]DevFleet/i.test(cwd);
+}
+
 function resolveDbPath(): string {
   const fromEnv = process.env.DEVFLEET_DB_FILE?.trim();
   if (fromEnv) {
@@ -16,6 +38,16 @@ function resolveDbPath(): string {
     }
     return resolved;
   }
+
+  const fromDataDir = process.env.DEVFLEET_DATA_DIR?.trim();
+  if (fromDataDir) {
+    return path.join(path.resolve(fromDataDir), 'devfleet.db');
+  }
+
+  if (process.env.DEVFLEET_DESKTOP === '1' || isPackagedServerCwd()) {
+    return path.join(defaultUserDataDir(), 'devfleet.db');
+  }
+
   return path.resolve(process.cwd(), 'api', 'data', 'devfleet.db');
 }
 
@@ -25,8 +57,15 @@ let dbInstance: DevFleetDatabase | null = null;
 let openDbPath: string | null = null;
 
 function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `无法创建数据库目录 ${DATA_DIR}：${message}。请确认 DevFleet 已安装到用户目录，且系统未拦截对 AppData/Application Support 的写入。`,
+    );
   }
 }
 

@@ -8,7 +8,12 @@ import { shutdownBuiltinTunnel, startBuiltinTunnel } from './tunnel/manager.js';
 
 const PORT = Number(process.env.PORT) || 3001;
 
-bootstrapDatabase();
+try {
+  bootstrapDatabase();
+} catch (error) {
+  console.error('[DevFleet] 数据库启动失败:', error instanceof Error ? error.message : error);
+  process.exit(1);
+}
 
 const server = http.createServer(app);
 

@@ -7,9 +7,7 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Manager};
 
-use crate::process_util::{
-    configure_hidden_command, resolve_bundled_node, resolve_node_executable,
-};
+use crate::process_util::{configure_hidden_command, resolve_bundled_node, resolve_node_executable};
 
 pub struct EmbeddedServer(pub Mutex<Option<Child>>);
 
@@ -193,7 +191,14 @@ fn start_embedded_server(app: &AppHandle) -> Option<Child> {
     let server_dir = script.parent()?.to_path_buf();
     let data_dir = app.path().app_data_dir().ok()?;
     let db_file = data_dir.join("devfleet.db");
-    std::fs::create_dir_all(&data_dir).ok()?;
+    if let Err(error) = std::fs::create_dir_all(&data_dir) {
+        log::error!(
+            "[DevFleet] cannot create data dir {}: {error}",
+            data_dir.display()
+        );
+        return None;
+    }
+    log::info!("[DevFleet] embedded server db: {}", db_file.display());
 
     let node = resolve_bundled_node(&server_dir)
         .or_else(resolve_node_executable)
@@ -205,6 +210,8 @@ fn start_embedded_server(app: &AppHandle) -> Option<Child> {
         .current_dir(&server_dir)
         .arg(&script)
         .env("PORT", "3001")
+        .env("DEVFLEET_DESKTOP", "1")
+        .env("DEVFLEET_DATA_DIR", data_dir.to_string_lossy().into_owned())
         .env("DEVFLEET_DB_FILE", db_file.to_string_lossy().into_owned());
 
     match command.spawn() {
