@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { db, type SubTask } from '../db/store.js';
 import { authMiddleware } from '../middleware/auth.js';
-import { splitTaskIntoSubs, branchNameFromTask, normalizeDevTool, type DevTool } from '../lib/utils.js';
+import { splitTaskIntoSubs, branchNameFromTask, normalizeDevTool } from '../lib/utils.js';
 import { broadcast } from '../websocket/manager.js';
 import {
   dispatchReadySubs,

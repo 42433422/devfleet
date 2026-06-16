@@ -57,7 +57,6 @@ function avgProgress(task: TaskLike): number {
 }
 
 export function derivePipelineSteps(task: TaskLike): PipelineStep[] {
-  const logs = allLogs(task);
   const failed = task.status === 'failed' || anySubFailed(task);
   const progress = avgProgress(task);
 

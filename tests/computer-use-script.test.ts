@@ -4,7 +4,6 @@ import path from 'node:path';
 import test from 'node:test';
 import {
   buildTraeNewTaskScript,
-  buildTraeWindowProbeScript,
   findTraeAppBundle,
   resolveComputerUseScript,
   traeApplicationNameFromBundle,

@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "1.3.7"
+version = "1.3.17"
 description = "DevFleet multi-device coding controller and worker agent"
 authors = ["DevFleet"]
 license = "MIT"

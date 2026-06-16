@@ -23,14 +23,6 @@ export const TRAE_PROCESS_NAMES = [
   'Trae',
 ] as const;
 
-const GENERIC_TRAE_TITLES = [
-  'Trae CN',
-  'TRAE CN',
-  'Trae',
-  'TRAE SOLO CN',
-  'TRAE SOLO',
-] as const;
-
 export const resolveComputerUseScript = (): string => {
   if (process.env.DEVFLEET_COMPUTER_USE_SCRIPT) {
     const override = process.env.DEVFLEET_COMPUTER_USE_SCRIPT;
@@ -471,8 +463,6 @@ export const buildTraeNewTaskScript = (
   options: TraeAtomicSubmitOptions = {},
 ) => buildTraeAtomicSubmitScript(prompt, applicationName, workspacePath, { titles: [], windowCount: 0 }, options);
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
 const TRAE_WORKSPACE_SETTINGS = '{\n  "security.workspace.trust.enabled": false\n}\n';
 
 export const prepareTraeWorkspaceSettings = (workspacePath: string) => {
@@ -535,42 +525,6 @@ export const openTraeWorkspace = async (workspacePath: string) => {
     open POSIX file "${workspacePath.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"
 end tell`;
   await execFileAsync('/usr/bin/osascript', ['-e', script]);
-};
-
-const cuWaitTimeoutMs = () => {
-  const raw = process.env.DEVFLEET_CU_WAIT_TIMEOUT_MS;
-  if (!raw) return 90_000;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 90_000;
-};
-
-const cuWaitPollMs = () => {
-  const raw = process.env.DEVFLEET_CU_WAIT_POLL_MS;
-  if (!raw) return 500;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 500;
-};
-
-const waitForTraeWorkspaceWindow = async (
-  workspacePath: string,
-  applicationName: string,
-  baseline: TraeOpenBaseline | null,
-) => {
-  const probe = buildTraeWindowProbeScript(applicationName, workspacePath, baseline);
-  const deadline = Date.now() + cuWaitTimeoutMs();
-  while (Date.now() < deadline) {
-    try {
-      const { stdout } = await execFileAsync('/usr/bin/osascript', ['-e', probe]);
-      if (stdout.trim() === 'ready') {
-        await sleep(1200);
-        return;
-      }
-    } catch {
-      // keep polling
-    }
-    await sleep(cuWaitPollMs());
-  }
-  throw new Error(`等待 Trae 工作区窗口「${workspaceFolderName(workspacePath)}」就绪超时`);
 };
 
 export const submitTraeNewTask = async (workspacePath: string, prompt: string, skipWait = false) => {

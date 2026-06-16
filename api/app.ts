@@ -74,6 +74,7 @@ app.get('/api/health', (req: Request, res: Response): void => {
 });
 
 app.use((error: Error, req: Request, res: Response, next: NextFunction): void => {
+  void next;
   if (error.message === 'CORS origin not allowed') {
     res.status(403).json({ success: false, error: 'CORS origin not allowed' });
     return;

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, GitBranch, GitMerge, Calendar, Play, CheckCircle2, XCircle, Terminal, Trash2, AlertCircle, Clipboard, Check, RefreshCw, Link2, Clock } from 'lucide-react';
+import { ArrowLeft, GitBranch, GitMerge, Calendar, Play, CheckCircle2, XCircle, Terminal, Trash2, AlertCircle, Clipboard, Check, RefreshCw, Clock } from 'lucide-react';
 import { useTasksStore, type LogEntry } from '@/store/tasks';
 import { useDevicesStore } from '@/store/devices';
 import { DEV_TOOL_LABELS } from '@/lib/devTools';
