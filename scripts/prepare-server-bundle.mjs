@@ -10,7 +10,6 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
-import { build } from 'esbuild';
 
 const NODE_VERSION = '22.22.0';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -75,7 +74,8 @@ const extractNodeArchive = (archive) => {
   }
 
   const folder = join(extractRoot, `node-v${NODE_VERSION}-win-${nodeArch()}`);
-  cpSync(join(folder, 'node.exe'), bundledNodePath());
+  rmSync(runtimeDir, { recursive: true, force: true });
+  cpSync(folder, runtimeDir, { recursive: true });
   rmSync(extractRoot, { recursive: true, force: true });
 };
 
@@ -101,17 +101,21 @@ const ensureNodeRuntime = async () => {
   return nodeBin;
 };
 
-const runEsbuild = async () => {
-  await build({
-    entryPoints: [join(root, 'api/server.ts')],
-    bundle: true,
-    platform: 'node',
-    format: 'cjs',
-    target: 'node18',
-    external: ['better-sqlite3'],
-    outfile: join(distServer, 'devfleet-server.cjs'),
-    logLevel: 'info',
-  });
+const runEsbuild = () => {
+  execFileSync(
+    process.platform === 'win32' ? 'npx.cmd' : 'npx',
+    [
+      'esbuild',
+      'api/server.ts',
+      '--bundle',
+      '--platform=node',
+      '--format=cjs',
+      '--target=node18',
+      '--external:better-sqlite3',
+      '--outfile=dist-server/devfleet-server.cjs',
+    ],
+    { cwd: root, stdio: 'inherit' },
+  );
 };
 
 const copyNativePackages = () => {
@@ -126,13 +130,25 @@ const copyNativePackages = () => {
   }
 };
 
+const resolveNpmCli = () => {
+  const candidates = process.platform === 'win32'
+    ? [
+        join(runtimeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+        join(runtimeDir, 'npm', 'bin', 'npm-cli.js'),
+      ]
+    : [
+        join(runtimeDir, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+        join(runtimeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+      ];
+  return candidates.find((candidate) => existsSync(candidate));
+};
+
 const rebuildBetterSqlite3 = (nodeBin) => {
   const betterSqlite3Dir = join(targetModules, 'better-sqlite3');
-  const npmCli = process.platform === 'win32'
-    ? join(runtimeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js')
-    : join(runtimeDir, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
-  if (!existsSync(npmCli)) {
-    throw new Error(`缺少 npm-cli: ${npmCli}`);
+  rmSync(join(betterSqlite3Dir, 'build'), { recursive: true, force: true });
+  const npmCli = resolveNpmCli();
+  if (!npmCli) {
+    throw new Error(`缺少 npm-cli（已检查 bundled runtime 内 npm 路径）`);
   }
   console.log(`Rebuilding better-sqlite3 with ${nodeBin}`);
   execFileSync(nodeBin, [npmCli, 'rebuild', '--build-from-source', 'better-sqlite3'], {
@@ -161,7 +177,7 @@ const verifyBundle = (nodeBin) => {
 };
 
 mkdirSync(distServer, { recursive: true });
-await runEsbuild();
+runEsbuild();
 copyNativePackages();
 const nodeBin = await ensureNodeRuntime();
 rebuildBetterSqlite3(nodeBin);
