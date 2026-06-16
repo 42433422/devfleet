@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { startTraeTaskWithComputerUse } from './computer-use.js';
+import { startTraeTaskWithComputerUse, openTraeWorkspace, submitTraeNewTask } from './computer-use.js';
 
 const execFileAsync = promisify(execFile);
 const apiBaseUrl = (process.env.DEVFLEET_API_URL || 'http://localhost:3001').replace(/\/$/, '');
@@ -90,9 +90,32 @@ server.registerTool('devfleet_report_task_progress', {
   return result(body);
 });
 
+server.registerTool('devfleet_computer_use_open_trae_workspace', {
+  title: '本机 Computer Use 打开 Trae 工作区',
+  description: '仅打开指定 Trae 工作区（trae-cn -r 复用已有实例），不提交 prompt。可与 devfleet_computer_use_submit_trae_task 分步调用。',
+  inputSchema: {
+    workspace_path: z.string().min(1).describe('Trae 要打开的本机工作区绝对路径'),
+  },
+}, async ({ workspace_path }) => {
+  await openTraeWorkspace(workspace_path);
+  return result({ success: true, workspace_path, phase: 'open' });
+});
+
+server.registerTool('devfleet_computer_use_submit_trae_task', {
+  title: '本机 Computer Use 向已打开 Trae 工作区提交新任务',
+  description: '等待工作区窗口就绪后，在对应 Trae 窗口点击新任务并粘贴 prompt。需工作区已通过 open 或 start 打开。',
+  inputSchema: {
+    workspace_path: z.string().min(1).describe('已打开的 Trae 工作区绝对路径'),
+    prompt: z.string().min(1).describe('写入 Trae 新任务输入框的任务内容'),
+  },
+}, async ({ workspace_path, prompt }) => {
+  await submitTraeNewTask(workspace_path, prompt);
+  return result({ success: true, workspace_path, phase: 'submit' });
+});
+
 server.registerTool('devfleet_computer_use_start_trae_task', {
   title: '本机 Computer Use 控制 Trae 新任务',
-  description: '在当前 MCP 所在设备上打开指定 Trae 工作区，点击/触发新任务并写入 prompt。用于 Codex 通过 DevFleet MCP 控制本机 Trae 完成最小闭环。macOS 与 Windows 均支持。',
+  description: '一次调用完成：在已有 Trae 实例中打开工作区 → 等待窗口 → 新任务 → 粘贴 prompt。不要与 open/submit 混用。',
   inputSchema: {
     workspace_path: z.string().min(1).describe('Trae 要打开的本机工作区绝对路径'),
     prompt: z.string().min(1).describe('写入 Trae 新任务输入框的任务内容'),

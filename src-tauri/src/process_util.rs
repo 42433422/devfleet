@@ -82,8 +82,7 @@ fn collect_node_candidates() -> Vec<String> {
 fn macos_embedded_node_paths() -> Vec<String> {
     let mut paths = vec![
         "/Applications/Cursor.app/Contents/Resources/app/resources/helpers/node".into(),
-        "/Applications/Visual Studio Code.app/Contents/Resources/app/resources/helpers/node"
-            .into(),
+        "/Applications/Visual Studio Code.app/Contents/Resources/app/resources/helpers/node".into(),
         "/Applications/Trae CN.app/Contents/Resources/app/resources/helpers/node".into(),
         "/Applications/Trae.app/Contents/Resources/app/resources/helpers/node".into(),
     ];
@@ -92,13 +91,18 @@ fn macos_embedded_node_paths() -> Vec<String> {
         for entry in entries.flatten() {
             let volume = entry.path();
             for app in ["Cursor.app", "Trae CN.app", "Trae.app"] {
-                let node = volume.join(app).join("Contents/Resources/app/resources/helpers/node");
+                let node = volume
+                    .join(app)
+                    .join("Contents/Resources/app/resources/helpers/node");
                 if node.is_file() {
                     paths.push(node.display().to_string());
                 }
                 if let Ok(children) = fs::read_dir(&volume) {
                     for child in children.flatten() {
-                        let nested = child.path().join(app).join("Contents/Resources/app/resources/helpers/node");
+                        let nested = child
+                            .path()
+                            .join(app)
+                            .join("Contents/Resources/app/resources/helpers/node");
                         if nested.is_file() {
                             paths.push(nested.display().to_string());
                         }
@@ -120,10 +124,7 @@ fn node_module_version(node_path: &str) -> Option<u32> {
     if !output.status.success() {
         return None;
     }
-    String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse()
-        .ok()
+    String::from_utf8_lossy(&output.stdout).trim().parse().ok()
 }
 
 fn which_executable(binary: &str) -> Option<String> {

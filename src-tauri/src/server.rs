@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Manager};
 
-use crate::process_util::{configure_hidden_command, resolve_bundled_node, resolve_node_executable};
+use crate::process_util::{
+    configure_hidden_command, resolve_bundled_node, resolve_node_executable,
+};
 
 pub struct EmbeddedServer(pub Mutex<Option<Child>>);
 

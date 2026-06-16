@@ -4,10 +4,12 @@ import path from 'node:path';
 import test from 'node:test';
 import {
   buildTraeNewTaskScript,
+  buildTraeWindowProbeScript,
   findTraeAppBundle,
   resolveComputerUseScript,
   traeApplicationNameFromBundle,
   TRAE_PROCESS_NAMES,
+  workspaceWindowNeedles,
 } from '../mcp/computer-use.ts';
 
 test('Computer Use 脚本存在且包含关键参数', () => {
@@ -35,16 +37,30 @@ test('MCP 构建产物包含 trae-new-task.ps1', () => {
 });
 
 test('macOS AppleScript 优先匹配 TRAE CN 并激活 Trae CN', () => {
-  const script = buildTraeNewTaskScript('hello\nworld', 'Trae CN');
+  const workspace = '/tmp/devfleet-e2e/agent-workspace/task-abc';
+  const script = buildTraeNewTaskScript('hello\nworld', 'Trae CN', workspace, {
+    openWorkspace: true,
+    traeCli: '/Applications/Trae CN.app/Contents/Resources/app/bin/trae-cn',
+    appBundle: '/Applications/Trae CN.app',
+  });
   assert.ok(TRAE_PROCESS_NAMES[0] === 'TRAE CN');
   assert.match(script, /"TRAE CN"/);
-  assert.match(script, /tell application "Trae CN" to activate/);
+  assert.match(script, /open POSIX file workspacePath/);
+  assert.doesNotMatch(script, /do shell script.*trae-cn/);
+  assert.match(script, /windowTitle is not "Trae CN"/);
+  assert.match(script, /task-abc/);
   assert.match(script, /我信任/);
   assert.match(script, /triggeredNewTask/);
-  assert.match(script, /entire contents/);
-  assert.match(script, /command down, shift down/);
+  assert.match(script, /entire contents of targetWindow/);
+  assert.match(script, /control down, command down/);
   assert.match(script, /新任务/);
   assert.match(script, /keystroke "v" using command down/);
+});
+
+test('workspaceWindowNeedles 包含任务目录与父目录', () => {
+  const needles = workspaceWindowNeedles('/tmp/devfleet-e2e/agent-workspace/uuid-task');
+  assert.ok(needles.includes('uuid-task'));
+  assert.ok(needles.includes('agent-workspace'));
 });
 
 test('Trae CN 卷宗路径可解析应用名', () => {

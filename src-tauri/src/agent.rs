@@ -443,7 +443,9 @@ impl AgentState {
         send_progress(tx, task, 25, "running");
 
         let dev_tool = task.tool.as_str();
-        self.auto_start_assigned_tool(dev_tool, &task_dir, tx, task);
+        if dev_tool != "trae" {
+            self.auto_start_assigned_tool(dev_tool, &task_dir, tx, task);
+        }
 
         let prompt = format!(
             "完成以下分布式子任务。直接在当前仓库修改代码，运行必要检查，不要只给建议。\n任务: {}\n要求: {}\n工作分支: {}\n开发工具: {}\n完成后总结修改和验证结果。",
@@ -509,11 +511,17 @@ impl AgentState {
                 let _ = computer_use::prepare_trae_workspace_settings(&task_dir);
 
                 let trae_prompt = if task.description.trim().is_empty() {
-                    prompt.clone()
+                    format!(
+                        "DevFleet 子任务：{}\n工作分支：{}\n\n{}",
+                        task.title.trim(),
+                        task.work_branch.trim(),
+                        prompt.trim()
+                    )
                 } else {
                     format!(
-                        "DevFleet 子任务：{}\n\n{}",
+                        "DevFleet 子任务：{}\n工作分支：{}\n\n{}",
                         task.title.trim(),
+                        task.work_branch.trim(),
                         task.description.trim()
                     )
                 };
@@ -555,7 +563,7 @@ impl AgentState {
                             tx,
                             task,
                             &format!(
-                                "[pipeline:computer_use] 首次自动控制失败，3.5s 后重试: {first_error}"
+                                "[pipeline:computer_use] 首次自动控制失败，3.5s 后仅重试提交 prompt（不再新开窗口）: {first_error}"
                             ),
                             "warn",
                         );
@@ -563,7 +571,7 @@ impl AgentState {
                         let task_dir_retry = task_dir.clone();
                         let trae_prompt_retry = trae_prompt.clone();
                         match tokio::task::spawn_blocking(move || {
-                            computer_use::start_trae_task(&task_dir_retry, &trae_prompt_retry)
+                            computer_use::submit_trae_new_task(&task_dir_retry, &trae_prompt_retry)
                         })
                         .await
                         {
@@ -613,22 +621,12 @@ impl AgentState {
                         "info",
                     );
                 } else {
-                    match launch_tool("trae", &task_dir) {
-                        Ok(()) => send_log(
-                            tx,
-                            task,
-                            "[pipeline:computer_use] 已回退为仅打开 Trae 工作区，请主设备 AI 调用 devfleet_computer_use_start_trae_task 补救",
-                            "warn",
-                        ),
-                        Err(error) => send_log(
-                            tx,
-                            task,
-                            &format!(
-                                "[pipeline:computer_use] Trae 启动失败: {error}，请主设备 AI 调用 devfleet_computer_use_start_trae_task"
-                            ),
-                            "warn",
-                        ),
-                    }
+                    send_log(
+                        tx,
+                        task,
+                        "[pipeline:computer_use] 自动控制未成功，请确认辅助功能已授权 DevFleet/Trae，或在 Cursor 调用 devfleet_computer_use_submit_trae_task 补救（勿重复 open 以免多开窗口）",
+                        "warn",
+                    );
                 }
                 send_log(
                     tx,
@@ -1262,7 +1260,13 @@ fn is_tool_process_running(tool: &str) -> bool {
     let processes = process_list();
     let process_names: &[&str] = match tool {
         "claude_code" => &["claude", "claude.exe"],
-        "trae" => &["trae", "trae.exe"],
+        "trae" => &[
+            "trae",
+            "trae.exe",
+            "trae cn",
+            "trae solo cn",
+            "trae solo",
+        ],
         "cursor" => &["cursor", "cursor.exe", "agent"],
         _ => &["codex", "codex.exe"],
     };
