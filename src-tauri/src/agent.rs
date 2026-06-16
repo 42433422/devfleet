@@ -478,7 +478,7 @@ impl AgentState {
                 send_log(
                     tx,
                     task,
-                    "[pipeline:computer_use] Trae 混合模式：写入任务文件并自动 Computer Use",
+                    "[pipeline:trae] Trae 混合模式：CLI 优先，Computer Use 兜底",
                     "info",
                 );
                 send_progress(tx, task, 30, "running");
@@ -526,112 +526,58 @@ impl AgentState {
                     )
                 };
 
+                let mut dispatch_ok = false;
+
                 send_log(
                     tx,
                     task,
-                    "[pipeline:computer_use] 正在自动控制 Trae（打开工作区 → 信任 → 新任务 → 粘贴）…",
+                    "[pipeline:trae_cli] 优先尝试 Trae Agent CLI（trae run）…",
                     "info",
                 );
-
-                let task_dir_for_cu = task_dir.clone();
-                let trae_prompt_for_cu = trae_prompt.clone();
-                let keepalive_tx = tx.clone();
-                let keepalive_task = task.clone();
-                let keepalive = tokio::spawn(async move {
-                    let mut tick = 0u32;
-                    loop {
-                        tokio::time::sleep(Duration::from_secs(8)).await;
-                        tick += 1;
+                match run_trae_agent_cli(&task_dir, &trae_prompt).await {
+                    Ok((label, output)) => {
+                        dispatch_ok = true;
                         send_log(
-                            &keepalive_tx,
-                            &keepalive_task,
-                            &format!(
-                                "[pipeline:computer_use] 正在控制 Trae UI（第 {tick} 次心跳）…"
-                            ),
+                            tx,
+                            task,
+                            &format!("[pipeline:trae_cli] {label} 已完成"),
                             "info",
                         );
+                        if !output.trim().is_empty() {
+                            send_log(tx, task, &truncate(&output, 4000), "info");
+                        }
                     }
-                });
-                let cu_ok = match tokio::task::spawn_blocking(move || {
-                    computer_use::start_trae_task(&task_dir_for_cu, &trae_prompt_for_cu)
-                })
-                .await
-                {
-                    Ok(Ok(())) => true,
-                    Ok(Err(first_error)) => {
+                    Err(cli_error) => {
                         send_log(
                             tx,
                             task,
                             &format!(
-                                "[pipeline:computer_use] 首次自动控制失败，3.5s 后仅重试提交 prompt（不再新开窗口）: {first_error}"
+                                "[pipeline:trae_cli] CLI 不可用或执行失败，回退 Computer Use: {cli_error}"
                             ),
                             "warn",
                         );
-                        tokio::time::sleep(Duration::from_millis(3500)).await;
-                        let task_dir_retry = task_dir.clone();
-                        let trae_prompt_retry = trae_prompt.clone();
-                        match tokio::task::spawn_blocking(move || {
-                            computer_use::submit_trae_new_task(&task_dir_retry, &trae_prompt_retry)
-                        })
-                        .await
-                        {
-                            Ok(Ok(())) => true,
-                            Ok(Err(retry_error)) => {
-                                send_log(
-                                    tx,
-                                    task,
-                                    &format!(
-                                        "[pipeline:computer_use] 自动控制失败: {retry_error}"
-                                    ),
-                                    "warn",
-                                );
-                                false
-                            }
-                            Err(join_error) => {
-                                send_log(
-                                    tx,
-                                    task,
-                                    &format!(
-                                        "[pipeline:computer_use] 自动控制线程异常: {join_error}"
-                                    ),
-                                    "warn",
-                                );
-                                false
-                            }
-                        }
                     }
-                    Err(join_error) => {
-                        send_log(
-                            tx,
-                            task,
-                            &format!("[pipeline:computer_use] 自动控制线程异常: {join_error}"),
-                            "warn",
-                        );
-                        false
-                    }
-                };
-                keepalive.abort();
-                let _ = keepalive.await;
+                }
 
-                if cu_ok {
+                if !dispatch_ok {
+                    dispatch_ok =
+                        execute_trae_computer_use_fallback(&task_dir, &trae_prompt, tx, task)
+                            .await;
+                }
+
+                if !dispatch_ok {
                     send_log(
                         tx,
                         task,
-                        "[pipeline:computer_use] 已自动打开 Trae、点击新任务并粘贴 prompt（无需用户手动复制）",
-                        "info",
-                    );
-                } else {
-                    send_log(
-                        tx,
-                        task,
-                        "[pipeline:computer_use] 自动控制未成功，请确认辅助功能已授权 DevFleet/Trae，或在 Cursor 调用 devfleet_computer_use_submit_trae_task 补救（勿重复 open 以免多开窗口）",
+                        "[pipeline:trae] CLI 与 Computer Use 均未成功派发，仍将等待工作区代码变更…",
                         "warn",
                     );
                 }
+
                 send_log(
                     tx,
                     task,
-                    "[pipeline:trae] 任务已写入 .devfleet/TASK.md，Trae Agent 正在改码…",
+                    "[pipeline:trae] 任务已写入 .devfleet/TASK.md，等待 Trae Agent 改码…",
                     "info",
                 );
                 send_progress(tx, task, 40, "running");
@@ -1026,6 +972,281 @@ pub fn start_saved_agent(state: &AgentState) {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct GuestAuthResponse {
+    token: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DevicesListResponse {
+    devices: Vec<DeviceSummary>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceSummary {
+    #[serde(default)]
+    bind_code: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BindCodeResponse {
+    bind_code: String,
+}
+
+const LOCAL_API_BASE: &str = "http://127.0.0.1:3001";
+
+pub fn try_auto_bind_localhost(_app: &AppHandle, state: &AgentState) {
+    if state
+        .inner
+        .config
+        .lock()
+        .ok()
+        .and_then(|value| value.clone())
+        .is_some()
+    {
+        return;
+    }
+
+    for _ in 0..120 {
+        if crate::server::is_local_server_healthy() {
+            break;
+        }
+        std::thread::sleep(Duration::from_secs(1) / 2);
+    }
+    if !crate::server::is_local_server_healthy() {
+        log::warn!("[DevFleet] auto-bind skipped: local API server not healthy after 60s");
+        return;
+    }
+
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => {
+            log::warn!("[DevFleet] auto-bind skipped: HTTP client error: {error}");
+            return;
+        }
+    };
+
+    let guest_token = match client
+        .post(format!("{LOCAL_API_BASE}/api/auth/guest"))
+        .send()
+    {
+        Ok(response) if response.status().is_success() => match response.json::<GuestAuthResponse>() {
+            Ok(body) => body.token,
+            Err(error) => {
+                log::warn!("[DevFleet] auto-bind skipped: guest response invalid: {error}");
+                return;
+            }
+        },
+        Ok(response) => {
+            log::warn!(
+                "[DevFleet] auto-bind skipped: guest login failed: HTTP {}",
+                response.status()
+            );
+            return;
+        }
+        Err(error) => {
+            log::warn!("[DevFleet] auto-bind skipped: guest login error: {error}");
+            return;
+        }
+    };
+
+    let bind_code = match client
+        .get(format!("{LOCAL_API_BASE}/api/devices"))
+        .header("Authorization", format!("Bearer {guest_token}"))
+        .send()
+    {
+        Ok(response) if response.status().is_success() => {
+            match response.json::<DevicesListResponse>() {
+                Ok(body) => body
+                    .devices
+                    .into_iter()
+                    .filter_map(|device| device.bind_code)
+                    .find(|code| code.trim().len() == 6),
+                Err(error) => {
+                    log::warn!("[DevFleet] auto-bind skipped: devices response invalid: {error}");
+                    return;
+                }
+            }
+        }
+        Ok(response) => {
+            log::warn!(
+                "[DevFleet] auto-bind skipped: list devices failed: HTTP {}",
+                response.status()
+            );
+            return;
+        }
+        Err(error) => {
+            log::warn!("[DevFleet] auto-bind skipped: list devices error: {error}");
+            return;
+        }
+    };
+
+    let bind_code = match bind_code {
+        Some(code) => code,
+        None => match client
+            .post(format!("{LOCAL_API_BASE}/api/devices/bind"))
+            .header("Authorization", format!("Bearer {guest_token}"))
+            .json(&json!({ "name": "我的开发设备" }))
+            .send()
+        {
+            Ok(response) if response.status().is_success() => {
+                match response.json::<BindCodeResponse>() {
+                    Ok(body) => body.bind_code,
+                    Err(error) => {
+                        log::warn!("[DevFleet] auto-bind skipped: bind response invalid: {error}");
+                        return;
+                    }
+                }
+            }
+            Ok(response) => {
+                log::warn!(
+                    "[DevFleet] auto-bind skipped: create bind code failed: HTTP {}",
+                    response.status()
+                );
+                return;
+            }
+            Err(error) => {
+                log::warn!("[DevFleet] auto-bind skipped: create bind code error: {error}");
+                return;
+            }
+        },
+    };
+
+    let workspace_root = default_agent_workspace_root();
+    if let Err(error) = std::fs::create_dir_all(&workspace_root) {
+        log::warn!(
+            "[DevFleet] auto-bind skipped: cannot create workspace {}: {error}",
+            workspace_root.display()
+        );
+        return;
+    }
+
+    let device_name = local_device_name();
+    let activation = match client
+        .post(format!("{LOCAL_API_BASE}/api/devices/activate"))
+        .json(&json!({
+            "bindCode": bind_code.trim().to_uppercase(),
+            "deviceName": device_name,
+        }))
+        .send()
+    {
+        Ok(response) if response.status().is_success() => match response.json::<ActivationResponse>()
+        {
+            Ok(body) => body,
+            Err(error) => {
+                log::warn!("[DevFleet] auto-bind skipped: activate response invalid: {error}");
+                return;
+            }
+        },
+        Ok(response) => {
+            let error = response
+                .json::<Value>()
+                .ok()
+                .and_then(|body| {
+                    body.get("error")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .unwrap_or_else(|| "activate failed".to_string());
+            log::warn!("[DevFleet] auto-bind skipped: {error}");
+            return;
+        }
+        Err(error) => {
+            log::warn!("[DevFleet] auto-bind skipped: activate error: {error}");
+            return;
+        }
+    };
+
+    let detected_dev_tool = detect_preferred_dev_tool();
+    let config = AgentConfig {
+        api_base_url: LOCAL_API_BASE.to_string(),
+        device_token: activation.device_token,
+        device_id: activation.device.id,
+        device_name: {
+            let name = activation.device.name.trim();
+            if name.is_empty() {
+                device_name.clone()
+            } else {
+                name.to_string()
+            }
+        },
+        controller_id: activation.controller.id,
+        controller_email: activation.controller.email,
+        controller_device_id: activation
+            .controller
+            .primary_device
+            .as_ref()
+            .map(|device| device.id.clone()),
+        controller_device_name: activation
+            .controller
+            .primary_device
+            .map(|device| device.name),
+        workspace_root: workspace_root.to_string_lossy().into_owned(),
+        dev_tool: detected_dev_tool.clone(),
+        default_editor: detected_dev_tool,
+        executor: "codex".to_string(),
+    };
+
+    if let Err(error) = state.save_config(&config) {
+        log::warn!("[DevFleet] auto-bind failed to save config: {error}");
+        return;
+    }
+    set_mutex(&state.inner.config, Some(config));
+    state.start();
+    log::info!(
+        "[DevFleet] auto-bound localhost agent as {} (dev_tool={})",
+        device_name,
+        state
+            .inner
+            .config
+            .lock()
+            .ok()
+            .and_then(|value| value.as_ref().map(|cfg| cfg.dev_tool.clone()))
+            .unwrap_or_else(|| "trae".to_string())
+    );
+}
+
+fn default_agent_workspace_root() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        PathBuf::from(r"C:\DevFleet\workspaces")
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::env::var("HOME")
+            .map(|home| PathBuf::from(home).join("DevFleet/workspaces"))
+            .unwrap_or_else(|_| PathBuf::from("/tmp/DevFleet/workspaces"))
+    }
+}
+
+fn local_device_name() -> String {
+    StdCommand::new("hostname")
+        .output()
+        .ok()
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "DevFleet".to_string())
+}
+
+fn detect_preferred_dev_tool() -> String {
+    let tools = scan_tools(None, None);
+    for name in ["trae", "cursor", "codex", "claude_code"] {
+        if tools
+            .iter()
+            .any(|tool| tool.tool_name == name && tool.installed)
+        {
+            return name.to_string();
+        }
+    }
+    "trae".to_string()
+}
+
 fn set_mutex<T>(mutex: &Mutex<T>, value: T) {
     if let Ok(mut target) = mutex.lock() {
         *target = value;
@@ -1041,6 +1262,11 @@ fn scan_tools(current_task: Option<&str>, active_dev_tool: Option<&str>) -> Vec<
                 resolve_cursor_agent()
                     .map(|(program, _)| program)
                     .or_else(|| find_executable("cursor"))
+            } else if name == "trae" {
+                resolve_trae_agent_cli()
+                    .map(|inv| inv.program)
+                    .or_else(|| find_executable("trae"))
+                    .or_else(|| find_executable("trae-cli"))
             } else {
                 find_executable(name)
             };
@@ -1160,6 +1386,24 @@ fn process_list() -> String {
         .unwrap_or_default()
 }
 
+fn user_local_bin_executable(binary: &str) -> Option<String> {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = binary;
+        None
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let home = std::env::var("HOME").ok()?;
+        let path = PathBuf::from(home).join(".local/bin").join(binary);
+        if path.is_file() {
+            Some(path.to_string_lossy().into_owned())
+        } else {
+            None
+        }
+    }
+}
+
 fn find_executable(tool: &str) -> Option<String> {
     let binary = match tool {
         "claude_code" => "claude",
@@ -1189,6 +1433,9 @@ fn find_executable(tool: &str) -> Option<String> {
     }
     #[cfg(not(target_os = "windows"))]
     {
+        if let Some(path) = user_local_bin_executable(binary) {
+            return Some(path);
+        }
         if let Ok(output) = StdCommand::new("which").arg(binary).output() {
             if output.status.success() {
                 return Some(String::from_utf8_lossy(&output.stdout).trim().to_string());
@@ -1459,6 +1706,191 @@ async fn push_branch_if_remote(
     }
 }
 
+/// Trae Agent CLI 调用方式（`trae run "..."` / `trae-cli run "..."`）。
+#[derive(Clone, Debug)]
+struct TraeCliInvocation {
+    program: String,
+    prefix: Vec<String>,
+    label: &'static str,
+}
+
+fn bundled_trae_cli_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    #[cfg(target_os = "macos")]
+    if let Some(app) = computer_use::find_trae_app_bundle() {
+        for name in ["trae-cn", "trae", "code", "marscode"] {
+            candidates.push(app.join("Contents/Resources/app/bin").join(name));
+        }
+    }
+    #[cfg(target_os = "windows")]
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        for rel in [
+            r"Programs\Trae\resources\app\bin\trae.cmd",
+            r"Programs\Trae\resources\app\bin\trae.exe",
+            r"Programs\Trae\resources\app\bin\trae-cn.cmd",
+            r"Programs\trae\resources\app\bin\trae.cmd",
+        ] {
+            candidates.push(PathBuf::from(format!("{local}\\{rel}")));
+        }
+    }
+    candidates
+}
+
+fn resolve_trae_agent_cli() -> Option<TraeCliInvocation> {
+    if let Ok(from_env) = std::env::var("DEVFLEET_TRAE_CLI") {
+        let program = from_env.trim().to_string();
+        if !program.is_empty() {
+            return Some(TraeCliInvocation {
+                program,
+                prefix: Vec::new(),
+                label: "DEVFLEET_TRAE_CLI",
+            });
+        }
+    }
+
+    for (binary, label) in [("trae", "trae run"), ("trae-cli", "trae-cli run")] {
+        if let Some(program) = find_binary_in_path(binary) {
+            return Some(TraeCliInvocation {
+                program,
+                prefix: Vec::new(),
+                label,
+            });
+        }
+    }
+
+    for candidate in bundled_trae_cli_candidates() {
+        if candidate.is_file() {
+            return Some(TraeCliInvocation {
+                program: candidate.to_string_lossy().into_owned(),
+                prefix: Vec::new(),
+                label: "Trae bundled CLI",
+            });
+        }
+    }
+
+    None
+}
+
+async fn run_trae_agent_cli(cwd: &Path, prompt: &str) -> Result<(String, String), String> {
+    let invocation = resolve_trae_agent_cli().ok_or_else(|| {
+        "未找到 Trae Agent CLI。请安装：pip install trae-cli，或运行 trae.cn 官方 TRAE CLI 安装脚本（trae / trae-cli 需在 PATH 中）".to_string()
+    })?;
+    let mut args: Vec<String> = invocation.prefix.clone();
+    args.push("run".to_string());
+    args.push(prompt.to_string());
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let output = run_command(Some(cwd), &invocation.program, &arg_refs).await?;
+    Ok((invocation.label.to_string(), output))
+}
+
+async fn execute_trae_computer_use_fallback(
+    task_dir: &Path,
+    trae_prompt: &str,
+    tx: &mpsc::UnboundedSender<Value>,
+    task: &ExecuteTask,
+) -> bool {
+    send_log(
+        tx,
+        task,
+        "[pipeline:computer_use] 回退：自动控制 Trae（打开工作区 → 信任 → 新任务 → 粘贴）…",
+        "info",
+    );
+
+    let task_dir_for_cu = task_dir.to_path_buf();
+    let trae_prompt_for_cu = trae_prompt.to_string();
+    let keepalive_tx = tx.clone();
+    let keepalive_task = task.clone();
+    let keepalive = tokio::spawn(async move {
+        let mut tick = 0u32;
+        loop {
+            tokio::time::sleep(Duration::from_secs(8)).await;
+            tick += 1;
+            send_log(
+                &keepalive_tx,
+                &keepalive_task,
+                &format!("[pipeline:computer_use] 正在控制 Trae UI（第 {tick} 次心跳）…"),
+                "info",
+            );
+        }
+    });
+
+    let cu_ok = match tokio::task::spawn_blocking(move || {
+        computer_use::start_trae_task(&task_dir_for_cu, &trae_prompt_for_cu)
+    })
+    .await
+    {
+        Ok(Ok(())) => true,
+        Ok(Err(first_error)) => {
+            send_log(
+                tx,
+                task,
+                &format!(
+                    "[pipeline:computer_use] 首次自动控制失败，3.5s 后仅重试提交 prompt（不再新开窗口）: {first_error}"
+                ),
+                "warn",
+            );
+            tokio::time::sleep(Duration::from_millis(3500)).await;
+            let task_dir_retry = task_dir.to_path_buf();
+            let trae_prompt_retry = trae_prompt.to_string();
+            match tokio::task::spawn_blocking(move || {
+                computer_use::submit_trae_new_task(&task_dir_retry, &trae_prompt_retry)
+            })
+            .await
+            {
+                Ok(Ok(())) => true,
+                Ok(Err(retry_error)) => {
+                    send_log(
+                        tx,
+                        task,
+                        &format!("[pipeline:computer_use] 自动控制失败: {retry_error}"),
+                        "warn",
+                    );
+                    false
+                }
+                Err(join_error) => {
+                    send_log(
+                        tx,
+                        task,
+                        &format!("[pipeline:computer_use] 自动控制线程异常: {join_error}"),
+                        "warn",
+                    );
+                    false
+                }
+            }
+        }
+        Err(join_error) => {
+            send_log(
+                tx,
+                task,
+                &format!("[pipeline:computer_use] 自动控制线程异常: {join_error}"),
+                "warn",
+            );
+            false
+        }
+    };
+
+    keepalive.abort();
+    let _ = keepalive.await;
+
+    if cu_ok {
+        send_log(
+            tx,
+            task,
+            "[pipeline:computer_use] 已自动打开 Trae、点击新任务并粘贴 prompt（无需用户手动复制）",
+            "info",
+        );
+    } else {
+        send_log(
+            tx,
+            task,
+            "[pipeline:computer_use] 自动控制未成功，请确认辅助功能已授权 DevFleet/Trae，或在 Cursor 调用 devfleet_computer_use_submit_trae_task 补救（勿重复 open 以免多开窗口）",
+            "warn",
+        );
+    }
+
+    cu_ok
+}
+
 /// 解析 Cursor Agent CLI：`agent` 独立二进制，或 `cursor agent` 子命令。
 fn resolve_cursor_agent() -> Option<(String, Vec<String>)> {
     if let Some(path) = find_binary_in_path("agent") {
@@ -1521,6 +1953,9 @@ fn find_binary_in_path(binary: &str) -> Option<String> {
     }
     #[cfg(not(target_os = "windows"))]
     {
+        if let Some(path) = user_local_bin_executable(binary) {
+            return Some(path);
+        }
         if let Ok(output) = StdCommand::new("which").arg(binary).output() {
             if output.status.success() {
                 let trimmed = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -1734,6 +2169,17 @@ mod tests {
             work_branch: "devfleet/trae/sub-1".to_string(),
             tool: "trae".to_string(),
         }
+    }
+
+    #[test]
+    fn trae_cli_resolution_from_env() {
+        std::env::set_var("DEVFLEET_TRAE_CLI", "/tmp/devfleet-trae-cli");
+        let resolved = resolve_trae_agent_cli();
+        std::env::remove_var("DEVFLEET_TRAE_CLI");
+        assert_eq!(
+            resolved.as_ref().map(|inv| inv.program.as_str()),
+            Some("/tmp/devfleet-trae-cli")
+        );
     }
 
     #[test]

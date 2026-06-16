@@ -1,7 +1,7 @@
 {
   "name": "devfleet",
   "private": true,
-  "version": "1.3.23",
+  "version": "1.3.24",
   "type": "module",
   "scripts": {
     "client:dev": "vite",
@@ -24,7 +24,8 @@
     "demo:run": "bash scripts/demo-run.sh",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "cli:smoke": "node scripts/cli-smoke-test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

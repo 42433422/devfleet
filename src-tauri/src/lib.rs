@@ -8,8 +8,8 @@ mod server;
 use std::net::TcpStream;
 use std::time::Duration;
 
-use tauri::webview::WebviewWindowBuilder;
 use tauri::{Manager, RunEvent};
+use tauri::webview::WebviewWindowBuilder;
 use tauri_utils::config::WebviewUrl;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -37,6 +37,11 @@ pub fn run() {
 
             let agent_state = agent::AgentState::load(&app.handle());
             agent::start_saved_agent(&agent_state);
+            let agent_for_autobind = agent_state.clone();
+            let app_for_autobind = app.handle().clone();
+            std::thread::spawn(move || {
+                agent::try_auto_bind_localhost(&app_for_autobind, &agent_for_autobind);
+            });
             app.manage(agent_state);
 
             let app_handle = app.handle().clone();
@@ -88,11 +93,7 @@ fn resolve_webview_url(app: &tauri::App) -> WebviewUrl {
 fn dev_server_available(dev_url: &url::Url) -> bool {
     let host = dev_url.host_str().unwrap_or("127.0.0.1");
     let port = dev_url.port().unwrap_or(5173);
-    let host = if host == "localhost" {
-        "127.0.0.1"
-    } else {
-        host
-    };
+    let host = if host == "localhost" { "127.0.0.1" } else { host };
     let addr: std::net::SocketAddr = match format!("{host}:{port}").parse() {
         Ok(addr) => addr,
         Err(_) => return false,

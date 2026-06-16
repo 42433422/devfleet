@@ -19,7 +19,11 @@ import {
 } from './authSession';
 
 ensureApiBaseConfigured();
-sanitizeStoredApiUrl();
+if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+  sanitizeStoredApiUrl({ forceLocal: true });
+} else {
+  sanitizeStoredApiUrl();
+}
 
 export { getApiBaseUrl, ensureApiBaseConfigured, apiUrl, DEFAULT_API_BASE } from './apiBase';
 

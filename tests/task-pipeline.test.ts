@@ -10,6 +10,19 @@ test('derivePipelineSteps marks dispatch done when subtasks exist', () => {
   assert.equal(steps.find((s) => s.id === 'dispatch')?.state, 'done');
 });
 
+test('derivePipelineSteps marks computer_use done after trae CLI log', () => {
+  const steps = derivePipelineSteps({
+    status: 'running',
+    subTasks: [{
+      status: 'running',
+      progress: 45,
+      logs: [{ content: '[pipeline:trae_cli] trae run 已完成' }],
+    }],
+  });
+  assert.equal(steps.find((s) => s.id === 'computer_use')?.state, 'done');
+  assert.equal(steps.find((s) => s.id === 'trae')?.state, 'active');
+});
+
 test('derivePipelineSteps marks computer_use done after auto CU log', () => {
   const steps = derivePipelineSteps({
     status: 'running',

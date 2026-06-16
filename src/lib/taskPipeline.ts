@@ -57,11 +57,13 @@ function avgProgress(task: TaskLike): number {
 }
 
 export function derivePipelineSteps(task: TaskLike): PipelineStep[] {
+  const logs = allLogs(task);
   const failed = task.status === 'failed' || anySubFailed(task);
   const progress = avgProgress(task);
 
   const dispatchDone = task.subTasks.length > 0;
   const computerDone =
+    hasLogMatch(task, /\[pipeline:trae_cli\].*已完成/) ||
     hasLogMatch(task, /\[pipeline:computer_use\].*已自动打开 Trae/) ||
     hasLogMatch(task, /已通过内置 Computer Use/) ||
     hasLogMatch(task, /\[pipeline:trae\]/) ||

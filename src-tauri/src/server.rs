@@ -164,6 +164,10 @@ fn bootstrap_embedded_server(app: &AppHandle) {
     }
 }
 
+pub fn is_local_server_healthy() -> bool {
+    server_healthy()
+}
+
 fn server_healthy() -> bool {
     const HEALTH_URLS: [&str; 2] = [
         "http://127.0.0.1:3001/api/health",
