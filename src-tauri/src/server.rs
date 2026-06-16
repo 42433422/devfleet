@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Manager};
 
-use crate::process_util::{configure_hidden_command, resolve_node_executable};
+use crate::process_util::{configure_hidden_command, resolve_bundled_node, resolve_node_executable};
 
 pub struct EmbeddedServer(pub Mutex<Option<Child>>);
 
@@ -193,7 +193,9 @@ fn start_embedded_server(app: &AppHandle) -> Option<Child> {
     let db_file = data_dir.join("devfleet.db");
     std::fs::create_dir_all(&data_dir).ok()?;
 
-    let node = resolve_node_executable().unwrap_or_else(|| "node".into());
+    let node = resolve_bundled_node(&server_dir)
+        .or_else(resolve_node_executable)
+        .unwrap_or_else(|| "node".into());
     log::info!("[DevFleet] embedded server node: {node}");
     let mut command = std::process::Command::new(node);
     configure_hidden_command(&mut command);

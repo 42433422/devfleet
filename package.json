@@ -1,7 +1,7 @@
 {
   "name": "devfleet",
   "private": true,
-  "version": "1.3.9",
+  "version": "1.3.10",
   "type": "module",
   "scripts": {
     "client:dev": "vite",
@@ -11,7 +11,7 @@
     "check": "tsc --noEmit",
     "server:dev": "nodemon",
     "server": "tsx api/server.ts",
-    "server:build": "esbuild api/server.ts --bundle --platform=node --format=cjs --target=node18 --external:better-sqlite3 --outfile=dist-server/devfleet-server.cjs && node scripts/copy-server-native.mjs",
+    "server:build": "node scripts/prepare-server-bundle.mjs",
     "dev": "concurrently \"npm run client:dev\" \"npm run server:dev\"",
     "test": "npm run mcp:build && tsx --test tests/*.test.ts",
     "test:scope": "npm run mcp:build && node scripts/test-scope.mjs",

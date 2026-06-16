@@ -4,6 +4,20 @@ use std::process::{Command, Stdio};
 
 const MIN_SQLITE_NODE_MODULES: u32 = 127;
 
+/// App 内嵌 Node 运行时（与 better-sqlite3 编译 ABI 一致），优先于本机 Node。
+pub fn resolve_bundled_node(server_dir: &Path) -> Option<String> {
+    #[cfg(target_os = "windows")]
+    {
+        let node = server_dir.join("runtime").join("node.exe");
+        return node.is_file().then(|| node.display().to_string());
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let node = server_dir.join("runtime").join("bin").join("node");
+        return node.is_file().then(|| node.display().to_string());
+    }
+}
+
 /// 解析本机 Node，优先 ABI 与 better-sqlite3 原生模块匹配（Node 22+ / modules 127+）。
 pub fn resolve_node_executable() -> Option<String> {
     let mut candidates = collect_node_candidates();
