@@ -63,6 +63,12 @@ export async function openDeeplink(deeplink: string, webFallback?: string): Prom
     return null;
   } catch (error) {
     const message = error instanceof Error ? error.message : '无法打开应用';
+    try {
+      await openExternalUrl(deeplink);
+      return null;
+    } catch {
+      // 继续尝试 web 回退
+    }
     if (webFallback) {
       try {
         await openExternalUrl(webFallback);

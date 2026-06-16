@@ -16,6 +16,7 @@ import { openDeeplink, openTraeInstall } from '@/lib/openExternal';
 import { mcpClientApi, type McpClientStatus, type McpClientTool } from '@/lib/mcpClient';
 import { buildAiCommanderPlaybook } from '@/lib/aiPlaybook';
 import { buildMcpAutoSetupPrompt } from '@/lib/mcpSetupPrompt';
+import { copyToClipboard } from '@/lib/clipboard';
 import { defaultMergeWorkspace } from '@/lib/mergeTask';
 import ServerAddressPanel from '@/components/ServerAddressPanel';
 
@@ -32,6 +33,7 @@ export default function Integration() {
   const [traeVariant, setTraeVariant] = useState<TraeVariant>('cn');
   const [playbookCopied, setPlaybookCopied] = useState(false);
   const [mcpSetupCopied, setMcpSetupCopied] = useState(false);
+  const [mcpSetupCopyError, setMcpSetupCopyError] = useState('');
   const mcpOptions = useMemo(() => ({
     mcpPath,
     apiUrl,
@@ -72,15 +74,25 @@ export default function Integration() {
   );
 
   const copyMcpSetupPrompt = async () => {
-    await navigator.clipboard.writeText(mcpSetupPrompt);
-    setMcpSetupCopied(true);
-    window.setTimeout(() => setMcpSetupCopied(false), 1500);
+    try {
+      await copyToClipboard(mcpSetupPrompt);
+      setMcpSetupCopyError('');
+      setMcpSetupCopied(true);
+      window.setTimeout(() => setMcpSetupCopied(false), 1500);
+    } catch (error) {
+      setMcpSetupCopied(false);
+      setMcpSetupCopyError(error instanceof Error ? error.message : '复制失败，请手动选中下方文本');
+    }
   };
 
   const copyPlaybook = async () => {
-    await navigator.clipboard.writeText(aiPlaybook);
-    setPlaybookCopied(true);
-    window.setTimeout(() => setPlaybookCopied(false), 1500);
+    try {
+      await copyToClipboard(aiPlaybook);
+      setPlaybookCopied(true);
+      window.setTimeout(() => setPlaybookCopied(false), 1500);
+    } catch {
+      setInstallHint('剧本复制失败，请手动选中下方文本复制');
+    }
   };
 
   const refreshStatuses = useCallback(async () => {
@@ -124,9 +136,33 @@ export default function Integration() {
   }, [fetchDevices]);
 
   const copy = async (name: string, value: string) => {
-    await navigator.clipboard.writeText(value);
-    setCopied(name);
-    window.setTimeout(() => setCopied(''), 1500);
+    try {
+      await copyToClipboard(value);
+      setCopied(name);
+      window.setTimeout(() => setCopied(''), 1500);
+    } catch (error) {
+      setInstallHint(error instanceof Error ? error.message : '复制失败');
+    }
+  };
+
+  const openCursorDeeplink = async () => {
+    setInstallHint('');
+    const error = await openDeeplink(cursorInstall.deeplink, cursorInstall.webUrl);
+    if (error) {
+      setInstallHint(error);
+      return;
+    }
+    setInstallHint('正在打开 Cursor 安装 MCP；请在客户端确认。');
+  };
+
+  const openTraeDeeplink = async () => {
+    setInstallHint('');
+    try {
+      const appName = await openTraeInstall(traeInstall.deeplinkCn, traeInstall.deeplinkIntl);
+      setInstallHint(`正在打开 ${appName} 安装 MCP；请在客户端确认。`);
+    } catch (error) {
+      setInstallHint(error instanceof Error ? error.message : '无法打开 Trae');
+    }
   };
 
   const install = async (tool: McpClientTool) => {
@@ -178,10 +214,10 @@ export default function Integration() {
       </div>
 
       <div className="mb-6 bg-gradient-to-br from-brand/10 via-zinc-900/80 to-zinc-900/60 border border-brand/25 rounded-xl overflow-hidden">
-        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 px-5 py-4 border-b border-brand/15">
-          <div>
+        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 px-5 py-4 border-b border-brand/15">
+          <div className="min-w-0 flex-1">
             <h2 className="text-sm font-semibold text-white flex items-center gap-2">
-              <Bot size={16} className="text-brand" />
+              <Bot size={16} className="text-brand shrink-0" />
               复制给 AI 助手 · 自动完成 MCP 接入
             </h2>
             <p className="text-xs text-zinc-400 mt-1.5 max-w-xl">
@@ -189,24 +225,45 @@ export default function Integration() {
               {' '}
               <code className="text-brand/90">devfleet_list_devices</code>
               {' '}
-              验证——无需手动改 JSON。
+              验证——无需手动改 JSON。也可直接用下方按钮在 Cursor / Trae 中一键安装。
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => void copyMcpSetupPrompt()}
-            disabled={!token}
-            className="flex items-center justify-center gap-2 px-4 py-2.5 bg-brand hover:bg-brand/90 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg text-sm text-black font-semibold shrink-0"
-          >
-            {mcpSetupCopied ? <Check size={16} /> : <Clipboard size={16} />}
-            {mcpSetupCopied ? '已复制，去粘贴给 AI' : '一键复制配置话术'}
-          </button>
+          <div className="relative z-10 flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2 w-full lg:w-auto shrink-0">
+            <button
+              type="button"
+              onClick={() => void copyMcpSetupPrompt()}
+              aria-label="一键复制 MCP 配置话术"
+              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-brand hover:bg-brand/90 active:scale-[0.98] rounded-lg text-sm text-black font-semibold cursor-pointer transition-transform"
+            >
+              {mcpSetupCopied ? <Check size={16} /> : <Clipboard size={16} />}
+              {mcpSetupCopied ? '已复制，去粘贴给 AI' : '一键复制配置话术'}
+            </button>
+            <button
+              type="button"
+              onClick={() => void openCursorDeeplink()}
+              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-sm text-white font-medium"
+            >
+              <Code2 size={16} />
+              Cursor 一键安装
+            </button>
+            <button
+              type="button"
+              onClick={() => void openTraeDeeplink()}
+              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-sm text-white font-medium"
+            >
+              <Sparkles size={16} />
+              Trae 一键安装
+            </button>
+          </div>
         </div>
-        <pre className="p-5 text-[11px] font-mono text-zinc-400 leading-relaxed overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap">
+        <pre className="p-5 text-[11px] font-mono text-zinc-400 leading-relaxed overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap break-words">
           {preview(mcpSetupPrompt)}
         </pre>
+        {mcpSetupCopyError && (
+          <p className="px-5 pb-2 text-[11px] text-red-400/90">{mcpSetupCopyError}</p>
+        )}
         {!token && (
-          <p className="px-5 pb-4 text-[11px] text-amber-400/90">请先登录 DevFleet，话术中将包含你的 DEVFLEET_TOKEN。</p>
+          <p className="px-5 pb-4 text-[11px] text-amber-400/90">未检测到登录令牌，话术中 token 为占位符；登录后重新复制可获得完整配置。</p>
         )}
       </div>
 
@@ -252,10 +309,9 @@ export default function Integration() {
           status={clientStatuses.trae}
           content={preview(traeConfig)}
           variant={traeVariant}
-          onDeeplinkInstall={mcpClientApi.isDesktop() ? async () => {
-            const appName = await openTraeInstall(traeInstall.deeplinkCn, traeInstall.deeplinkIntl);
-            setInstallHint(`正在打开 ${appName} 安装 MCP；请在客户端确认。`);
-          } : undefined}
+          onDeeplinkInstall={async () => {
+            await openTraeDeeplink();
+          }}
         />
         <McpCard
           title="Codex"
@@ -281,6 +337,9 @@ export default function Integration() {
           busy={installBusy === 'cursor'}
           status={clientStatuses.cursor}
           content={preview(cursorInstall.mcpJson)}
+          onDeeplinkInstall={async () => {
+            await openCursorDeeplink();
+          }}
         />
         <McpCard
           title="Claude Code"
@@ -365,10 +424,10 @@ export default function Integration() {
       </div>
 
       <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl overflow-hidden mb-4">
-        <div className="flex items-start justify-between gap-4 px-5 py-4 border-b border-zinc-800">
-          <div>
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 px-5 py-4 border-b border-zinc-800">
+          <div className="min-w-0 flex-1">
             <h2 className="text-sm font-medium text-white flex items-center gap-2">
-              <Monitor size={14} className="text-brand" />
+              <Monitor size={14} className="text-brand shrink-0" />
               AI 指挥官剧本
             </h2>
             <p className="text-[11px] text-zinc-500 mt-1">
@@ -378,13 +437,13 @@ export default function Integration() {
           <button
             type="button"
             onClick={() => void copyPlaybook()}
-            className="flex items-center gap-1.5 px-3 py-2 bg-brand/90 hover:bg-brand rounded-lg text-xs text-black font-medium shrink-0"
+            className="flex items-center justify-center gap-1.5 px-3 py-2 bg-brand/90 hover:bg-brand rounded-lg text-xs text-black font-medium shrink-0 w-full sm:w-auto"
           >
             {playbookCopied ? <Check size={12} /> : <Clipboard size={12} />}
             {playbookCopied ? '已复制' : '复制剧本'}
           </button>
         </div>
-        <pre className="p-5 text-[11px] font-mono text-zinc-400 leading-relaxed overflow-x-auto max-h-80 overflow-y-auto whitespace-pre-wrap">
+        <pre className="p-5 text-[11px] font-mono text-zinc-400 leading-relaxed overflow-x-auto max-h-80 overflow-y-auto whitespace-pre-wrap break-words">
           {aiPlaybook}
         </pre>
       </div>
@@ -413,10 +472,10 @@ function McpCard({ title, icon, hint, copyKey, copied, onCopy, onInstall, busy, 
       ? '更新配置'
       : '一键配置';
   return (
-    <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-5">
-      <div className="flex items-start justify-between gap-3 mb-3">
-        <div>
-          <h2 className="text-sm font-medium text-white flex items-center gap-2">
+    <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-5 flex flex-col min-h-0">
+      <div className="flex flex-col gap-3 mb-3">
+        <div className="min-w-0">
+          <h2 className="text-sm font-medium text-white flex items-center gap-2 flex-wrap">
             {icon}{title}
             {variant && (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-brand/20 text-brand font-normal">
@@ -427,7 +486,7 @@ function McpCard({ title, icon, hint, copyKey, copied, onCopy, onInstall, busy, 
           <p className="text-xs text-zinc-500 mt-1">{hint}</p>
           <McpStatus status={status} />
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={onInstall}
@@ -441,10 +500,11 @@ function McpCard({ title, icon, hint, copyKey, copied, onCopy, onInstall, busy, 
               type="button"
               onClick={() => void onDeeplinkInstall()}
               disabled={busy}
-              title="通过 deeplink 在 Trae 中打开安装"
-              className="p-2 bg-zinc-800 rounded-lg text-zinc-300 hover:text-white disabled:opacity-50"
+              title="通过 deeplink 在客户端打开安装"
+              className="flex items-center gap-1.5 px-3 py-2 bg-zinc-800 rounded-lg text-xs text-zinc-300 hover:text-white disabled:opacity-50"
             >
               <Monitor size={13} />
+              打开安装
             </button>
           )}
           <button type="button" onClick={onCopy} title={`复制 ${title} 配置`} className="p-2 bg-zinc-800 rounded-lg text-zinc-300 hover:text-white">
@@ -452,7 +512,7 @@ function McpCard({ title, icon, hint, copyKey, copied, onCopy, onInstall, busy, 
           </button>
         </div>
       </div>
-      <pre className={`p-4 bg-zinc-950 rounded-lg overflow-x-auto text-xs font-mono whitespace-pre-wrap max-h-40 ${accent ? 'text-brand' : 'text-zinc-300'}`}>{content}</pre>
+      <pre className={`p-4 bg-zinc-950 rounded-lg overflow-x-auto text-xs font-mono whitespace-pre-wrap break-words max-h-40 flex-1 min-h-0 ${accent ? 'text-brand' : 'text-zinc-300'}`}>{content}</pre>
     </div>
   );
 }
