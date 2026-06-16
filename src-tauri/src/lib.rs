@@ -1,12 +1,14 @@
 mod agent;
+mod computer_use;
 mod mcp;
 mod network;
+mod process_util;
 mod server;
 
 use std::net::TcpStream;
 use std::time::Duration;
 
-use tauri::Manager;
+use tauri::{Manager, RunEvent};
 use tauri::webview::WebviewWindowBuilder;
 use tauri_utils::config::WebviewUrl;
 
@@ -60,8 +62,13 @@ pub fn run() {
             network::open_external_url,
             network::open_trae_install,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let RunEvent::Exit = event {
+                server::shutdown_embedded_server(app);
+            }
+        });
 }
 
 fn resolve_webview_url(app: &tauri::App) -> WebviewUrl {

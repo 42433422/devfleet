@@ -1,6 +1,6 @@
+use serde_json::{json, Map, Value};
 use std::path::Path;
 use std::process::Command;
-use serde_json::{json, Value, Map};
 
 fn home_dir() -> Option<std::path::PathBuf> {
     std::env::var_os("HOME").map(std::path::PathBuf::from)
@@ -48,11 +48,11 @@ fn merge_json_config(path: &Path, server: &Value) -> Result<(), String> {
         .as_object()
         .cloned()
         .ok_or_else(|| format!("{} 的根节点必须是 JSON 对象", path.display()))?;
-    
+
     let servers = root_object
         .entry("mcpServers")
         .or_insert_with(|| Value::Object(Map::new()));
-    
+
     if let Some(servers_map) = servers.as_object_mut() {
         servers_map.insert(SERVER_NAME.into(), server.clone());
     }
@@ -105,7 +105,7 @@ mod integration_tests {
         let mcp_path = "/Users/Shared/DevFleet/mcp/devfleet-mcp.mjs";
         let api_url = "http://localhost:3001";
         let token = "test-token-for-verification";
-        
+
         let server_config = json_server_config(mcp_path, api_url, token, &node);
 
         // 4. 写入配置
@@ -114,12 +114,21 @@ mod integration_tests {
         // 5. 验证配置
         let content = std::fs::read_to_string(&config_path).unwrap();
         let parsed: Value = serde_json::from_str(&content).unwrap();
-        
-        assert!(parsed["mcpServers"]["devfleet"].is_object(), "devfleet 配置应存在");
+
+        assert!(
+            parsed["mcpServers"]["devfleet"].is_object(),
+            "devfleet 配置应存在"
+        );
         assert_eq!(parsed["mcpServers"]["devfleet"]["command"], node);
         assert_eq!(parsed["mcpServers"]["devfleet"]["args"][0], mcp_path);
-        assert_eq!(parsed["mcpServers"]["devfleet"]["env"]["DEVFLEET_API_URL"], api_url);
-        assert_eq!(parsed["mcpServers"]["devfleet"]["env"]["DEVFLEET_TOKEN"], token);
+        assert_eq!(
+            parsed["mcpServers"]["devfleet"]["env"]["DEVFLEET_API_URL"],
+            api_url
+        );
+        assert_eq!(
+            parsed["mcpServers"]["devfleet"]["env"]["DEVFLEET_TOKEN"],
+            token
+        );
 
         // 6. 清理测试数据
         if let Some(servers) = parsed["mcpServers"].as_object() {
@@ -140,14 +149,20 @@ mod integration_tests {
     fn test_trae_config_path_detection() {
         let paths = json_config_paths();
         assert!(!paths.is_empty(), "应至少有一个配置路径候选");
-        
+
         // 第一个路径应该是 TRAE SOLO CN
         let first = paths[0].to_string_lossy();
-        assert!(first.contains("TRAE SOLO CN"), "第一个路径应包含 TRAE SOLO CN");
-        
+        assert!(
+            first.contains("TRAE SOLO CN"),
+            "第一个路径应包含 TRAE SOLO CN"
+        );
+
         // 最后一个路径应该是 ~/.trae/mcp.json
         let last = paths.last().unwrap().to_string_lossy();
-        assert!(last.contains(".trae/mcp.json"), "最后一个路径应为 ~/.trae/mcp.json");
+        assert!(
+            last.contains(".trae/mcp.json"),
+            "最后一个路径应为 ~/.trae/mcp.json"
+        );
     }
 
     #[test]
@@ -156,7 +171,7 @@ mod integration_tests {
         let home = home_dir().expect("需要 HOME");
         let cn_dir = home.join("Library/Application Support/TRAE SOLO CN");
         let cn_dir2 = home.join("Library/Application Support/Trae CN");
-        
+
         // 至少有一个 CN 目录应该存在
         assert!(cn_dir.is_dir() || cn_dir2.is_dir(), "应检测到 Trae CN 安装");
     }

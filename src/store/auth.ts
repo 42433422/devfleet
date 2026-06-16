@@ -1,93 +1,76 @@
 import { create } from 'zustand';
 import { api } from '@/lib/api';
-
-interface User {
-  id: string;
-  email: string;
-}
+import {
+  applyAuthSession,
+  clearAuthSession,
+  getStoredToken,
+  getStoredUser,
+  parseUserFromToken,
+  type AuthUser,
+} from '@/lib/authSession';
 
 interface AuthState {
-  user: User | null;
+  user: AuthUser | null;
   token: string | null;
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
   register: (email: string, password: string) => Promise<void>;
   guestLogin: () => Promise<void>;
+  syncSession: (token: string | null, user: AuthUser | null) => void;
 }
 
-const getStoredToken = () => localStorage.getItem('devfleet_token');
+const initialToken = getStoredToken();
+const storedUser = getStoredUser();
+const initialUser = storedUser || (initialToken ? parseUserFromToken(initialToken) : null);
 
-const getStoredUser = (): User | null => {
-  try {
-    const stored = localStorage.getItem('devfleet_user');
-    if (stored) return JSON.parse(stored);
-  } catch {
-    return null;
-  }
-  return null;
-};
+export const useAuthStore = create<AuthState>((set) => ({
+  user: initialUser,
+  token: initialToken,
 
-const parseUserFromToken = (token: string): User | null => {
-  try {
-    const payload = token.split('.')[1];
-    const decoded = JSON.parse(atob(payload));
-    return { id: decoded.id || decoded.sub || '1', email: decoded.email || '' };
-  } catch {
-    return { id: '1', email: 'user@devfleet.local' };
-  }
-};
+  syncSession: (token, user) => set({ token, user }),
 
-export const useAuthStore = create<AuthState>((set) => {
-  const token = getStoredToken();
-  const storedUser = getStoredUser();
-  const user = storedUser || (token ? parseUserFromToken(token) : null);
-  
-  return {
-    user,
-    token,
+  login: async (email: string, password: string) => {
+    const data = await api<{ token?: string; access_token?: string; user?: AuthUser }>('/api/auth/login', {
+      method: 'POST',
+      body: { email, password },
+    });
+    const token = data.token || data.access_token;
+    if (!token) throw new Error('登录响应缺少 token');
+    const user = data.user || parseUserFromToken(token) || { id: '1', email };
+    applyAuthSession(token, user);
+    set({ token, user });
+  },
 
-    login: async (email: string, password: string) => {
-      const data = await api<{ token?: string; access_token?: string; user?: User }>('/api/auth/login', {
-        method: 'POST',
-        body: { email, password },
-      });
-      const token = data.token || data.access_token;
-      if (!token) throw new Error('登录响应缺少 token');
-      const user = data.user || parseUserFromToken(token) || { id: '1', email };
-      localStorage.setItem('devfleet_token', token);
-      localStorage.setItem('devfleet_user', JSON.stringify(user));
-      set({ token, user });
-    },
+  logout: () => {
+    clearAuthSession();
+    set({ user: null, token: null });
+  },
 
-    logout: () => {
-      localStorage.removeItem('devfleet_token');
-      localStorage.removeItem('devfleet_user');
-      set({ user: null, token: null });
-    },
+  register: async (email: string, password: string) => {
+    const data = await api<{ token?: string; access_token?: string; user?: AuthUser }>('/api/auth/register', {
+      method: 'POST',
+      body: { email, password },
+    });
+    const token = data.token || data.access_token;
+    if (!token) throw new Error('注册响应缺少 token');
+    const user = data.user || parseUserFromToken(token) || { id: '1', email };
+    applyAuthSession(token, user);
+    set({ token, user });
+  },
 
-    register: async (email: string, password: string) => {
-      const data = await api<{ token?: string; access_token?: string; user?: User }>('/api/auth/register', {
-        method: 'POST',
-        body: { email, password },
-      });
-      const token = data.token || data.access_token;
-      if (!token) throw new Error('注册响应缺少 token');
-      const user = data.user || parseUserFromToken(token) || { id: '1', email };
-      localStorage.setItem('devfleet_token', token);
-      localStorage.setItem('devfleet_user', JSON.stringify(user));
-      set({ token, user });
-    },
+  guestLogin: async () => {
+    const data = await api<{ token?: string; access_token?: string; user?: AuthUser }>('/api/auth/guest', {
+      method: 'POST',
+    });
+    const token = data.token || data.access_token;
+    if (!token) throw new Error('访客登录响应缺少 token');
+    const user = data.user || parseUserFromToken(token) || { id: '1', email: 'guest@devfleet.local' };
+    applyAuthSession(token, user);
+    set({ token, user });
+  },
+}));
 
-    guestLogin: async () => {
-      const data = await api<{ token?: string; access_token?: string; user?: User }>('/api/auth/guest', {
-        method: 'POST',
-      });
-      const token = data.token || data.access_token;
-      if (!token) throw new Error('访客登录响应缺少 token');
-      const user = data.user || parseUserFromToken(token) || { id: '1', email: 'guest@devfleet.local' };
-      localStorage.setItem('devfleet_token', token);
-      localStorage.setItem('devfleet_user', JSON.stringify(user));
-      set({ token, user });
-    },
-  };
+import { registerAuthStoreSync } from '@/lib/authSession';
+registerAuthStoreSync((token, user) => {
+  useAuthStore.setState({ token, user });
 });

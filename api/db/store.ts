@@ -1,18 +1,15 @@
 import 'dotenv/config';
-import fs from 'fs';
-import path from 'path';
 import { createHash } from 'node:crypto';
 import { genId } from '../lib/utils.js';
-
-const DB_FILE = process.env.DEVFLEET_DB_FILE
-  ? path.resolve(process.env.DEVFLEET_DB_FILE)
-  : path.resolve(process.cwd(), 'api', 'data', 'db.json');
-const DATA_DIR = path.dirname(DB_FILE);
+import { getDatabase, flushDB as sqliteFlush, withTransaction } from './sqlite.js';
+import { importJsonIfPending } from './migrate.js';
+import { getDbPath } from './sqlite.js';
 
 interface User {
   id: string;
   email: string;
   password_hash: string;
+  is_guest?: boolean;
   created_at: string;
 }
 
@@ -27,9 +24,9 @@ interface Device {
   activated: boolean;
   connection_allowed?: boolean;
   is_primary?: boolean;
-  /** 主设备指定的本机开发工具，默认 trae */
   dev_tool?: 'codex' | 'trae' | 'cursor' | 'claude_code';
   last_seen: string;
+  capabilities?: string;
 }
 
 interface ToolStatusItem {
@@ -63,6 +60,13 @@ interface SubTask {
   progress: number;
   created_at: string;
   completed_at?: string;
+  title?: string;
+  description?: string;
+  depends_on?: string[] | string;
+  sort_order?: number;
+  attempt_count?: number;
+  max_attempts?: number;
+  last_error?: string;
 }
 
 interface LogEntry {
@@ -71,277 +75,474 @@ interface LogEntry {
   content: string;
   level: 'info' | 'warn' | 'error' | 'debug';
   timestamp: string;
+  device_id?: string;
+  task_id?: string;
 }
 
-interface DB {
-  users: User[];
-  devices: Device[];
-  tool_statuses: ToolStatusItem[];
-  tasks: Task[];
-  sub_tasks: SubTask[];
-  log_entries: LogEntry[];
+type UserRow = User & { is_guest: number };
+
+function sql() {
+  const database = getDatabase();
+  importJsonIfPending(database, getDbPath());
+  return database;
 }
 
-let cachedDB: DB | null = null;
-let writeTimer: ReturnType<typeof setTimeout> | null = null;
-
-function ensureDir() {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
-}
-
-function defaultDB(): DB {
+function rowToUser(row: UserRow): User {
   return {
-    users: [],
-    devices: [],
-    tool_statuses: [],
-    tasks: [],
-    sub_tasks: [],
-    log_entries: [],
+    id: row.id,
+    email: row.email,
+    password_hash: row.password_hash,
+    is_guest: Boolean(row.is_guest),
+    created_at: row.created_at,
   };
 }
 
-function loadDB(): DB {
-  if (cachedDB) return cachedDB;
-  ensureDir();
-  if (!fs.existsSync(DB_FILE)) {
-    cachedDB = defaultDB();
-    return cachedDB;
-  }
-  try {
-    const raw = fs.readFileSync(DB_FILE, 'utf-8');
-    cachedDB = JSON.parse(raw) as DB;
-  } catch (error) {
-    throw new Error(`[DB] 无法读取 ${DB_FILE}: ${error instanceof Error ? error.message : String(error)}`);
-  }
-  return cachedDB!;
+function rowToDevice(row: Record<string, unknown>): Device {
+  return {
+    id: String(row.id),
+    user_id: String(row.user_id),
+    name: String(row.name),
+    bind_code: row.bind_code ? String(row.bind_code) : undefined,
+    bind_code_expires_at: row.bind_code_expires_at ? String(row.bind_code_expires_at) : undefined,
+    device_token_hash: row.device_token_hash ? String(row.device_token_hash) : undefined,
+    status: String(row.status) as Device['status'],
+    activated: Boolean(row.activated),
+    connection_allowed: row.connection_allowed === undefined ? true : Boolean(row.connection_allowed),
+    is_primary: Boolean(row.is_primary),
+    dev_tool: row.dev_tool ? String(row.dev_tool) as Device['dev_tool'] : undefined,
+    last_seen: String(row.last_seen),
+    capabilities: row.capabilities ? String(row.capabilities) : undefined,
+  };
 }
 
-function saveDBNow() {
-  if (!cachedDB) return;
-  ensureDir();
-  const tempFile = `${DB_FILE}.${process.pid}.tmp`;
-  try {
-    fs.writeFileSync(tempFile, JSON.stringify(cachedDB, null, 2), { encoding: 'utf-8', mode: 0o600 });
-    fs.renameSync(tempFile, DB_FILE);
-  } catch (error) {
+function rowToTool(row: Record<string, unknown>): ToolStatusItem {
+  return {
+    id: String(row.id),
+    device_id: String(row.device_id),
+    tool_name: String(row.tool_name) as ToolStatusItem['tool_name'],
+    status: String(row.status) as ToolStatusItem['status'],
+    current_task: row.current_task ? String(row.current_task) : undefined,
+  };
+}
+
+function rowToTask(row: Record<string, unknown>): Task {
+  return {
+    id: String(row.id),
+    user_id: String(row.user_id),
+    title: String(row.title),
+    description: String(row.description),
+    status: String(row.status) as Task['status'],
+    repo_url: String(row.repo_url),
+    branch: String(row.branch),
+    created_at: String(row.created_at),
+    completed_at: row.completed_at ? String(row.completed_at) : undefined,
+    merge_commit_sha: row.merge_commit_sha ? String(row.merge_commit_sha) : undefined,
+  };
+}
+
+function parseDependsOnColumn(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String);
+  if (typeof value === 'string') {
     try {
-      if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
+      const parsed = JSON.parse(value) as unknown;
+      return Array.isArray(parsed) ? parsed.map(String) : [];
     } catch {
-      // Preserve the original write error.
+      return [];
     }
-    console.error('[DB] write failed', error);
   }
+  return [];
 }
 
-function saveDB() {
-  if (writeTimer) return;
-  writeTimer = setTimeout(() => {
-    writeTimer = null;
-    saveDBNow();
-  }, 50);
+function rowToSubTask(row: Record<string, unknown>): SubTask {
+  return {
+    id: String(row.id),
+    task_id: String(row.task_id),
+    device_id: String(row.device_id),
+    tool_name: String(row.tool_name) as SubTask['tool_name'],
+    status: String(row.status) as SubTask['status'],
+    branch_name: String(row.branch_name),
+    progress: Number(row.progress),
+    created_at: String(row.created_at),
+    completed_at: row.completed_at ? String(row.completed_at) : undefined,
+    title: row.title ? String(row.title) : undefined,
+    description: row.description ? String(row.description) : undefined,
+    depends_on: parseDependsOnColumn(row.depends_on),
+    sort_order: row.sort_order === undefined ? 0 : Number(row.sort_order),
+    attempt_count: row.attempt_count === undefined ? 0 : Number(row.attempt_count),
+    max_attempts: row.max_attempts === undefined ? 2 : Number(row.max_attempts),
+    last_error: row.last_error ? String(row.last_error) : undefined,
+  };
+}
+
+function rowToLog(row: Record<string, unknown>): LogEntry {
+  return {
+    id: String(row.id),
+    sub_task_id: String(row.sub_task_id),
+    content: String(row.content),
+    level: String(row.level) as LogEntry['level'],
+    timestamp: String(row.timestamp),
+    device_id: row.device_id ? String(row.device_id) : undefined,
+    task_id: row.task_id ? String(row.task_id) : undefined,
+  };
 }
 
 export function flushDB() {
-  if (writeTimer) {
-    clearTimeout(writeTimer);
-    writeTimer = null;
-  }
-  saveDBNow();
+  sqliteFlush();
 }
 
 export const db = {
-  // ===== Users =====
   users: {
     findAll(): User[] {
-      return loadDB().users;
+      const rows = sql().prepare('SELECT * FROM users ORDER BY created_at ASC').all() as UserRow[];
+      return rows.map(rowToUser);
     },
     findById(id: string): User | undefined {
-      return loadDB().users.find((u) => u.id === id);
+      const row = sql().prepare('SELECT * FROM users WHERE id = ?').get(id) as UserRow | undefined;
+      return row ? rowToUser(row) : undefined;
     },
     findByEmail(email: string): User | undefined {
-      return loadDB().users.find((u) => u.email.toLowerCase() === email.toLowerCase());
+      const row = sql().prepare('SELECT * FROM users WHERE lower(email) = lower(?)').get(email) as UserRow | undefined;
+      return row ? rowToUser(row) : undefined;
     },
-    create(data: Omit<User, 'id' | 'created_at'>): User {
-      const dbData = loadDB();
+    findGuest(): User | undefined {
+      const row = sql().prepare(
+        `SELECT * FROM users WHERE is_guest = 1 AND email = 'guest@devfleet.local' LIMIT 1`,
+      ).get() as UserRow | undefined;
+      return row ? rowToUser(row) : undefined;
+    },
+    create(data: Omit<User, 'id' | 'created_at'> & { id?: string }): User {
       const user: User = {
-        id: genId(),
+        id: data.id || genId(),
         created_at: new Date().toISOString(),
-        ...data,
+        email: data.email,
+        password_hash: data.password_hash,
+        is_guest: data.is_guest ?? false,
       };
-      dbData.users.push(user);
-      saveDB();
+      sql().prepare(
+        `INSERT INTO users (id, email, password_hash, is_guest, created_at) VALUES (?, ?, ?, ?, ?)`,
+      ).run(user.id, user.email, user.password_hash, user.is_guest ? 1 : 0, user.created_at);
       return user;
     },
   },
 
-  // ===== Devices =====
   devices: {
     findAllByUserId(userId: string): Device[] {
-      // Devices created before the activated field was introduced are treated as active.
-      return loadDB().devices.filter((d) => d.user_id === userId && d.activated !== false);
+      const rows = sql().prepare(
+        `SELECT * FROM devices WHERE user_id = ? AND activated = 1 ORDER BY last_seen DESC`,
+      ).all(userId) as Record<string, unknown>[];
+      return rows.map(rowToDevice);
     },
     findById(id: string): Device | undefined {
-      return loadDB().devices.find((d) => d.id === id);
+      const row = sql().prepare('SELECT * FROM devices WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+      return row ? rowToDevice(row) : undefined;
     },
     findByBindCode(bindCode: string): Device | undefined {
-      return loadDB().devices.find((d) => d.bind_code === bindCode);
+      const row = sql().prepare('SELECT * FROM devices WHERE bind_code = ?').get(bindCode) as Record<string, unknown> | undefined;
+      return row ? rowToDevice(row) : undefined;
     },
     findByDeviceToken(deviceToken: string): Device | undefined {
       const hash = createHash('sha256').update(deviceToken).digest('hex');
-      return loadDB().devices.find((d) => d.device_token_hash === hash && d.activated !== false && d.connection_allowed !== false);
+      const row = sql().prepare(
+        `SELECT * FROM devices WHERE device_token_hash = ? AND activated = 1 AND connection_allowed = 1`,
+      ).get(hash) as Record<string, unknown> | undefined;
+      return row ? rowToDevice(row) : undefined;
     },
     create(data: Omit<Device, 'id' | 'last_seen'> & { last_seen?: string }): Device {
-      const dbData = loadDB();
       const device: Device = {
         id: genId(),
-        last_seen: new Date().toISOString(),
+        last_seen: data.last_seen || new Date().toISOString(),
         ...data,
       };
-      dbData.devices.push(device);
-      saveDB();
+      sql().prepare(
+        `INSERT INTO devices (
+          id, user_id, name, bind_code, bind_code_expires_at, device_token_hash,
+          status, activated, connection_allowed, is_primary, dev_tool, last_seen
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        device.id,
+        device.user_id,
+        device.name,
+        device.bind_code ?? null,
+        device.bind_code_expires_at ?? null,
+        device.device_token_hash ?? null,
+        device.status,
+        device.activated === false ? 0 : 1,
+        device.connection_allowed === false ? 0 : 1,
+        device.is_primary ? 1 : 0,
+        device.dev_tool ?? null,
+        device.last_seen,
+      );
       return device;
     },
     update(id: string, patch: Partial<Device>): Device | undefined {
-      const dbData = loadDB();
-      const idx = dbData.devices.findIndex((d) => d.id === id);
-      if (idx === -1) return undefined;
-      dbData.devices[idx] = { ...dbData.devices[idx], ...patch, last_seen: new Date().toISOString() };
-      saveDB();
-      return dbData.devices[idx];
+      const current = this.findById(id);
+      if (!current) return undefined;
+      const next = { ...current, ...patch, last_seen: new Date().toISOString() };
+      sql().prepare(
+        `UPDATE devices SET
+          name = ?, bind_code = ?, bind_code_expires_at = ?, device_token_hash = ?,
+          status = ?, activated = ?, connection_allowed = ?, is_primary = ?,
+          dev_tool = ?, last_seen = ?, capabilities = ?
+         WHERE id = ?`,
+      ).run(
+        next.name,
+        next.bind_code ?? null,
+        next.bind_code_expires_at ?? null,
+        next.device_token_hash ?? null,
+        next.status,
+        next.activated === false ? 0 : 1,
+        next.connection_allowed === false ? 0 : 1,
+        next.is_primary ? 1 : 0,
+        next.dev_tool ?? null,
+        next.last_seen,
+        next.capabilities ?? null,
+        id,
+      );
+      return next;
     },
     setPrimary(userId: string, id: string): Device | undefined {
-      const dbData = loadDB();
-      const target = dbData.devices.find((d) => d.id === id && d.user_id === userId && d.activated !== false);
-      if (!target) return undefined;
-      dbData.devices.forEach((device) => {
-        if (device.user_id === userId) device.is_primary = device.id === id;
+      const database = sql();
+      const target = this.findById(id);
+      if (!target || target.user_id !== userId || target.activated === false) return undefined;
+      withTransaction(database, () => {
+        database.prepare('UPDATE devices SET is_primary = 0 WHERE user_id = ?').run(userId);
+        database.prepare('UPDATE devices SET is_primary = 1 WHERE id = ?').run(id);
       });
-      saveDB();
-      return target;
+      return this.findById(id);
     },
     remove(id: string): void {
-      const dbData = loadDB();
-      dbData.devices = dbData.devices.filter((d) => d.id !== id);
-      dbData.tool_statuses = dbData.tool_statuses.filter((t) => t.device_id !== id);
-      saveDB();
+      const database = sql();
+      withTransaction(database, () => {
+        database.prepare('DELETE FROM tool_statuses WHERE device_id = ?').run(id);
+        database.prepare('DELETE FROM devices WHERE id = ?').run(id);
+      });
     },
   },
 
-  // ===== Tool Statuses =====
   tools: {
     findAllByDeviceId(deviceId: string): ToolStatusItem[] {
-      return loadDB().tool_statuses.filter((t) => t.device_id === deviceId);
+      const rows = sql().prepare('SELECT * FROM tool_statuses WHERE device_id = ?').all(deviceId) as Record<string, unknown>[];
+      return rows.map(rowToTool);
     },
     upsert(deviceId: string, toolName: ToolStatusItem['tool_name'], patch: Partial<ToolStatusItem>): ToolStatusItem {
-      const dbData = loadDB();
-      let item = dbData.tool_statuses.find((t) => t.device_id === deviceId && t.tool_name === toolName);
-      if (!item) {
-        item = {
+      const existing = sql().prepare(
+        'SELECT * FROM tool_statuses WHERE device_id = ? AND tool_name = ?',
+      ).get(deviceId, toolName) as Record<string, unknown> | undefined;
+
+      if (!existing) {
+        const item: ToolStatusItem = {
           id: genId(),
           device_id: deviceId,
           tool_name: toolName,
-          status: 'idle',
-          ...patch,
+          status: patch.status || 'idle',
+          current_task: patch.current_task,
         };
-        dbData.tool_statuses.push(item);
-      } else {
-        Object.assign(item, patch);
+        sql().prepare(
+          `INSERT INTO tool_statuses (id, device_id, tool_name, status, current_task) VALUES (?, ?, ?, ?, ?)`,
+        ).run(item.id, item.device_id, item.tool_name, item.status, item.current_task ?? null);
+        return item;
       }
-      saveDB();
+
+      const item = rowToTool({
+        ...existing,
+        status: patch.status ?? existing.status,
+        current_task: patch.current_task !== undefined ? patch.current_task : existing.current_task,
+      });
+      sql().prepare(
+        'UPDATE tool_statuses SET status = ?, current_task = ? WHERE id = ?',
+      ).run(item.status, item.current_task ?? null, item.id);
       return item;
+    },
+    tryClaimRunning(deviceId: string, toolName: ToolStatusItem['tool_name'], taskId: string): boolean {
+      const database = sql();
+      const existing = database.prepare(
+        'SELECT * FROM tool_statuses WHERE device_id = ? AND tool_name = ?',
+      ).get(deviceId, toolName) as Record<string, unknown> | undefined;
+
+      if (existing?.status === 'running' && existing.current_task && existing.current_task !== taskId) {
+        return false;
+      }
+
+      this.upsert(deviceId, toolName, { status: 'running', current_task: taskId });
+      return true;
     },
     bulkUpsert(deviceId: string, items: Array<{ tool_name: ToolStatusItem['tool_name']; status: ToolStatusItem['status']; current_task?: string }>): void {
       items.forEach((it) => this.upsert(deviceId, it.tool_name, { status: it.status, current_task: it.current_task }));
     },
   },
 
-  // ===== Tasks =====
   tasks: {
     findAllByUserId(userId: string): Task[] {
-      return loadDB().tasks.filter((t) => t.user_id === userId).sort((a, b) => b.created_at.localeCompare(a.created_at));
+      const rows = sql().prepare(
+        'SELECT * FROM tasks WHERE user_id = ? ORDER BY created_at DESC',
+      ).all(userId) as Record<string, unknown>[];
+      return rows.map(rowToTask);
     },
     findById(id: string): Task | undefined {
-      return loadDB().tasks.find((t) => t.id === id);
+      const row = sql().prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+      return row ? rowToTask(row) : undefined;
     },
     create(data: Omit<Task, 'id' | 'created_at' | 'status'> & { status?: Task['status'] }): Task {
-      const dbData = loadDB();
       const task: Task = {
         id: genId(),
-        status: 'pending',
+        status: data.status || 'pending',
         created_at: new Date().toISOString(),
-        ...data,
+        user_id: data.user_id,
+        title: data.title,
+        description: data.description,
+        repo_url: data.repo_url,
+        branch: data.branch,
       };
-      dbData.tasks.push(task);
-      saveDB();
+      sql().prepare(
+        `INSERT INTO tasks (id, user_id, title, description, status, repo_url, branch, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(task.id, task.user_id, task.title, task.description, task.status, task.repo_url, task.branch, task.created_at);
       return task;
     },
     update(id: string, patch: Partial<Task>): Task | undefined {
-      const dbData = loadDB();
-      const idx = dbData.tasks.findIndex((t) => t.id === id);
-      if (idx === -1) return undefined;
-      dbData.tasks[idx] = { ...dbData.tasks[idx], ...patch };
-      saveDB();
-      return dbData.tasks[idx];
+      const current = this.findById(id);
+      if (!current) return undefined;
+      const next = { ...current, ...patch };
+      sql().prepare(
+        `UPDATE tasks SET title = ?, description = ?, status = ?, repo_url = ?, branch = ?,
+         completed_at = ?, merge_commit_sha = ? WHERE id = ?`,
+      ).run(
+        next.title,
+        next.description,
+        next.status,
+        next.repo_url,
+        next.branch,
+        next.completed_at ?? null,
+        next.merge_commit_sha ?? null,
+        id,
+      );
+      return next;
     },
     remove(id: string): void {
-      const dbData = loadDB();
-      dbData.tasks = dbData.tasks.filter((t) => t.id !== id);
-      const subIds = dbData.sub_tasks.filter((s) => s.task_id === id).map((s) => s.id);
-      dbData.sub_tasks = dbData.sub_tasks.filter((s) => s.task_id !== id);
-      dbData.log_entries = dbData.log_entries.filter((l) => !subIds.includes(l.sub_task_id));
-      saveDB();
+      const database = sql();
+      withTransaction(database, () => {
+        const subIds = (database.prepare('SELECT id FROM sub_tasks WHERE task_id = ?').all(id) as Array<{ id: string }>).map((s) => s.id);
+        for (const subId of subIds) {
+          database.prepare('DELETE FROM log_entries WHERE sub_task_id = ?').run(subId);
+        }
+        database.prepare('DELETE FROM sub_tasks WHERE task_id = ?').run(id);
+        database.prepare('DELETE FROM tasks WHERE id = ?').run(id);
+      });
     },
   },
 
-  // ===== SubTasks =====
   subTasks: {
     findAllByTaskId(taskId: string): SubTask[] {
-      return loadDB().sub_tasks.filter((s) => s.task_id === taskId);
+      const rows = sql().prepare('SELECT * FROM sub_tasks WHERE task_id = ?').all(taskId) as Record<string, unknown>[];
+      return rows.map(rowToSubTask);
     },
     findAllByDeviceId(deviceId: string): SubTask[] {
-      return loadDB().sub_tasks.filter((s) => s.device_id === deviceId);
+      const rows = sql().prepare('SELECT * FROM sub_tasks WHERE device_id = ?').all(deviceId) as Record<string, unknown>[];
+      return rows.map(rowToSubTask);
     },
     findById(id: string): SubTask | undefined {
-      return loadDB().sub_tasks.find((s) => s.id === id);
+      const row = sql().prepare('SELECT * FROM sub_tasks WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+      return row ? rowToSubTask(row) : undefined;
     },
     create(data: Omit<SubTask, 'id' | 'created_at' | 'progress'> & { progress?: number }): SubTask {
-      const dbData = loadDB();
       const sub: SubTask = {
         id: genId(),
-        progress: 0,
+        progress: data.progress ?? 0,
         created_at: new Date().toISOString(),
-        ...data,
+        task_id: data.task_id,
+        device_id: data.device_id,
+        tool_name: data.tool_name,
+        status: data.status,
+        branch_name: data.branch_name,
+        title: data.title,
+        description: data.description,
+        depends_on: data.depends_on ?? [],
+        sort_order: data.sort_order ?? 0,
+        attempt_count: data.attempt_count ?? 0,
+        max_attempts: data.max_attempts ?? 2,
+        last_error: data.last_error,
       };
-      dbData.sub_tasks.push(sub);
-      saveDB();
+      sql().prepare(
+        `INSERT INTO sub_tasks (
+          id, task_id, device_id, tool_name, status, branch_name, progress, created_at,
+          title, description, depends_on, sort_order, attempt_count, max_attempts, last_error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        sub.id,
+        sub.task_id,
+        sub.device_id,
+        sub.tool_name,
+        sub.status,
+        sub.branch_name,
+        sub.progress,
+        sub.created_at,
+        sub.title ?? '',
+        sub.description ?? '',
+        JSON.stringify(sub.depends_on ?? []),
+        sub.sort_order ?? 0,
+        sub.attempt_count ?? 0,
+        sub.max_attempts ?? 2,
+        sub.last_error ?? null,
+      );
       return sub;
     },
     update(id: string, patch: Partial<SubTask>): SubTask | undefined {
-      const dbData = loadDB();
-      const idx = dbData.sub_tasks.findIndex((s) => s.id === id);
-      if (idx === -1) return undefined;
-      dbData.sub_tasks[idx] = { ...dbData.sub_tasks[idx], ...patch };
-      saveDB();
-      return dbData.sub_tasks[idx];
+      const current = this.findById(id);
+      if (!current) return undefined;
+      const next = { ...current, ...patch };
+      sql().prepare(
+        `UPDATE sub_tasks SET
+          status = ?, branch_name = ?, progress = ?, completed_at = ?, device_id = ?,
+          tool_name = ?, title = ?, description = ?, depends_on = ?, sort_order = ?,
+          attempt_count = ?, max_attempts = ?, last_error = ?
+         WHERE id = ?`,
+      ).run(
+        next.status,
+        next.branch_name,
+        next.progress,
+        next.completed_at ?? null,
+        next.device_id,
+        next.tool_name,
+        next.title ?? '',
+        next.description ?? '',
+        JSON.stringify(next.depends_on ?? []),
+        next.sort_order ?? 0,
+        next.attempt_count ?? 0,
+        next.max_attempts ?? 2,
+        next.last_error ?? null,
+        id,
+      );
+      return next;
     },
   },
 
-  // ===== Logs =====
   logs: {
     findAllBySubTaskId(subTaskId: string): LogEntry[] {
-      return loadDB().log_entries.filter((l) => l.sub_task_id === subTaskId).sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+      const rows = sql().prepare(
+        'SELECT * FROM log_entries WHERE sub_task_id = ? ORDER BY timestamp ASC',
+      ).all(subTaskId) as Record<string, unknown>[];
+      return rows.map(rowToLog);
     },
     create(data: Omit<LogEntry, 'id' | 'timestamp'> & { timestamp?: string }): LogEntry {
-      const dbData = loadDB();
       const log: LogEntry = {
         id: genId(),
-        timestamp: new Date().toISOString(),
-        ...data,
+        timestamp: data.timestamp || new Date().toISOString(),
+        sub_task_id: data.sub_task_id,
+        content: data.content,
+        level: data.level,
       };
-      dbData.log_entries.push(log);
-      saveDB();
+      sql().prepare(
+        `INSERT INTO log_entries (id, sub_task_id, content, level, timestamp, device_id, task_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        log.id,
+        log.sub_task_id,
+        log.content,
+        log.level,
+        log.timestamp,
+        log.device_id ?? null,
+        log.task_id ?? null,
+      );
       return log;
     },
   },

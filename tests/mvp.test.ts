@@ -114,6 +114,36 @@ test('账号、设备和任务的 MVP 主流程', async () => {
     assert.equal(dispatched.repo_url, 'https://example.com/repo.git');
     assert.equal(dispatched.tool, 'trae');
 
+    const pendingResponse = await fetch(`${baseUrl}/api/devices/me/pending-task`, {
+      headers: { Authorization: `Bearer ${activation.deviceToken}` },
+    });
+    assert.equal(pendingResponse.ok, true);
+    const pending = await pendingResponse.json() as { task: { id: string; subtask_id: string; tool: string } | null };
+    assert.equal(pending.task?.id, created.task.id);
+    assert.equal(pending.task?.subtask_id, created.task.subTasks[0].id);
+    assert.equal(pending.task?.tool, 'trae');
+
+    const reportResponse = await fetch(`${baseUrl}/api/devices/me/task-report`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${activation.deviceToken}`,
+      },
+      body: JSON.stringify({
+        task_id: created.task.id,
+        subtask_id: created.task.subTasks[0].id,
+        progress: 80,
+        status: 'running',
+        content: 'Trae Agent 已读取任务并完成阶段性修改',
+      }),
+    });
+    assert.equal(reportResponse.ok, true);
+    const afterReport = await request<{ task: { status: string; subTasks: Array<{ id: string; progress: number; status: string; logs: Array<{ content: string }> }> } }>(`/api/tasks/${created.task.id}`);
+    assert.equal(afterReport.task.status, 'running');
+    assert.equal(afterReport.task.subTasks[0].progress, 80);
+    assert.equal(afterReport.task.subTasks[0].status, 'running');
+    assert.ok(afterReport.task.subTasks[0].logs.some((log) => log.content.includes('Trae Agent 已读取任务')));
+
     for (const subTask of created.task.subTasks) {
       await request(`/api/tasks/${created.task.id}/subtasks/${subTask.id}/progress`, {
         method: 'POST',

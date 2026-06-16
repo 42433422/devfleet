@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "1.2.10"
+version = "1.3.0"
 description = "DevFleet multi-device coding controller and worker agent"
 authors = ["DevFleet"]
 license = "MIT"
@@ -28,3 +28,4 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "sync", "time"] }
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 url = "2"
+libc = "0.2"

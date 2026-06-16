@@ -1,3 +1,4 @@
+use crate::computer_use;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -331,13 +332,15 @@ impl AgentState {
                     .and_then(|value| value.clone());
                 let tools = scan_tools(running_task.as_deref(), running_dev_tool.as_deref());
                 set_mutex(&self.inner.tools, tools.clone());
+                let capabilities = probe_capabilities();
                 let payload = json!({
                   "type": "tool_status",
                   "tools": tools.into_iter().map(|tool| json!({
                     "tool_name": tool.tool_name,
                     "status": tool.status,
                     "current_task": tool.current_task,
-                  })).collect::<Vec<_>>()
+                  })).collect::<Vec<_>>(),
+                  "capabilities": capabilities,
                 });
                 writer.send(Message::Text(payload.to_string().into())).await.map_err(|error| error.to_string())?;
               }
@@ -381,27 +384,42 @@ impl AgentState {
         task: ExecuteTask,
         tx: mpsc::UnboundedSender<Value>,
     ) {
-        if self
-            .inner
-            .running_task
-            .lock()
-            .ok()
-            .and_then(|value| value.clone())
-            .is_some()
-        {
+        let claimed = {
+            let mut guard = match self.inner.running_task.lock() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    send_log(&tx, &task, "设备状态锁不可用", "error");
+                    send_progress(&tx, &task, 0, "failed");
+                    return;
+                }
+            };
+            if guard.is_some() {
+                false
+            } else {
+                *guard = Some(task.task_id.clone());
+                set_mutex(&self.inner.running_dev_tool, Some(task.tool.clone()));
+                true
+            }
+        };
+        if !claimed {
             send_log(&tx, &task, "设备已有任务运行中", "error");
             send_progress(&tx, &task, 0, "failed");
             return;
         }
-        set_mutex(&self.inner.running_task, Some(task.task_id.clone()));
-        set_mutex(&self.inner.running_dev_tool, Some(task.tool.clone()));
+
+        let task_id = task.task_id.clone();
         let result = self.execute_task_inner(&config, &task, &tx).await;
         if let Err(error) = result {
             send_log(&tx, &task, &error, "error");
             send_progress(&tx, &task, 0, "failed");
             set_mutex(&self.inner.last_error, Some(error));
         }
-        set_mutex(&self.inner.running_task, None);
+
+        if let Ok(mut guard) = self.inner.running_task.lock() {
+            if guard.as_deref() == Some(task_id.as_str()) {
+                *guard = None;
+            }
+        }
         set_mutex(&self.inner.running_dev_tool, None);
     }
 
@@ -471,19 +489,35 @@ impl AgentState {
                     .await
                     .map_err(|error| format!("写入 MCP 配置失败: {error}"))?;
 
-                match launch_tool("trae", &task_dir) {
-                    Ok(()) => send_log(tx, task, "已使用 Trae 打开工作区", "info"),
-                    Err(error) => send_log(
+                match computer_use::start_trae_task(&task_dir, &prompt) {
+                    Ok(()) => send_log(
                         tx,
                         task,
-                        &format!("Trae 启动失败: {error}，请手动打开工作区"),
-                        "warn",
+                        "已通过内置 Computer Use 打开 Trae 工作区、点击新任务并写入任务",
+                        "info",
                     ),
+                    Err(error) => {
+                        send_log(
+                            tx,
+                            task,
+                            &format!("Trae Computer Use 自动控制失败: {error}"),
+                            "warn",
+                        );
+                        match launch_tool("trae", &task_dir) {
+                            Ok(()) => send_log(tx, task, "已回退为仅打开 Trae 工作区", "info"),
+                            Err(error) => send_log(
+                                tx,
+                                task,
+                                &format!("Trae 启动失败: {error}，请手动打开工作区并点新任务"),
+                                "warn",
+                            ),
+                        }
+                    }
                 }
                 send_log(
                     tx,
                     task,
-                    "任务已写入 .devfleet/TASK.md，Trae Agent 可通过 devfleet_next_task MCP 工具获取任务",
+                    "任务已写入 .devfleet/TASK.md；Trae 可通过新任务输入或 devfleet_next_task MCP 工具获取任务",
                     "info",
                 );
                 send_progress(tx, task, 40, "running");
@@ -931,6 +965,76 @@ fn scan_tools(current_task: Option<&str>, active_dev_tool: Option<&str>) -> Vec<
             }
         })
         .collect()
+}
+
+fn probe_capabilities() -> Value {
+    let node_version = StdCommand::new("node")
+        .arg("-v")
+        .output()
+        .ok()
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|version| version.trim().to_string())
+        .filter(|version| !version.is_empty());
+
+    let docker_output = StdCommand::new("docker").arg("--version").output().ok();
+    let docker = docker_output
+        .as_ref()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+    let docker_version = docker_output
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|version| version.trim().to_string())
+        .filter(|version| !version.is_empty());
+
+    let (gpu, gpu_name) = detect_gpu();
+
+    json!({
+        "node_version": node_version,
+        "docker": docker,
+        "docker_version": docker_version,
+        "gpu": gpu,
+        "gpu_name": gpu_name,
+        "platform": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+    })
+}
+
+fn detect_gpu() -> (bool, Option<String>) {
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = StdCommand::new("system_profiler")
+            .args(["SPDisplaysDataType"])
+            .output()
+        {
+            let text = String::from_utf8_lossy(&output.stdout);
+            if !text.trim().is_empty() {
+                let name = text
+                    .lines()
+                    .find(|line| line.contains("Chipset Model") || line.contains("Chip"))
+                    .map(|line| line.split(':').nth(1).unwrap_or("").trim().to_string())
+                    .filter(|name| !name.is_empty());
+                return (true, name.or(Some("Apple GPU".to_string())));
+            }
+        }
+        return (true, Some("Apple GPU".to_string()));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        if let Ok(output) = StdCommand::new("nvidia-smi")
+            .args(["--query-gpu=name", "--format=csv,noheader"])
+            .output()
+        {
+            if output.status.success() {
+                let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !name.is_empty() {
+                    return (true, Some(name));
+                }
+            }
+        }
+    }
+
+    (false, None)
 }
 
 fn process_list() -> String {
@@ -1386,5 +1490,45 @@ mod tests {
     fn rejects_invalid_remote_urls_and_unsafe_branches() {
         assert!(validate_task(&task("C:\\secret", "main")).is_err());
         assert!(validate_task(&task("https://github.com/example/repo.git", "../../main")).is_err());
+    }
+
+    #[test]
+    fn task_lock_prevents_double_claim() {
+        let slot = Mutex::new(None::<String>);
+
+        let first_claim = {
+            let mut guard = slot.lock().unwrap();
+            if guard.is_some() {
+                false
+            } else {
+                *guard = Some("task-a".to_string());
+                true
+            }
+        };
+        assert!(first_claim);
+
+        let second_claim = {
+            let guard = slot.lock().unwrap();
+            guard.is_none()
+        };
+        assert!(!second_claim);
+
+        {
+            let mut guard = slot.lock().unwrap();
+            if guard.as_deref() == Some("task-a") {
+                *guard = None;
+            }
+        }
+
+        let third_claim = {
+            let mut guard = slot.lock().unwrap();
+            if guard.is_some() {
+                false
+            } else {
+                *guard = Some("task-b".to_string());
+                true
+            }
+        };
+        assert!(third_claim);
     }
 }

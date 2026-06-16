@@ -9,7 +9,7 @@ DevFleet 是真实运行的多设备代码任务系统，由四部分组成：
 3. 支持 WebSocket 的自托管协调服务。
 4. 可接入 Trae、Codex CLI/IDE、Cursor 的 STDIO MCP 服务（主设备调度用）。
 
-**工作流**：主设备在「设备管理」为每台**工作设备**指定一种开发工具（Trae / Codex / Cursor / Claude Code，**默认 Trae**）。主设备创建任务后，任务只派发给在线的工作设备（有非主设备在线时，主设备本身不执行子任务）；各设备按指定工具打开工作区，由 Codex CLI 自动改码并 **Git push 独立分支**；主设备在任务详情或 MCP 中 **fetch/merge/push** 合并各分支。
+**工作流**：主设备在「设备管理」为每台**工作设备**指定一种开发工具（Trae / Codex / Cursor / Claude Code，**默认 Trae**）。主设备创建任务后，任务只派发给在线的工作设备（有非主设备在线时，主设备本身不执行子任务）；Trae 设备会先准备同一个 Git 工作区，再由内置 Computer Use 打开 Trae、点击“新任务”并写入任务；各设备完成后 **Git push 独立分支**；主设备在任务详情或 MCP 中 **fetch/merge/push** 合并各分支。
 
 ## 运行要求
 
@@ -24,7 +24,10 @@ DevFleet 是真实运行的多设备代码任务系统，由四部分组成：
 - Git，并已配置仓库拉取和推送权限
 - 开发工具与执行器（由主设备在「设备管理」指定）：
   - **Cursor** → Cursor Agent CLI（`agent login` 或 `CURSOR_API_KEY`），**不需要 Codex**
-  - **Trae / Claude Code** → 可选打开 IDE + **Codex CLI** 自动改码
+  - **Trae** → DevFleet 内置 Computer Use 控制 Trae 打开工作区、点击新任务并写入任务
+    - **macOS**：需给 DevFleet/Trae 授予“辅助功能”权限
+    - **Windows**：通过 PowerShell + UI Automation 控制；需交互式登录会话（RDP 断开或无桌面会话时可能失败），DevFleet 与 Trae 应同级权限运行
+  - **Claude Code** → 可选打开 IDE + **Codex CLI** 自动改码
   - **Codex** → 仅 **Codex CLI**
 - DevFleet 本机代理在线
 
@@ -86,6 +89,9 @@ MCP 提供以下工具：
 - `devfleet_get_task`：读取任务、日志、分支和进度。
 - `devfleet_wait_for_task`：等待多设备任务完成。
 - `devfleet_merge_task`：在主设备真实 fetch、merge、push，成功后才标记已合并。
+- `devfleet_computer_use_start_trae_task`：在 MCP 所在设备上用内置 Computer Use 打开 Trae 工作区、点击新任务并写入 prompt（macOS / Windows）。
+
+本机最小闭环测试（Cursor → Trae → Git → Merge 计时）：见 [docs/E2E-MINIMAL-LOOP.md](docs/E2E-MINIMAL-LOOP.md)。
 
 ## 本地开发
 

@@ -5,12 +5,19 @@ import {
   API_BASE_STORAGE_KEY,
 } from './apiBase';
 import { isDesktopApp } from './agent';
+import {
+  applyAuthSession,
+  clearAuthSession,
+  getStoredToken,
+  getGuestLoginInFlight,
+  setGuestLoginInFlight,
+  parseUserFromToken,
+  type AuthUser,
+} from './authSession';
 
 ensureApiBaseConfigured();
 
 export { getApiBaseUrl, ensureApiBaseConfigured, apiUrl, DEFAULT_API_BASE } from './apiBase';
-
-const getToken = () => localStorage.getItem('devfleet_token');
 
 interface RequestOptions extends Omit<RequestInit, 'body'> {
   body?: Record<string, unknown>;
@@ -52,30 +59,39 @@ async function resolveFetch(path: string, init: RequestInit): Promise<Response> 
   }
 }
 
-async function guestLogin(): Promise<string | null> {
-  try {
-    const res = await resolveFetch('/api/auth/guest', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    const token = data.token || data.access_token;
-    if (!token) return null;
-    localStorage.setItem('devfleet_token', token);
-    const user = data.user || { id: '1', email: 'guest@devfleet.local' };
-    localStorage.setItem('devfleet_user', JSON.stringify(user));
-    return token;
-  } catch {
-    return null;
-  }
+async function guestLoginRequest(): Promise<string | null> {
+  const inFlight = getGuestLoginInFlight();
+  if (inFlight) return inFlight;
+
+  const promise = (async () => {
+    try {
+      const res = await resolveFetch('/api/auth/guest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) return null;
+      const data = await res.json() as { token?: string; access_token?: string; user?: AuthUser };
+      const token = data.token || data.access_token;
+      if (!token) return null;
+      const user = data.user || parseUserFromToken(token) || { id: '1', email: 'guest@devfleet.local' };
+      applyAuthSession(token, user);
+      return token;
+    } catch {
+      return null;
+    } finally {
+      setGuestLoginInFlight(null);
+    }
+  })();
+
+  setGuestLoginInFlight(promise);
+  return promise;
 }
 
 export const api = async <T = Record<string, unknown>>(
   url: string,
   options: RequestOptions = {}
 ): Promise<T> => {
-  const token = getToken();
+  const token = getStoredToken();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string>),
@@ -95,12 +111,12 @@ export const api = async <T = Record<string, unknown>>(
   let res = await resolveFetch(url, fetchInit);
 
   if (res.status === 401) {
-    const newToken = await guestLogin();
+    const newToken = await guestLoginRequest();
     if (newToken) {
       headers['Authorization'] = `Bearer ${newToken}`;
       res = await resolveFetch(url, { ...fetchInit, headers });
     } else {
-      localStorage.removeItem('devfleet_token');
+      clearAuthSession();
       const onLogin = location.hash.includes('/login') || location.pathname.endsWith('/login');
       if (!onLogin) {
         location.hash = '#/login';

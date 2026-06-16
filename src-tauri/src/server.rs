@@ -1,10 +1,13 @@
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
 use tauri::{AppHandle, Manager};
+
+use crate::process_util::{configure_hidden_command, resolve_node_executable};
 
 pub struct EmbeddedServer(pub Mutex<Option<Child>>);
 
@@ -14,28 +17,128 @@ impl Default for EmbeddedServer {
     }
 }
 
+static WATCHDOG_STARTED: AtomicBool = AtomicBool::new(false);
+static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
+static RESTART_BACKOFF_SECS: AtomicU64 = AtomicU64::new(1);
+
 pub fn ensure_server_running(app: &AppHandle) {
+    if WATCHDOG_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
     let handle = app.clone();
-    thread::spawn(move || {
+    thread::spawn(move || watchdog_loop(handle));
+}
+
+pub fn shutdown_embedded_server(app: &AppHandle) {
+    SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
+    stop_child(app);
+}
+
+fn watchdog_loop(app: AppHandle) {
+    let mut unhealthy_streak = 0u8;
+
+    while !SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
+        if child_exited(&app) {
+            unhealthy_streak = 3;
+        }
+
         if server_healthy() {
+            unhealthy_streak = 0;
+            RESTART_BACKOFF_SECS.store(1, Ordering::SeqCst);
+        } else {
+            unhealthy_streak = unhealthy_streak.saturating_add(1);
+        }
+
+        if unhealthy_streak >= 3 {
+            stop_child(&app);
+            if !SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
+                if let Some(child) = start_embedded_server(&app) {
+                    if let Some(state) = app.try_state::<EmbeddedServer>() {
+                        if let Ok(mut guard) = state.0.lock() {
+                            *guard = Some(child);
+                        }
+                    }
+                    for _ in 0..20 {
+                        thread::sleep(Duration::from_millis(250));
+                        if server_healthy() {
+                            log::info!("[DevFleet] embedded API server recovered");
+                            unhealthy_streak = 0;
+                            RESTART_BACKOFF_SECS.store(1, Ordering::SeqCst);
+                            break;
+                        }
+                    }
+                }
+            }
+            let backoff = RESTART_BACKOFF_SECS.load(Ordering::SeqCst).min(30);
+            RESTART_BACKOFF_SECS.store((backoff * 2).min(30), Ordering::SeqCst);
+            interruptible_sleep(backoff);
+            continue;
+        }
+
+        if !has_child(&app) && !server_healthy() {
+            if let Some(child) = start_embedded_server(&app) {
+                if let Some(state) = app.try_state::<EmbeddedServer>() {
+                    if let Ok(mut guard) = state.0.lock() {
+                        *guard = Some(child);
+                    }
+                }
+            }
+        }
+
+        thread::sleep(Duration::from_secs(3));
+    }
+}
+
+fn interruptible_sleep(seconds: u64) {
+    for _ in 0..seconds * 10 {
+        if SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
             return;
         }
-        if let Some(child) = start_embedded_server(&handle) {
-            if let Some(state) = handle.try_state::<EmbeddedServer>() {
-                if let Ok(mut guard) = state.0.lock() {
-                    *guard = Some(child);
-                }
-            }
-            for _ in 0..20 {
-                thread::sleep(Duration::from_millis(250));
-                if server_healthy() {
-                    log::info!("[DevFleet] embedded API server ready on http://localhost:3001");
-                    return;
-                }
-            }
-            log::warn!("[DevFleet] embedded API server started but health check timed out");
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn has_child(app: &AppHandle) -> bool {
+    app.try_state::<EmbeddedServer>()
+        .and_then(|state| state.0.lock().ok().map(|guard| guard.is_some()))
+        .unwrap_or(false)
+}
+
+fn child_exited(app: &AppHandle) -> bool {
+    let Some(state) = app.try_state::<EmbeddedServer>() else {
+        return false;
+    };
+    let Ok(mut guard) = state.0.lock() else {
+        return false;
+    };
+    let Some(child) = guard.as_mut() else {
+        return false;
+    };
+    match child.try_wait() {
+        Ok(Some(_status)) => {
+            *guard = None;
+            true
         }
-    });
+        Ok(None) => false,
+        Err(_) => {
+            *guard = None;
+            true
+        }
+    }
+}
+
+fn stop_child(app: &AppHandle) {
+    let Some(state) = app.try_state::<EmbeddedServer>() else {
+        return;
+    };
+    let Ok(mut guard) = state.0.lock() else {
+        return;
+    };
+    if let Some(mut child) = guard.take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 }
 
 fn server_healthy() -> bool {
@@ -51,16 +154,16 @@ fn server_healthy() -> bool {
 fn start_embedded_server(app: &AppHandle) -> Option<Child> {
     let script = resolve_server_script(app)?;
     let data_dir = app.path().app_data_dir().ok()?;
-    let db_file = data_dir.join("db.json");
+    let db_file = data_dir.join("devfleet.db");
     std::fs::create_dir_all(&data_dir).ok()?;
 
-    let mut command = node_command();
+    let node = resolve_node_executable().unwrap_or_else(|| "node".into());
+    let mut command = std::process::Command::new(node);
+    configure_hidden_command(&mut command);
     command
         .arg(script)
         .env("PORT", "3001")
-        .env("DEVFLEET_DB_FILE", db_file)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .env("DEVFLEET_DB_FILE", db_file);
 
     match command.spawn() {
         Ok(child) => {
@@ -82,22 +185,4 @@ fn resolve_server_script(app: &AppHandle) -> Option<PathBuf> {
         )
         .ok()
         .filter(|path| path.exists())
-}
-
-fn node_command() -> Command {
-    for candidate in ["/opt/homebrew/bin/node", "/usr/local/bin/node", "node"] {
-        let path = PathBuf::from(candidate);
-        if candidate == "node" || path.is_file() {
-            let mut command = Command::new(candidate);
-            command.env(
-                "PATH",
-                format!(
-                    "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:{}",
-                    std::env::var("PATH").unwrap_or_default()
-                ),
-            );
-            return command;
-        }
-    }
-    Command::new("node")
 }

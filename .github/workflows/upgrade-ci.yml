@@ -1,0 +1,53 @@
+name: Upgrade CI
+
+on:
+  push:
+    branches: [feat/unified-upgrade, main, develop]
+  pull_request:
+    branches: [feat/unified-upgrade, main, develop]
+
+jobs:
+  upgrade-scope:
+    if: github.repository == '42433422/devfleet'
+    strategy:
+      fail-fast: false
+      matrix:
+        scope:
+          - sqlite
+          - auth
+          - task-lock
+          - websocket
+          - embedded
+          - security
+
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install Rust stable
+        if: matrix.scope == 'task-lock'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux dependencies
+        if: matrix.scope == 'task-lock'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run scoped tests
+        run: npm run test:scope -- ${{ matrix.scope }}
+
+      - name: Run Rust agent tests
+        if: matrix.scope == 'task-lock'
+        working-directory: src-tauri
+        run: cargo test task_lock -- --nocapture

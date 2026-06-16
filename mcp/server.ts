@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { startTraeTaskWithComputerUse } from './computer-use.js';
 
 const execFileAsync = promisify(execFile);
 const apiBaseUrl = (process.env.DEVFLEET_API_URL || 'http://localhost:3001').replace(/\/$/, '');
@@ -62,6 +63,43 @@ server.registerTool('devfleet_next_task', {
   const body = await response.json() as { task?: Record<string, unknown> | null; error?: string };
   if (!response.ok) throw new Error(body.error || `获取待执行任务失败 (${response.status})`);
   return result(body.task);
+});
+
+server.registerTool('devfleet_report_task_progress', {
+  title: '回写当前设备任务进度',
+  description: 'Trae Agent 完成阶段性代码修改后调用：向 DevFleet 回写日志和进度。最终完成仍由本机代理检测 Git 变更、提交并推送后确认。',
+  inputSchema: {
+    task_id: z.string().min(1).describe('devfleet_next_task 返回的任务 ID'),
+    subtask_id: z.string().min(1).describe('devfleet_next_task 返回的子任务 ID'),
+    progress: z.number().int().min(0).max(85).default(80).describe('阶段进度；Trae 阶段最高 85，最终完成由本机代理确认'),
+    status: z.enum(['running', 'failed']).default('running').describe('Trae 阶段状态；代码已改好时仍使用 running'),
+    content: z.string().min(1).describe('写给主控端看的简短进展、失败原因或验证结果'),
+    level: z.enum(['info', 'warn', 'error', 'debug']).default('info').describe('日志级别'),
+  },
+}, async (input) => {
+  const response = await fetch(`${apiBaseUrl}/api/devices/me/task-report`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(input),
+  });
+  const body = await response.json() as Record<string, unknown> & { error?: string };
+  if (!response.ok) throw new Error(body.error || `回写任务进度失败 (${response.status})`);
+  return result(body);
+});
+
+server.registerTool('devfleet_computer_use_start_trae_task', {
+  title: '本机 Computer Use 控制 Trae 新任务',
+  description: '在当前 MCP 所在设备上打开指定 Trae 工作区，点击/触发新任务并写入 prompt。用于 Codex 通过 DevFleet MCP 控制本机 Trae 完成最小闭环。macOS 与 Windows 均支持。',
+  inputSchema: {
+    workspace_path: z.string().min(1).describe('Trae 要打开的本机工作区绝对路径'),
+    prompt: z.string().min(1).describe('写入 Trae 新任务输入框的任务内容'),
+  },
+}, async ({ workspace_path, prompt }) => {
+  await startTraeTaskWithComputerUse(workspace_path, prompt);
+  return result({ success: true, workspace_path });
 });
 
 server.registerTool('devfleet_dispatch_task', {

@@ -20,6 +20,11 @@ dist-ssr
 .env
 !.env.example
 
+# Local SQLite runtime files
+api/data/*.db
+api/data/*.db-shm
+api/data/*.db-wal
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

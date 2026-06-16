@@ -21,6 +21,9 @@ export default defineConfig({
     host: host || undefined,
     port: 5173,
     strictPort: true,
+    headers: process.env.NODE_ENV === 'development' ? {
+      'Content-Security-Policy': "default-src 'self'; connect-src 'self' http://localhost:3001 http://127.0.0.1:3001 ws://localhost:3001 ws://127.0.0.1:3001 http://localhost:5173 ws://localhost:5173 https:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:",
+    } : undefined,
     proxy: {
       '/api': {
         target: apiProxyTarget,

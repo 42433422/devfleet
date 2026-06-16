@@ -11,12 +11,24 @@ export interface ToolStatus {
   currentTask?: string;
 }
 
+export interface DeviceCapabilities {
+  node_version?: string;
+  docker?: boolean;
+  docker_version?: string;
+  gpu?: boolean;
+  gpu_name?: string;
+  platform?: string;
+  arch?: string;
+  updated_at?: string;
+}
+
 export interface Device {
   id: string;
   name: string;
   status: DeviceStatus;
   devTool: ToolName;
   tools: ToolStatus[];
+  capabilities?: DeviceCapabilities;
   lastSeen: string;
   activated?: boolean;
   isPrimary?: boolean;
@@ -35,7 +47,7 @@ interface DevicesState {
   setPrimaryDevice: (id: string) => Promise<void>;
   setDeviceDevTool: (id: string, devTool: ToolName) => Promise<void>;
   updateToolStatus: (deviceId: string, toolStatus: ToolStatus[]) => void;
-  updateDeviceStatus: (deviceId: string, status: DeviceStatus) => void;
+  updateDeviceStatus: (deviceId: string, status: DeviceStatus, capabilities?: DeviceCapabilities) => void;
   updateDeviceDevTool: (deviceId: string, devTool: ToolName) => void;
   setCurrentDevice: (device: Device | null) => void;
   clearError: () => void;
@@ -122,10 +134,12 @@ export const useDevicesStore = create<DevicesState>((set) => ({
     }));
   },
 
-  updateDeviceStatus: (deviceId: string, status: DeviceStatus) => {
+  updateDeviceStatus: (deviceId: string, status: DeviceStatus, capabilities?: DeviceCapabilities) => {
     set((s) => ({
       devices: s.devices.map((d) =>
-        d.id === deviceId ? { ...d, status, lastSeen: new Date().toISOString() } : d
+        d.id === deviceId
+          ? { ...d, status, lastSeen: new Date().toISOString(), ...(capabilities ? { capabilities } : {}) }
+          : d
       ),
     }));
   },

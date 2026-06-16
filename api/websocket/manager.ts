@@ -2,13 +2,21 @@ import type { WebSocket, Server as WSServer } from 'ws';
 import { db } from '../db/store.js';
 import { verifyToken } from '../middleware/auth.js';
 import { normalizeDevTool } from '../lib/utils.js';
+import { parseCapabilities } from '../lib/capabilities.js';
+import {
+  dispatchReadySubs,
+  handleSubTaskFailure,
+  reconcileTask,
+  rescheduleDeviceTasks,
+} from '../lib/dispatch.js';
 import type { ToolStatusItem } from '../db/store.js';
 
-type ClientWS = WebSocket & { _userId?: string };
+type ClientWS = WebSocket & { _userId?: string; _heartbeatTimer?: ReturnType<typeof setInterval>; _pongTimer?: ReturnType<typeof setTimeout> };
 
 interface WSMessage {
   type: string;
   tools?: Array<Pick<ToolStatusItem, 'tool_name' | 'status' | 'current_task'>>;
+  capabilities?: Record<string, unknown>;
   task_id?: string;
   subtask_id?: string;
   progress?: number;
@@ -19,22 +27,60 @@ interface WSMessage {
 
 const clients: Set<ClientWS> = new Set();
 const deviceWS = new Map<string, WebSocket>();
+const HEARTBEAT_MS = Number(process.env.DEVFLEET_WS_HEARTBEAT_MS) || 30_000;
+const PONG_TIMEOUT_MS = Number(process.env.DEVFLEET_WS_PONG_TIMEOUT_MS) || 10_000;
 
-function reconcileTask(userId: string, taskId: string) {
-  const task = db.tasks.findById(taskId);
-  if (!task) return;
-  const subs = db.subTasks.findAllByTaskId(taskId);
-  const nextStatus = subs.some((sub) => sub.status === 'failed')
-    ? 'failed'
-    : subs.length > 0 && subs.every((sub) => sub.status === 'completed')
-      ? 'completed'
-      : 'running';
-  if (task.status !== nextStatus) {
-    db.tasks.update(taskId, {
-      status: nextStatus,
-      ...((nextStatus === 'completed' || nextStatus === 'failed') ? { completed_at: new Date().toISOString() } : {}),
-    });
-    broadcast(userId, { type: 'task_status', task_id: taskId, status: nextStatus });
+function clearHeartbeat(ws: ClientWS | WebSocket) {
+  const socket = ws as ClientWS;
+  if (socket._heartbeatTimer) {
+    clearInterval(socket._heartbeatTimer);
+    socket._heartbeatTimer = undefined;
+  }
+  if (socket._pongTimer) {
+    clearTimeout(socket._pongTimer);
+    socket._pongTimer = undefined;
+  }
+}
+
+function schedulePongTimeout(ws: ClientWS) {
+  if (ws._pongTimer) clearTimeout(ws._pongTimer);
+  ws._pongTimer = setTimeout(() => {
+    try {
+      ws.terminate();
+    } catch {
+      // ignore
+    }
+  }, PONG_TIMEOUT_MS);
+}
+
+function startHeartbeat(ws: ClientWS) {
+  clearHeartbeat(ws);
+  schedulePongTimeout(ws);
+  ws._heartbeatTimer = setInterval(() => {
+    if (ws.readyState !== ws.OPEN) {
+      clearHeartbeat(ws);
+      return;
+    }
+    schedulePongTimeout(ws);
+    try {
+      ws.ping();
+    } catch {
+      clearHeartbeat(ws);
+      ws.terminate();
+    }
+  }, HEARTBEAT_MS);
+}
+
+function handleAppMessage(ws: WebSocket, raw: Buffer | ArrayBuffer | Buffer[]) {
+  try {
+    const msg = JSON.parse(raw.toString()) as WSMessage;
+    if (msg.type === 'ping') {
+      if (ws.readyState === ws.OPEN) {
+        ws.send(JSON.stringify({ type: 'pong' }));
+      }
+    }
+  } catch {
+    // ignore non-json frames
   }
 }
 
@@ -42,6 +88,13 @@ export function attachWebSocket(wss: WSServer) {
   wss.on('connection', (ws: ClientWS, req) => {
     const url = new URL(req.url || '/', 'http://localhost');
     const pathname = url.pathname;
+
+    ws.on('pong', () => {
+      if (ws._pongTimer) {
+        clearTimeout(ws._pongTimer);
+        ws._pongTimer = undefined;
+      }
+    });
 
     if (pathname.startsWith('/ws/client')) {
       const token = url.searchParams.get('token') || '';
@@ -52,7 +105,12 @@ export function attachWebSocket(wss: WSServer) {
       }
       ws._userId = user.id;
       clients.add(ws);
-      ws.on('close', () => clients.delete(ws));
+      startHeartbeat(ws);
+      ws.on('message', (raw) => handleAppMessage(ws, raw));
+      ws.on('close', () => {
+        clearHeartbeat(ws);
+        clients.delete(ws);
+      });
       ws.on('error', (err) => {
         console.error('Client WebSocket error:', err);
       });
@@ -69,6 +127,7 @@ export function attachWebSocket(wss: WSServer) {
       const previous = deviceWS.get(device.id);
       if (previous && previous !== ws) previous.close(4000, '设备已在新的连接上线');
       deviceWS.set(device.id, ws);
+      startHeartbeat(ws);
       db.devices.update(device.id, { status: 'online', activated: true });
       sendBindingIdentity(device.id);
       broadcast(device.user_id, {
@@ -80,18 +139,31 @@ export function attachWebSocket(wss: WSServer) {
       ws.on('message', (raw) => {
         try {
           const msg = JSON.parse(raw.toString()) as WSMessage;
+          if (msg.type === 'ping') {
+            if (ws.readyState === ws.OPEN) {
+              ws.send(JSON.stringify({ type: 'pong' }));
+            }
+            return;
+          }
+
           if (msg.type === 'tool_status') {
             db.tools.bulkUpsert(device.id, msg.tools || []);
+            if (msg.capabilities) {
+              const caps = { ...msg.capabilities, updated_at: new Date().toISOString() };
+              db.devices.update(device.id, { capabilities: JSON.stringify(caps) });
+            }
             const tools = (msg.tools || []).map((t) => ({
               toolName: t.tool_name,
               status: t.status,
               currentTask: t.current_task,
             }));
+            const caps = msg.capabilities ? parseCapabilities(msg.capabilities) : parseCapabilities(device.capabilities);
             broadcast(device.user_id, {
               type: 'device_status',
               device_id: device.id,
               status: 'online',
               tools,
+              capabilities: caps,
             });
             return;
           }
@@ -102,6 +174,11 @@ export function attachWebSocket(wss: WSServer) {
             if (!task || !sub || task.user_id !== device.user_id || sub.task_id !== task.id || sub.device_id !== device.id) return;
             const progress = typeof msg.progress === 'number' ? Math.max(0, Math.min(100, msg.progress)) : sub.progress;
             const status = msg.status || (progress === 100 ? 'completed' : 'running');
+            if (status === 'failed') {
+              handleSubTaskFailure(device.user_id, task.id, sub.id, '设备上报失败');
+              reconcileTask(device.user_id, task.id);
+              return;
+            }
             const updated = db.subTasks.update(sub.id, {
               progress,
               status,
@@ -118,6 +195,9 @@ export function attachWebSocket(wss: WSServer) {
               progress: updated.progress,
               status: updated.status,
             });
+            if (status === 'completed') {
+              dispatchReadySubs(device.user_id, task.id);
+            }
             reconcileTask(device.user_id, task.id);
             return;
           }
@@ -130,11 +210,15 @@ export function attachWebSocket(wss: WSServer) {
               sub_task_id: sub.id,
               content: msg.content.trim(),
               level: msg.level || 'info',
+              device_id: device.id,
+              task_id: task.id,
             });
             broadcast(device.user_id, {
               type: 'task_log',
               task_id: task.id,
               subtask_id: sub.id,
+              device_id: device.id,
+              device_name: device.name,
               log,
             });
           }
@@ -144,6 +228,7 @@ export function attachWebSocket(wss: WSServer) {
       });
 
       ws.on('close', () => {
+        clearHeartbeat(ws);
         if (deviceWS.get(device.id) !== ws) return;
         const closedSocket = ws;
         deviceWS.delete(device.id);
@@ -152,6 +237,7 @@ export function attachWebSocket(wss: WSServer) {
           if (current && current !== closedSocket && current.readyState === current.OPEN) return;
           if (current === closedSocket) return;
           db.devices.update(device.id, { status: 'offline' });
+          rescheduleDeviceTasks(device.user_id, device.id);
           broadcast(device.user_id, {
             type: 'device_status',
             device_id: device.id,

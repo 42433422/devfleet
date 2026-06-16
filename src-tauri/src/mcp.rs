@@ -52,10 +52,7 @@ fn resolve_mcp_path(raw: &str) -> Result<String, String> {
     if !trimmed.is_empty() && Path::new(trimmed).is_file() {
         return Ok(trimmed.to_string());
     }
-    Err(
-        "MCP 文件不存在。桌面端会自动解压到应用数据目录，请刷新页面或重新打开 DevFleet。"
-            .into(),
-    )
+    Err("MCP 文件不存在。桌面端会自动解压到应用数据目录，请刷新页面或重新打开 DevFleet。".into())
 }
 
 #[tauri::command]
@@ -506,15 +503,14 @@ fn find_client_executable(tool: &str) -> Option<String> {
                 "/Applications/Codex.app/Contents/Resources/codex",
                 "/Applications/Codex.app/Contents/MacOS/Codex",
             ],
-            "claude_code" => &[
-                "/Applications/Claude.app/Contents/MacOS/Claude",
-            ],
+            "claude_code" => &["/Applications/Claude.app/Contents/MacOS/Claude"],
             "cursor" => &["/Applications/Cursor.app/Contents/MacOS/Cursor"],
             "trae" => &[
                 "/Applications/Trae.app/Contents/MacOS/Trae",
                 "/Applications/Trae CN.app/Contents/MacOS/Trae CN",
                 "/Applications/TRAE SOLO CN.app/Contents/MacOS/TRAE SOLO CN",
                 "/Applications/TRAE SOLO.app/Contents/MacOS/TRAE SOLO",
+                "/Volumes/Trae CN/Trae CN.app/Contents/MacOS/Electron",
                 "/Volumes/TRAE Work CN/TRAE SOLO CN.app/Contents/MacOS/Electron",
                 "/Volumes/TRAE Work/TRAE SOLO.app/Contents/MacOS/Electron",
             ],
@@ -543,6 +539,7 @@ fn find_node_executable() -> Option<String> {
             "/Applications/Trae CN.app/Contents/Resources/app/resources/helpers/node",
             "/Applications/TRAE SOLO.app/Contents/Resources/app/resources/helpers/node",
             "/Applications/TRAE SOLO CN.app/Contents/Resources/app/resources/helpers/node",
+            "/Volumes/Trae CN/Trae CN.app/Contents/Resources/app/resources/helpers/node",
         ];
         return bundled
             .iter()
@@ -716,8 +713,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn finds_cursor_bundled_node() {
-        let cursor_node =
-            "/Applications/Cursor.app/Contents/Resources/app/resources/helpers/node";
+        let cursor_node = "/Applications/Cursor.app/Contents/Resources/app/resources/helpers/node";
         if !Path::new(cursor_node).is_file() {
             return;
         }
@@ -731,15 +727,15 @@ mod tests {
         let Some(home) = home_dir() else {
             return;
         };
-        let mcp_path = home
-            .join("Library/Application Support/com.devfleet.desktop/mcp/devfleet-mcp.mjs");
+        let mcp_path =
+            home.join("Library/Application Support/com.devfleet.desktop/mcp/devfleet-mcp.mjs");
         assert!(
             mcp_path.is_file(),
             "launch DevFleet once so MCP bundle is extracted"
         );
         let token = std::env::var("DEVFLEET_TOKEN").unwrap_or_default();
-        let api_url = std::env::var("DEVFLEET_API_URL")
-            .unwrap_or_else(|_| "http://localhost:3001".into());
+        let api_url =
+            std::env::var("DEVFLEET_API_URL").unwrap_or_else(|_| "http://localhost:3001".into());
         let options = McpOptions {
             mcp_path: mcp_path.to_str().unwrap(),
             api_url: api_url.trim_end_matches('/'),

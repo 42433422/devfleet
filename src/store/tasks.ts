@@ -11,17 +11,32 @@ export interface LogEntry {
   content: string;
   level: LogLevel;
   timestamp: string;
+  device_id?: string;
+  device_name?: string;
+  subtask_id?: string;
+  subtask_title?: string;
 }
 
 export interface SubTask {
   id: string;
   task_id: string;
   device_id: string;
+  device_name?: string;
   tool_name: ToolName;
   status: SubTaskStatus;
   branch_name: string;
   progress: number;
+  title?: string;
+  description?: string;
+  depends_on?: string[];
+  sort_order?: number;
+  attempt_count?: number;
+  max_attempts?: number;
+  last_error?: string;
+  blocked?: boolean;
   logs: LogEntry[];
+  created_at?: string;
+  completed_at?: string;
 }
 
 export interface Task {
@@ -42,6 +57,8 @@ interface TaskCreateData {
   description: string;
   repo_url: string;
   branch: string;
+  sequential?: boolean;
+  assignments?: Array<{ device_id: string; sub_index?: number }>;
 }
 
 interface TasksState {
@@ -57,7 +74,12 @@ interface TasksState {
   deleteTask: (id: string) => Promise<void>;
   updateTaskProgress: (taskId: string, subTaskId: string, progress: number, status?: SubTaskStatus) => void;
   updateTaskStatus: (taskId: string, status: TaskStatus) => void;
-  appendTaskLog: (taskId: string, subTaskId: string, log: LogEntry) => void;
+  appendTaskLog: (
+    taskId: string,
+    subTaskId: string,
+    log: LogEntry,
+    meta?: { device_id?: string; device_name?: string },
+  ) => void;
   addTask: (task: Task) => void;
   clearError: () => void;
 }
@@ -162,12 +184,18 @@ export const useTasksStore = create<TasksState>((set, get) => ({
     }));
   },
 
-  appendTaskLog: (taskId: string, subTaskId: string, log: LogEntry) => {
+  appendTaskLog: (taskId: string, subTaskId: string, log: LogEntry, meta?: { device_id?: string; device_name?: string }) => {
+    const enriched: LogEntry = {
+      ...log,
+      device_id: meta?.device_id || log.device_id,
+      device_name: meta?.device_name || log.device_name,
+      subtask_id: subTaskId,
+    };
     set((s) => {
       const updater = (t: Task): Task => ({
         ...t,
         subTasks: t.subTasks.map((st) =>
-          st.id === subTaskId ? { ...st, logs: [...st.logs, log].slice(-200) } : st
+          st.id === subTaskId ? { ...st, logs: [...st.logs, enriched].slice(-200) } : st
         ),
       });
       return {

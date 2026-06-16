@@ -31,9 +31,10 @@ export function normalizeDevTool(value: unknown): DevTool {
 export interface SubTaskDesc {
   title: string;
   description: string;
+  dependsOnIndices?: number[];
 }
 
-export function splitTaskIntoSubs(description: string, count = 3): SubTaskDesc[] {
+export function splitTaskIntoSubs(description: string, count = 3, sequential = false): SubTaskDesc[] {
   const trimmed = description.trim();
   const lines = trimmed.split(/\n+|。|；|;|\./).map((l) => l.trim()).filter(Boolean);
 
@@ -44,6 +45,7 @@ export function splitTaskIntoSubs(description: string, count = 3): SubTaskDesc[]
       subs.push({
         title: `子任务 ${i + 1}`,
         description: lines[i],
+        dependsOnIndices: sequential && i > 0 ? [i - 1] : undefined,
       });
     }
   } else {
@@ -53,6 +55,7 @@ export function splitTaskIntoSubs(description: string, count = 3): SubTaskDesc[]
       subs.push({
         title: subTitles[i] || `子任务 ${i + 1}`,
         description: `${baseDesc}（第 ${i + 1} 部分）`,
+        dependsOnIndices: sequential && i > 0 ? [i - 1] : undefined,
       });
     }
   }

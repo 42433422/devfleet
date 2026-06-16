@@ -88,15 +88,15 @@ fn open_with_app_dir(name: &str, url: &str) -> Result<(), String> {
     // 先尝试 /Applications
     let app_path = format!("/Applications/{name}.app");
     if Path::new(&app_path).is_dir() {
-        return open_with_status(&["-a", name, url]);
+        return open_with_status(&["-a", &app_path, url]);
     }
     // 在 /Volumes 下查找
     if let Ok(entries) = std::fs::read_dir("/Volumes") {
         for entry in entries.flatten() {
             let candidate = entry.path().join(format!("{name}.app"));
             if candidate.is_dir() {
-                // 使用 open 命令直接指定 .app 路径
-                return open_with_status(&[&candidate.to_string_lossy(), url]);
+                let app_path = candidate.to_string_lossy().to_string();
+                return open_with_status(&["-a", &app_path, url]);
             }
         }
     }

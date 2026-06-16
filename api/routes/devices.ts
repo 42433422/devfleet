@@ -1,8 +1,10 @@
 import { Router, type Request, type Response } from 'express';
-import { db } from '../db/store.js';
+import { db, type SubTask } from '../db/store.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { genBindCode, genDeviceToken, normalizeDevTool, type DevTool } from '../lib/utils.js';
 import { broadcast, disconnectDeviceSocket, hasDevice, sendBindingIdentity, sendBindingIdentityToUser } from '../websocket/manager.js';
+import { parseCapabilities } from '../lib/capabilities.js';
+import { reconcileTask, dispatchReadySubs, handleSubTaskFailure } from '../lib/dispatch.js';
 import { createHash } from 'node:crypto';
 
 const router = Router();
@@ -24,12 +26,14 @@ function serializeDevice(deviceId: string) {
   const all: ToolItem['tool_name'][] = ['codex', 'trae', 'cursor', 'claude_code'];
   const toolMap = new Map(tools.map((t) => [t.toolName, t]));
   const finalTools = all.map((name) => toolMap.get(name) || { toolName: name, status: 'not_installed' });
+  const capabilities = parseCapabilities(dev.capabilities);
   return {
     id: dev.id,
     name: dev.name,
     status: hasDevice(dev.id) ? 'online' : dev.status === 'connecting' ? 'connecting' : 'offline',
     devTool: normalizeDevTool(dev.dev_tool),
     tools: finalTools,
+    capabilities,
     lastSeen: dev.last_seen,
     bindCode: dev.bind_code,
     activated: dev.activated !== false,
@@ -138,6 +142,124 @@ router.get('/me/pending-task', async (req: Request, res: Response): Promise<void
     },
   });
 });
+
+router.post('/me/task-report', async (req: Request, res: Response): Promise<void> => {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+  if (!token) {
+    res.status(401).json({ error: '缺少设备令牌' });
+    return;
+  }
+  const device = db.devices.findByDeviceToken(token);
+  if (!device) {
+    res.status(404).json({ error: '设备不存在或已解除绑定' });
+    return;
+  }
+
+  const body = (req.body || {}) as {
+    task_id?: string;
+    subtask_id?: string;
+    progress?: number;
+    status?: SubTask['status'];
+    content?: string;
+    level?: 'info' | 'warn' | 'error' | 'debug';
+  };
+  const taskId = (body.task_id || '').trim();
+  const subtaskId = (body.subtask_id || '').trim();
+  const content = (body.content || '').trim();
+  if (!taskId || !subtaskId || !content) {
+    res.status(400).json({ error: 'task_id、subtask_id、content 不能为空' });
+    return;
+  }
+
+  const task = db.tasks.findById(taskId);
+  if (!task || task.user_id !== device.user_id) {
+    res.status(404).json({ error: '任务不存在' });
+    return;
+  }
+  const sub = db.subTasks.findById(subtaskId);
+  if (!sub || sub.task_id !== taskId || sub.device_id !== device.id) {
+    res.status(404).json({ error: '子任务不存在或不属于当前设备' });
+    return;
+  }
+
+  const validStatuses: SubTask['status'][] = ['pending', 'running', 'completed', 'failed'];
+  const patch: Partial<SubTask> = {};
+  if (typeof body.progress === 'number') {
+    patch.progress = Math.max(0, Math.min(100, body.progress));
+  }
+  if (body.status && validStatuses.includes(body.status)) {
+    patch.status = body.status;
+    if (body.status === 'completed') {
+      patch.completed_at = new Date().toISOString();
+    }
+  }
+  const updated = db.subTasks.update(subtaskId, patch);
+  if (!updated) {
+    res.status(500).json({ error: '更新子任务失败' });
+    return;
+  }
+
+  const log = db.logs.create({
+    sub_task_id: subtaskId,
+    content,
+    level: body.level || 'info',
+    device_id: device.id,
+    task_id: taskId,
+  });
+  broadcast(device.user_id, {
+    type: 'task_log',
+    task_id: taskId,
+    subtask_id: subtaskId,
+    device_id: device.id,
+    device_name: device.name,
+    log,
+  });
+  broadcast(device.user_id, {
+    type: 'task_progress',
+    task_id: taskId,
+    subtask_id: subtaskId,
+    progress: updated.progress,
+    status: updated.status,
+  });
+
+  if (body.status === 'failed') {
+    handleSubTaskFailure(device.user_id, taskId, subtaskId, content);
+  } else if (body.status === 'completed') {
+    dispatchReadySubs(device.user_id, taskId);
+  }
+
+  reconcileTask(device.user_id, taskId);
+  const task = db.tasks.findById(taskId);
+  res.status(200).json({
+    success: true,
+    subTask: serializeSubTask(updated),
+    task: task ? {
+      id: task.id,
+      title: task.title,
+      status: task.status,
+      subTasks: db.subTasks.findAllByTaskId(taskId).map(serializeSubTask),
+    } : null,
+  });
+});
+
+function serializeSubTask(sub: SubTask) {
+  return {
+    id: sub.id,
+    task_id: sub.task_id,
+    device_id: sub.device_id,
+    tool_name: sub.tool_name,
+    status: sub.status,
+    branch_name: sub.branch_name,
+    progress: sub.progress,
+    title: sub.title,
+    depends_on: sub.depends_on ?? [],
+    attempt_count: sub.attempt_count ?? 0,
+    last_error: sub.last_error,
+    created_at: sub.created_at,
+    completed_at: sub.completed_at,
+  };
+}
 
 router.use(authMiddleware);
 
