@@ -602,7 +602,7 @@ impl AgentState {
             _ => {
                 if matches!(dev_tool, "claude_code") {
                     match launch_tool(dev_tool, &task_dir) {
-                        Ok(()) => {
+                        Ok(_) => {
                             send_log(tx, task, &format!("已使用 {dev_tool} 打开工作区"), "info")
                         }
                         Err(error) => send_log(
@@ -1349,7 +1349,7 @@ async fn push_branch_if_remote(
         Ok(url) if !url.trim().is_empty() => {
             send_log(tx, task, "正在推送远程分支", "info");
             match run_command(Some(task_dir), "git", &["push", "-u", "origin", branch]).await {
-                Ok(()) => {
+                Ok(_) => {
                     send_log(tx, task, "远程分支已推送", "info");
                     Ok(())
                 }
