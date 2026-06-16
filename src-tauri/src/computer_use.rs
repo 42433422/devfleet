@@ -36,10 +36,20 @@ pub fn start_trae_task(workspace: &Path, prompt: &str) -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
+fn cu_open_delay_ms() -> u64 {
+    std::env::var("DEVFLEET_CU_OPEN_DELAY_MS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(4500)
+}
+
+#[cfg(target_os = "macos")]
 fn start_trae_task_macos(workspace: &Path, prompt: &str) -> Result<(), String> {
     let app = find_trae_app_bundle().ok_or_else(|| "未找到 Trae / Trae CN 应用".to_string())?;
     let application_name = trae_application_name_from_bundle(&app);
     open_workspace_in_trae(&app, workspace)?;
+    // Trae 打开工作区后 UI 就绪较慢；过早 osascript 会「只 open 不 send」。
+    std::thread::sleep(std::time::Duration::from_millis(cu_open_delay_ms()));
     let script = build_trae_new_task_script(prompt, &application_name);
     run_osascript(&script).map_err(|error| {
         format!(
@@ -213,44 +223,94 @@ end try
 set the clipboard to devfleetPrompt
 
 tell application "{application_name}" to activate
-delay 2.5
 
 tell application "System Events"
     set traeProcessName to ""
-    repeat with candidateName in {{{process_list}}}
-        if exists process (candidateName as text) then
-            set traeProcessName to candidateName as text
-            exit repeat
-        end if
+    repeat 40 times
+        repeat with candidateName in {{{process_list}}}
+            if exists process (candidateName as text) then
+                set traeProcessName to candidateName as text
+                exit repeat
+            end if
+        end repeat
+        if traeProcessName is not "" then exit repeat
+        delay 0.5
     end repeat
-    if traeProcessName is "" then error "Trae process not found"
+    if traeProcessName is "" then error "Trae process not found after wait"
 
     tell process traeProcessName
         set frontmost to true
-        delay 1.0
 
-        set clickedNewTask to false
-        try
-            repeat with w in windows
-                repeat with btn in (buttons of w)
-                    try
-                        set btnName to name of btn
-                        if btnName contains "新任务" or btnName contains "New Task" or btnName contains "新建任务" then
-                            click btn
-                            set clickedNewTask to true
-                            exit repeat
-                        end if
-                    end try
-                end repeat
-                if clickedNewTask then exit repeat
-            end repeat
-        end try
-
-        if clickedNewTask is false then
-            key code 45 using {{control down, command down}}
-        end if
+        repeat 30 times
+            if (count of windows) > 0 then exit repeat
+            delay 0.5
+        end repeat
+        if (count of windows) is 0 then error "Trae window not ready"
 
         delay 1.5
+        set triggeredNewTask to false
+
+        repeat with w in windows
+            repeat with e in entire contents of w
+                try
+                    set elementName to name of e
+                    set elementRole to role of e
+                    if elementRole is "AXButton" or elementRole is "button" then
+                        if elementName contains "新任务" or elementName contains "New Task" or elementName contains "新建任务" or elementName contains "Create Task" then
+                            click e
+                            set triggeredNewTask to true
+                            exit repeat
+                        end if
+                    end if
+                end try
+            end repeat
+            if triggeredNewTask then exit repeat
+        end repeat
+
+        if triggeredNewTask is false then
+            try
+                keystroke "n" using {{command down, shift down}}
+                delay 1.2
+                set triggeredNewTask to true
+            end try
+        end if
+
+        if triggeredNewTask is false then
+            try
+                keystroke "n" using command down
+                delay 1.0
+                set triggeredNewTask to true
+            end try
+        end if
+
+        if triggeredNewTask is false then
+            try
+                key code 45 using {{control down, command down}}
+                delay 1.0
+                set triggeredNewTask to true
+            end try
+        end if
+
+        if triggeredNewTask is false then error "Failed to trigger Trae New Task (shortcut and button search failed)"
+
+        delay 1.2
+
+        -- 尽量聚焦输入框再粘贴，避免 Cmd+V 落到错误窗口
+        set focusedInput to false
+        repeat with w in windows
+            repeat with e in entire contents of w
+                try
+                    set elementRole to role of e
+                    if elementRole is "AXTextArea" or elementRole is "AXTextField" or elementRole is "text area" or elementRole is "text field" then
+                        set focused of e to true
+                        set focusedInput to true
+                        exit repeat
+                    end if
+                end try
+            end repeat
+            if focusedInput then exit repeat
+        end repeat
+
         keystroke "v" using command down
         delay 0.5
         key code 36
@@ -343,7 +403,9 @@ mod tests {
         let script = build_trae_new_task_script("hello\nworld", "Trae CN");
         assert!(script.contains("\"TRAE CN\""));
         assert!(script.contains("tell application \"Trae CN\" to activate"));
-        assert!(script.contains("clickedNewTask"));
+        assert!(script.contains("triggeredNewTask"));
+        assert!(script.contains("entire contents"));
+        assert!(script.contains("command down, shift down"));
         assert!(script.contains("新任务"));
         assert!(script.contains("keystroke \"v\" using command down"));
         assert!(script.contains("\"hello\" & linefeed & \"world\""));

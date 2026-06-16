@@ -112,44 +112,93 @@ end try
 set the clipboard to devfleetPrompt
 
 tell application "${applicationName}" to activate
-delay 2.5
 
 tell application "System Events"
     set traeProcessName to ""
-    repeat with candidateName in {${processList}}
-        if exists process (candidateName as text) then
-            set traeProcessName to candidateName as text
-            exit repeat
-        end if
+    repeat 40 times
+        repeat with candidateName in {${processList}}
+            if exists process (candidateName as text) then
+                set traeProcessName to candidateName as text
+                exit repeat
+            end if
+        end repeat
+        if traeProcessName is not "" then exit repeat
+        delay 0.5
     end repeat
-    if traeProcessName is "" then error "Trae process not found"
+    if traeProcessName is "" then error "Trae process not found after wait"
 
     tell process traeProcessName
         set frontmost to true
-        delay 1.0
 
-        set clickedNewTask to false
-        try
-            repeat with w in windows
-                repeat with btn in (buttons of w)
-                    try
-                        set btnName to name of btn
-                        if btnName contains "新任务" or btnName contains "New Task" or btnName contains "新建任务" then
-                            click btn
-                            set clickedNewTask to true
-                            exit repeat
-                        end if
-                    end try
-                end repeat
-                if clickedNewTask then exit repeat
-            end repeat
-        end try
-
-        if clickedNewTask is false then
-            key code 45 using {control down, command down}
-        end if
+        repeat 30 times
+            if (count of windows) > 0 then exit repeat
+            delay 0.5
+        end repeat
+        if (count of windows) is 0 then error "Trae window not ready"
 
         delay 1.5
+        set triggeredNewTask to false
+
+        repeat with w in windows
+            repeat with e in entire contents of w
+                try
+                    set elementName to name of e
+                    set elementRole to role of e
+                    if elementRole is "AXButton" or elementRole is "button" then
+                        if elementName contains "新任务" or elementName contains "New Task" or elementName contains "新建任务" or elementName contains "Create Task" then
+                            click e
+                            set triggeredNewTask to true
+                            exit repeat
+                        end if
+                    end if
+                end try
+            end repeat
+            if triggeredNewTask then exit repeat
+        end repeat
+
+        if triggeredNewTask is false then
+            try
+                keystroke "n" using {command down, shift down}
+                delay 1.2
+                set triggeredNewTask to true
+            end try
+        end if
+
+        if triggeredNewTask is false then
+            try
+                keystroke "n" using command down
+                delay 1.0
+                set triggeredNewTask to true
+            end try
+        end if
+
+        if triggeredNewTask is false then
+            try
+                key code 45 using {control down, command down}
+                delay 1.0
+                set triggeredNewTask to true
+            end try
+        end if
+
+        if triggeredNewTask is false then error "Failed to trigger Trae New Task (shortcut and button search failed)"
+
+        delay 1.2
+
+        set focusedInput to false
+        repeat with w in windows
+            repeat with e in entire contents of w
+                try
+                    set elementRole to role of e
+                    if elementRole is "AXTextArea" or elementRole is "AXTextField" or elementRole is "text area" or elementRole is "text field" then
+                        set focused of e to true
+                        set focusedInput to true
+                        exit repeat
+                    end if
+                end try
+            end repeat
+            if focusedInput then exit repeat
+        end repeat
+
         keystroke "v" using command down
         delay 0.5
         key code 36
@@ -162,11 +211,21 @@ try
 end try`;
 };
 
+const cuOpenDelayMs = () => {
+  const raw = process.env.DEVFLEET_CU_OPEN_DELAY_MS;
+  if (!raw) return 4500;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 4500;
+};
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const startTraeTaskMacos = async (workspacePath: string, prompt: string) => {
   const app = findTraeAppBundle();
   if (!app) throw new Error('未找到 Trae / Trae CN 应用');
   const applicationName = traeApplicationNameFromBundle(app);
   await execFileAsync('/usr/bin/open', ['-a', app, workspacePath]);
+  await sleep(cuOpenDelayMs());
   await execFileAsync('/usr/bin/osascript', ['-e', buildTraeNewTaskScript(prompt, applicationName)]);
 };
 

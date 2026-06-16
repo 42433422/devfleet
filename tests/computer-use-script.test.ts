@@ -39,7 +39,9 @@ test('macOS AppleScript 优先匹配 TRAE CN 并激活 Trae CN', () => {
   assert.ok(TRAE_PROCESS_NAMES[0] === 'TRAE CN');
   assert.match(script, /"TRAE CN"/);
   assert.match(script, /tell application "Trae CN" to activate/);
-  assert.match(script, /clickedNewTask/);
+  assert.match(script, /triggeredNewTask/);
+  assert.match(script, /entire contents/);
+  assert.match(script, /command down, shift down/);
   assert.match(script, /新任务/);
   assert.match(script, /keystroke "v" using command down/);
 });
