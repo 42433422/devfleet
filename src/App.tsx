@@ -18,7 +18,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen bg-bg-primary text-zinc-200">
       <Sidebar />
-      <main className="flex-1 flex flex-col min-h-screen ml-56">{children}</main>
+      <main className="flex-1 flex flex-col min-h-screen min-w-0 ml-56">{children}</main>
     </div>
   );
 }

@@ -202,7 +202,7 @@ export default function Integration() {
   };
 
   return (
-    <div className="flex-1 p-6 overflow-y-auto">
+    <div className="flex-1 min-w-0 p-6 overflow-y-auto overflow-x-hidden">
       <div className="mb-6">
         <h1 className="text-lg font-semibold text-white flex items-center gap-2"><PlugZap size={18} className="text-brand" />主设备 MCP 接入</h1>
         <p className="text-xs text-zinc-500 mt-1">在主设备配置 Trae / Codex / Cursor / Claude Code，用于派发任务、等待完成、合并各工作设备的 Git 分支</p>
@@ -213,14 +213,14 @@ export default function Integration() {
         <p className="text-[11px] text-zinc-600 mt-2">工作设备接入地址请在「设备管理」配置；下方 MCP 使用本机地址 {apiUrl} 即可。</p>
       </div>
 
-      <div className="mb-6 bg-gradient-to-br from-brand/10 via-zinc-900/80 to-zinc-900/60 border border-brand/25 rounded-xl overflow-hidden">
-        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 px-5 py-4 border-b border-brand/15">
-          <div className="min-w-0 flex-1">
-            <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+      <div className="mb-6 bg-gradient-to-br from-brand/10 via-zinc-900/80 to-zinc-900/60 border border-brand/25 rounded-xl">
+        <div className="flex flex-col gap-4 px-5 py-4 border-b border-brand/15">
+          <div className="w-full min-w-0">
+            <h2 className="text-sm font-semibold text-white flex items-center gap-2 flex-wrap">
               <Bot size={16} className="text-brand shrink-0" />
               复制给 AI 助手 · 自动完成 MCP 接入
             </h2>
-            <p className="text-xs text-zinc-400 mt-1.5 max-w-xl">
+            <p className="text-xs text-zinc-400 mt-1.5">
               复制一段话粘贴到 Cursor、Trae、Claude、ChatGPT 等任意 AI，让它直接写入配置并调用
               {' '}
               <code className="text-brand/90">devfleet_list_devices</code>
@@ -228,12 +228,12 @@ export default function Integration() {
               验证——无需手动改 JSON。也可直接用下方按钮在 Cursor / Trae 中一键安装。
             </p>
           </div>
-          <div className="relative z-10 flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2 w-full lg:w-auto shrink-0">
+          <div className="flex flex-wrap gap-2 w-full min-w-0">
             <button
               type="button"
               onClick={() => void copyMcpSetupPrompt()}
               aria-label="一键复制 MCP 配置话术"
-              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-brand hover:bg-brand/90 active:scale-[0.98] rounded-lg text-sm text-black font-semibold cursor-pointer transition-transform"
+              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-brand hover:bg-brand/90 active:scale-[0.98] rounded-lg text-sm text-black font-semibold cursor-pointer transition-transform whitespace-nowrap"
             >
               {mcpSetupCopied ? <Check size={16} /> : <Clipboard size={16} />}
               {mcpSetupCopied ? '已复制，去粘贴给 AI' : '一键复制配置话术'}
@@ -241,7 +241,7 @@ export default function Integration() {
             <button
               type="button"
               onClick={() => void openCursorDeeplink()}
-              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-sm text-white font-medium"
+              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-sm text-white font-medium whitespace-nowrap"
             >
               <Code2 size={16} />
               Cursor 一键安装
@@ -249,7 +249,7 @@ export default function Integration() {
             <button
               type="button"
               onClick={() => void openTraeDeeplink()}
-              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-sm text-white font-medium"
+              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-sm text-white font-medium whitespace-nowrap"
             >
               <Sparkles size={16} />
               Trae 一键安装
@@ -267,7 +267,7 @@ export default function Integration() {
         )}
       </div>
 
-      <div className="grid lg:grid-cols-2 gap-4 mb-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4 min-w-0 w-full">
         <label className="block bg-zinc-900/60 border border-zinc-800 rounded-xl p-4">
           <span className="block text-xs text-zinc-500 mb-1.5">MCP 文件绝对路径</span>
           <input value={mcpPath} onChange={(event) => setMcpPath(event.target.value)} className="w-full px-3 py-2.5 bg-zinc-950 border border-zinc-800 rounded-lg text-xs font-mono text-white focus:outline-none focus:border-brand/50" />
@@ -296,7 +296,7 @@ export default function Integration() {
         </button>
       </div>
 
-      <div className="grid lg:grid-cols-2 2xl:grid-cols-4 gap-4 mb-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 min-[1400px]:grid-cols-4 gap-4 mb-4 min-w-0 w-full">
         <McpCard
           title="Trae"
           icon={<Sparkles size={14} />}
@@ -472,26 +472,27 @@ function McpCard({ title, icon, hint, copyKey, copied, onCopy, onInstall, busy, 
       ? '更新配置'
       : '一键配置';
   return (
-    <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-5 flex flex-col min-h-0">
-      <div className="flex flex-col gap-3 mb-3">
+    <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-4 sm:p-5 flex flex-col min-w-0 w-full">
+      <div className="shrink-0 mb-3 space-y-3">
         <div className="min-w-0">
           <h2 className="text-sm font-medium text-white flex items-center gap-2 flex-wrap">
-            {icon}{title}
+            <span className="shrink-0">{icon}</span>
+            <span className="min-w-0">{title}</span>
             {variant && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-brand/20 text-brand font-normal">
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-brand/20 text-brand font-normal shrink-0">
                 {variant === 'cn' ? '国内版' : '国际版'}
               </span>
             )}
           </h2>
-          <p className="text-xs text-zinc-500 mt-1">{hint}</p>
+          <p className="text-xs text-zinc-500 mt-1 break-words">{hint}</p>
           <McpStatus status={status} />
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
           <button
             type="button"
             onClick={onInstall}
             disabled={busy}
-            className="px-3 py-2 bg-brand/90 hover:bg-brand disabled:opacity-50 rounded-lg text-xs text-black font-medium"
+            className="px-3 py-2 bg-brand/90 hover:bg-brand disabled:opacity-50 rounded-lg text-xs text-black font-medium whitespace-nowrap"
           >
             {busy ? '配置中…' : actionLabel}
           </button>
@@ -501,18 +502,27 @@ function McpCard({ title, icon, hint, copyKey, copied, onCopy, onInstall, busy, 
               onClick={() => void onDeeplinkInstall()}
               disabled={busy}
               title="通过 deeplink 在客户端打开安装"
-              className="flex items-center gap-1.5 px-3 py-2 bg-zinc-800 rounded-lg text-xs text-zinc-300 hover:text-white disabled:opacity-50"
+              className="flex items-center gap-1.5 px-3 py-2 bg-zinc-800 rounded-lg text-xs text-zinc-300 hover:text-white disabled:opacity-50 whitespace-nowrap"
             >
-              <Monitor size={13} />
+              <Monitor size={13} className="shrink-0" />
               打开安装
             </button>
           )}
-          <button type="button" onClick={onCopy} title={`复制 ${title} 配置`} className="p-2 bg-zinc-800 rounded-lg text-zinc-300 hover:text-white">
+          <button
+            type="button"
+            onClick={onCopy}
+            title={`复制 ${title} 配置`}
+            className="p-2 bg-zinc-800 rounded-lg text-zinc-300 hover:text-white shrink-0"
+          >
             {copied === copyKey ? <Check size={13} className="text-green-400" /> : <Clipboard size={13} />}
           </button>
         </div>
       </div>
-      <pre className={`p-4 bg-zinc-950 rounded-lg overflow-x-auto text-xs font-mono whitespace-pre-wrap break-words max-h-40 flex-1 min-h-0 ${accent ? 'text-brand' : 'text-zinc-300'}`}>{content}</pre>
+      <pre
+        className={`p-3 sm:p-4 bg-zinc-950 rounded-lg overflow-x-auto overflow-y-auto text-xs font-mono whitespace-pre-wrap break-all max-h-40 min-h-[5rem] w-full min-w-0 ${accent ? 'text-brand' : 'text-zinc-300'}`}
+      >
+        {content}
+      </pre>
     </div>
   );
 }
