@@ -3,6 +3,8 @@ import { HashRouter as Router, Routes, Route, Navigate, Link } from 'react-route
 import { useAuthStore } from '@/store/auth';
 import { wsClient } from '@/lib/websocket';
 import { DEFAULT_API_BASE } from '@/lib/apiBase';
+import { isDesktopApp } from '@/lib/agent';
+import { autoFixLocalApiUrl, waitForServerReady } from '@/lib/serverAddress';
 import Sidebar from '@/components/Sidebar';
 import Login from '@/pages/Login';
 import Devices from '@/pages/Devices';
@@ -29,7 +31,16 @@ function Protected({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (token) return;
     setError('');
-    guestLogin()
+    const connect = async () => {
+      if (isDesktopApp()) {
+        const ready = await waitForServerReady({ maxWaitMs: 30_000 });
+        if (!ready) {
+          await autoFixLocalApiUrl();
+        }
+      }
+      await guestLogin();
+    };
+    connect()
       .catch((err) => {
         setError(err instanceof Error ? err.message : '无法连接 DevFleet 服务');
       })
@@ -58,7 +69,14 @@ function Protected({ children }: { children: React.ReactNode }) {
               onClick={() => {
                 setLoading(true);
                 setError('');
-                guestLogin()
+                const retry = async () => {
+                  if (isDesktopApp()) {
+                    await waitForServerReady({ maxWaitMs: 15_000 });
+                    await autoFixLocalApiUrl();
+                  }
+                  await guestLogin();
+                };
+                retry()
                   .catch((err) => setError(err instanceof Error ? err.message : '连接失败'))
                   .finally(() => setLoading(false));
               }}

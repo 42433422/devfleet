@@ -223,9 +223,21 @@ export const db = {
       ).run(user.id, user.email, user.password_hash, user.is_guest ? 1 : 0, user.created_at);
       return user;
     },
+    reassignData(fromUserId: string, toUserId: string): void {
+      const database = sql();
+      withTransaction(database, () => {
+        database.prepare('UPDATE devices SET user_id = ? WHERE user_id = ?').run(toUserId, fromUserId);
+        database.prepare('UPDATE tasks SET user_id = ? WHERE user_id = ?').run(toUserId, fromUserId);
+        database.prepare('DELETE FROM users WHERE id = ?').run(fromUserId);
+      });
+    },
   },
 
   devices: {
+    countByUserId(userId: string): number {
+      const row = sql().prepare('SELECT COUNT(*) AS count FROM devices WHERE user_id = ?').get(userId) as { count: number };
+      return row.count;
+    },
     findAllByUserId(userId: string): Device[] {
       const rows = sql().prepare(
         `SELECT * FROM devices WHERE user_id = ? AND activated = 1 ORDER BY last_seen DESC`,

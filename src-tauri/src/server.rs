@@ -36,6 +36,8 @@ pub fn shutdown_embedded_server(app: &AppHandle) {
 }
 
 fn watchdog_loop(app: AppHandle) {
+    bootstrap_embedded_server(&app);
+
     let mut unhealthy_streak = 0u8;
 
     while !SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
@@ -59,7 +61,7 @@ fn watchdog_loop(app: AppHandle) {
                             *guard = Some(child);
                         }
                     }
-                    for _ in 0..20 {
+                    for _ in 0..40 {
                         thread::sleep(Duration::from_millis(250));
                         if server_healthy() {
                             log::info!("[DevFleet] embedded API server recovered");
@@ -141,14 +143,47 @@ fn stop_child(app: &AppHandle) {
     }
 }
 
+fn bootstrap_embedded_server(app: &AppHandle) {
+    if server_healthy() || has_child(app) {
+        return;
+    }
+    if let Some(child) = start_embedded_server(app) {
+        if let Some(state) = app.try_state::<EmbeddedServer>() {
+            if let Ok(mut guard) = state.0.lock() {
+                *guard = Some(child);
+            }
+        }
+        for _ in 0..40 {
+            thread::sleep(Duration::from_millis(250));
+            if server_healthy() {
+                log::info!("[DevFleet] embedded API server ready");
+                return;
+            }
+        }
+        log::warn!("[DevFleet] embedded API server started but health check pending");
+    }
+}
+
 fn server_healthy() -> bool {
-    reqwest::blocking::Client::builder()
-        .timeout(Duration::from_millis(800))
+    const HEALTH_URLS: [&str; 2] = [
+        "http://127.0.0.1:3001/api/health",
+        "http://localhost:3001/api/health",
+    ];
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(Duration::from_millis(2000))
         .build()
-        .ok()
-        .and_then(|client| client.get("http://localhost:3001/api/health").send().ok())
-        .map(|response| response.status().is_success())
-        .unwrap_or(false)
+    {
+        Ok(client) => client,
+        Err(_) => return false,
+    };
+    HEALTH_URLS.iter().any(|url| {
+        client
+            .get(*url)
+            .send()
+            .ok()
+            .map(|response| response.status().is_success())
+            .unwrap_or(false)
+    })
 }
 
 fn start_embedded_server(app: &AppHandle) -> Option<Child> {
@@ -163,7 +198,7 @@ fn start_embedded_server(app: &AppHandle) -> Option<Child> {
     command
         .arg(script)
         .env("PORT", "3001")
-        .env("DEVFLEET_DB_FILE", db_file);
+        .env("DEVFLEET_DB_FILE", db_file.to_string_lossy().into_owned());
 
     match command.spawn() {
         Ok(child) => {

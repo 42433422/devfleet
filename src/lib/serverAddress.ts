@@ -1,4 +1,4 @@
-import { DEFAULT_API_BASE, getApiBaseUrl } from './apiBase';
+import { DEFAULT_API_BASE, getApiBaseUrl, isLocalApiUrl, LOCAL_API_CANDIDATES } from './apiBase';
 
 export const PUBLIC_API_STORAGE_KEY = 'devfleet_public_api_url';
 
@@ -112,6 +112,80 @@ export type ServerProbeResult = {
   api: { ok: boolean; message: string };
   websocket: { ok: boolean; message: string };
 };
+
+/** 单次 HTTP health 探测 */
+export async function probeApiHealth(apiBase: string, timeoutMs = 3000): Promise<boolean> {
+  const base = normalizeApiBaseUrl(apiBase);
+  if (!isValidApiBaseUrl(base)) return false;
+
+  const tunnelHeaders: Record<string, string> = {};
+  try {
+    if (/\.loca\.lt$/i.test(new URL(base).hostname)) {
+      tunnelHeaders['Bypass-Tunnel-Reminder'] = 'true';
+    }
+  } catch {
+    return false;
+  }
+
+  try {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+    const res = await fetch(`${base}/api/health`, { signal: controller.signal, headers: tunnelHeaders });
+    window.clearTimeout(timer);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** 等待本机 embedded server 就绪（登录页 / 桌面端启动用） */
+export async function waitForServerReady(options?: {
+  candidates?: readonly string[];
+  maxWaitMs?: number;
+  intervalMs?: number;
+}): Promise<string | null> {
+  const candidates = options?.candidates ?? LOCAL_API_CANDIDATES;
+  const maxWaitMs = options?.maxWaitMs ?? 30_000;
+  const intervalMs = options?.intervalMs ?? 500;
+  const deadline = Date.now() + maxWaitMs;
+
+  while (Date.now() < deadline) {
+    for (const base of candidates) {
+      if (await probeApiHealth(base, Math.min(intervalMs, 3000))) {
+        return normalizeApiBaseUrl(base);
+      }
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, intervalMs));
+  }
+  return null;
+}
+
+/** 依次探测 localhost / 127.0.0.1，返回第一个可用的本机地址 */
+export async function resolveReachableLocalApiUrl(): Promise<string | null> {
+  for (const base of LOCAL_API_CANDIDATES) {
+    if (await probeApiHealth(base, 2500)) {
+      return normalizeApiBaseUrl(base);
+    }
+  }
+  return null;
+}
+
+/** 桌面端自动修复：localStorage 存了错误本机地址时切回可用 localhost */
+export async function autoFixLocalApiUrl(): Promise<string | null> {
+  const current = normalizeApiBaseUrl(getApiBaseUrl());
+  if (await probeApiHealth(current, 2500)) {
+    return current;
+  }
+  if (!isLocalApiUrl(current)) {
+    return null;
+  }
+  const reachable = await resolveReachableLocalApiUrl();
+  if (reachable) {
+    localStorage.setItem('devfleet_api_url', reachable);
+    return reachable;
+  }
+  return null;
+}
 
 /** 探测 API 与 WebSocket 是否可达（用于验证局域网 / 内网穿透） */
 export async function probeServerReachability(apiBase: string, timeoutMs = 8000): Promise<ServerProbeResult> {

@@ -1,9 +1,12 @@
 import {
   getApiBaseUrl,
   ensureApiBaseConfigured,
+  sanitizeStoredApiUrl,
   DEFAULT_API_BASE,
+  LOCAL_API_CANDIDATES,
   API_BASE_STORAGE_KEY,
 } from './apiBase';
+import { probeApiHealth } from './serverAddress';
 import { isDesktopApp } from './agent';
 import {
   applyAuthSession,
@@ -16,6 +19,7 @@ import {
 } from './authSession';
 
 ensureApiBaseConfigured();
+sanitizeStoredApiUrl();
 
 export { getApiBaseUrl, ensureApiBaseConfigured, apiUrl, DEFAULT_API_BASE } from './apiBase';
 
@@ -46,13 +50,17 @@ async function resolveFetch(path: string, init: RequestInit): Promise<Response> 
   try {
     return await fetchWithBase(primary, path, init);
   } catch (primaryError) {
-    if (isDesktopApp() && primary !== DEFAULT_API_BASE) {
-      try {
-        const res = await fetchWithBase(DEFAULT_API_BASE, path, init);
-        localStorage.setItem(API_BASE_STORAGE_KEY, DEFAULT_API_BASE);
-        return res;
-      } catch {
-        throw primaryError;
+    if (isDesktopApp()) {
+      for (const fallback of LOCAL_API_CANDIDATES) {
+        if (fallback === primary) continue;
+        try {
+          if (!(await probeApiHealth(fallback, 2000))) continue;
+          const res = await fetchWithBase(fallback, path, init);
+          localStorage.setItem(API_BASE_STORAGE_KEY, fallback);
+          return res;
+        } catch {
+          // try next candidate
+        }
       }
     }
     throw primaryError;

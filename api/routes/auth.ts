@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { db } from '../db/store.js';
+import { ensureGuestSession } from '../lib/guestBootstrap.js';
 import { signToken, authMiddleware } from '../middleware/auth.js';
 
 const router = Router();
@@ -55,14 +56,7 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
 });
 
 router.post('/guest', async (_req: Request, res: Response): Promise<void> => {
-  let user = db.users.findGuest();
-  if (!user) {
-    user = db.users.create({
-      email: 'guest@devfleet.local',
-      password_hash: '',
-      is_guest: true,
-    });
-  }
+  const user = ensureGuestSession();
   const token = signToken(user);
   res.status(200).json({ token, user: { id: user.id, email: user.email } });
 });
