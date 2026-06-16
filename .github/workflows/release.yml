@@ -59,8 +59,11 @@ jobs:
           Copy-Item README.md dist-mcp\README.md
           Compress-Archive -Path dist-mcp\* -DestinationPath devfleet-mcp.zip -Force
           npm run server:build
-          Copy-Item server-package\* dist-server\ -Recurse -Force
-          Compress-Archive -Path dist-server\* -DestinationPath devfleet-server.zip -Force
+          New-Item -ItemType Directory -Force -Path dist-server\package | Out-Null
+          Copy-Item server-package\* dist-server\package\ -Recurse -Force
+          Copy-Item dist-server\devfleet-server.cjs dist-server\package\ -Force
+          Copy-Item dist-server\node_modules dist-server\package\ -Recurse -Force
+          Compress-Archive -Path dist-server\package\* -DestinationPath devfleet-server.zip -Force
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
