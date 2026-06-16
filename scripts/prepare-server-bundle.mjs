@@ -10,6 +10,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
+import { build } from 'esbuild';
 
 const NODE_VERSION = '22.22.0';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -100,21 +101,17 @@ const ensureNodeRuntime = async () => {
   return nodeBin;
 };
 
-const runEsbuild = () => {
-  execFileSync(
-    process.platform === 'win32' ? 'npx.cmd' : 'npx',
-    [
-      'esbuild',
-      'api/server.ts',
-      '--bundle',
-      '--platform=node',
-      '--format=cjs',
-      '--target=node18',
-      '--external:better-sqlite3',
-      '--outfile=dist-server/devfleet-server.cjs',
-    ],
-    { cwd: root, stdio: 'inherit' },
-  );
+const runEsbuild = async () => {
+  await build({
+    entryPoints: [join(root, 'api/server.ts')],
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    target: 'node18',
+    external: ['better-sqlite3'],
+    outfile: join(distServer, 'devfleet-server.cjs'),
+    logLevel: 'info',
+  });
 };
 
 const copyNativePackages = () => {
@@ -164,7 +161,7 @@ const verifyBundle = (nodeBin) => {
 };
 
 mkdirSync(distServer, { recursive: true });
-runEsbuild();
+await runEsbuild();
 copyNativePackages();
 const nodeBin = await ensureNodeRuntime();
 rebuildBetterSqlite3(nodeBin);
