@@ -66,6 +66,7 @@ pub fn run() {
             network::get_lan_address,
             network::open_external_url,
             network::open_trae_install,
+            server::restart_embedded_server_cmd,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

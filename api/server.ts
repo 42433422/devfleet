@@ -22,8 +22,8 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 attachWebSocket(wss);
 
-server.listen(PORT, () => {
-  console.log(`[DevFleet] API server ready on http://localhost:${PORT}`);
+server.listen(PORT, '127.0.0.1', () => {
+  console.log(`[DevFleet] API server ready on http://127.0.0.1:${PORT}`);
   if (process.env.DEVFLEET_DB_FILE) {
     console.log(`[DevFleet] database: ${process.env.DEVFLEET_DB_FILE}`);
   }
@@ -34,6 +34,19 @@ server.listen(PORT, () => {
       console.warn('[DevFleet] 内置穿透自动启动失败:', error instanceof Error ? error.message : error);
     });
   }
+});
+
+server.on('error', (error: NodeJS.ErrnoException) => {
+  console.error('[DevFleet] API server listen failed:', error.message);
+  process.exit(1);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('[DevFleet] uncaughtException:', error instanceof Error ? error.stack || error.message : error);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[DevFleet] unhandledRejection:', reason);
 });
 
 const shutdown = () => {
