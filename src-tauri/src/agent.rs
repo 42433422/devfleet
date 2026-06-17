@@ -1816,12 +1816,22 @@ fn bundled_trae_cli_candidates() -> Vec<PathBuf> {
 }
 
 fn resolve_trae_agent_cli() -> Option<TraeCliInvocation> {
+    // TRAE Agent CLI 的全局选项（如 --config-file）通过 prefix 放在子命令前面。
+    let mut prefix = Vec::new();
+    if let Ok(config_file) = std::env::var("TRAE_CONFIG_FILE") {
+        let config_file = config_file.trim().to_string();
+        if !config_file.is_empty() {
+            prefix.push("--config-file".to_string());
+            prefix.push(config_file);
+        }
+    }
+
     if let Ok(from_env) = std::env::var("DEVFLEET_TRAE_CLI") {
         let program = from_env.trim().to_string();
         if !program.is_empty() {
             return Some(TraeCliInvocation {
                 program,
-                prefix: Vec::new(),
+                prefix,
                 // 环境变量指定的 CLI 类型未知，默认 run（兼容 pip trae-cli）
                 subcommand: "run",
                 label: "DEVFLEET_TRAE_CLI",
@@ -1838,7 +1848,7 @@ fn resolve_trae_agent_cli() -> Option<TraeCliInvocation> {
         if let Some(program) = find_binary_in_path(binary) {
             return Some(TraeCliInvocation {
                 program,
-                prefix: Vec::new(),
+                prefix: prefix.clone(),
                 subcommand,
                 label,
             });
@@ -1849,7 +1859,7 @@ fn resolve_trae_agent_cli() -> Option<TraeCliInvocation> {
         if candidate.is_file() {
             return Some(TraeCliInvocation {
                 program: candidate.to_string_lossy().into_owned(),
-                prefix: Vec::new(),
+                prefix: prefix.clone(),
                 subcommand: "run",
                 label: "Trae bundled CLI",
             });
@@ -1865,9 +1875,17 @@ async fn run_trae_agent_cli(cwd: &Path, prompt: &str) -> Result<(String, String)
     })?;
     let mut args: Vec<String> = invocation.prefix.clone();
     args.push(invocation.subcommand.to_string());
+    args.push("--working-dir".to_string());
+    args.push(cwd.to_string_lossy().into_owned());
     args.push(prompt.to_string());
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let output = run_command(Some(cwd), &invocation.program, &arg_refs).await?;
+
+    // TRAE Agent CLI 即使失败也可能返回退出码 0，必须通过输出内容二次判定。
+    let trimmed = output.trim();
+    if trimmed.contains("Success: ❌ No") || trimmed.contains("Error code:") {
+        return Err(format!("TRAE Agent CLI 执行失败:\n{trimmed}"));
+    }
     Ok((invocation.label.to_string(), output))
 }
 

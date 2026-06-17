@@ -26,6 +26,7 @@ impl Default for EmbeddedServer {
 static WATCHDOG_STARTED: AtomicBool = AtomicBool::new(false);
 static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 static RESTART_BACKOFF_SECS: AtomicU64 = AtomicU64::new(1);
+static COLD_START_ERROR: Mutex<Option<String>> = Mutex::new(None);
 
 pub fn ensure_server_running(app: &AppHandle) {
     if WATCHDOG_STARTED.swap(true, Ordering::SeqCst) {
@@ -38,13 +39,28 @@ pub fn ensure_server_running(app: &AppHandle) {
 
 /// 冷启动：清孤儿进程、占端口、同步拉起 API，窗口打开前必须成功。
 pub fn cold_start_desktop_api(app: &AppHandle) -> Result<(), String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+    if let Ok(mut guard) = COLD_START_ERROR.lock() {
+        *guard = None;
+    }
+    let data_dir = app.path().app_data_dir().map_err(|e| {
+        let message = e.to_string();
+        store_cold_start_error(&message);
+        message
+    })?;
+    std::fs::create_dir_all(&data_dir).map_err(|e| {
+        let message = e.to_string();
+        store_cold_start_error(&message);
+        message
+    })?;
     enforce_single_instance(&data_dir);
+    stop_child(app);
     purge_orphan_devfleet_api_processes(None);
     kill_stale_listeners_on_port(EMBEDDED_API_PORT, None);
 
-    let child = start_embedded_server(app)?;
+    let child = start_embedded_server(app).map_err(|error| {
+        store_cold_start_error(&error);
+        error
+    })?;
     if let Some(state) = app.try_state::<EmbeddedServer>() {
         if let Ok(mut guard) = state.0.lock() {
             *guard = Some(child);
@@ -54,15 +70,28 @@ pub fn cold_start_desktop_api(app: &AppHandle) -> Result<(), String> {
     for _ in 0..360 {
         if server_healthy() && has_child(app) {
             log::info!("[DevFleet] embedded API cold start OK");
+            if let Ok(mut guard) = COLD_START_ERROR.lock() {
+                *guard = None;
+            }
             return Ok(());
         }
         thread::sleep(Duration::from_millis(250));
     }
     log_last_server_error(app);
-    Err(format!(
+    let message = format!(
         "内嵌 API 在 {EMBEDDED_API_PORT} 未就绪（90s 超时）。请查看 {}",
         data_dir.join("devfleet-server.log").display()
-    ))
+    );
+    if let Ok(mut guard) = COLD_START_ERROR.lock() {
+        *guard = Some(message.clone());
+    }
+    Err(message)
+}
+
+fn store_cold_start_error(message: &str) {
+    if let Ok(mut guard) = COLD_START_ERROR.lock() {
+        *guard = Some(message.to_string());
+    }
 }
 
 pub fn shutdown_embedded_server(app: &AppHandle) {
@@ -264,7 +293,31 @@ fn kill_stale_listeners_on_port(port: u16, except_pid: Option<u32>) {
     }
     #[cfg(windows)]
     {
-        let _ = (port, except_pid);
+        let output = StdCommand::new("netstat").args(["-ano"]).output();
+        let Ok(output) = output else {
+            return;
+        };
+        if !output.status.success() {
+            return;
+        }
+        let port_token = format!(":{port}");
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            if !line.contains("LISTENING") || !line.contains(&port_token) {
+                continue;
+            }
+            let Some(pid_str) = line.split_whitespace().last() else {
+                continue;
+            };
+            let Ok(pid) = pid_str.parse::<u32>() else {
+                continue;
+            };
+            if pid == 0 || except_pid == Some(pid) {
+                continue;
+            }
+            log::warn!("[DevFleet] stopping stale listener pid {pid} on port {port}");
+            terminate_process(pid as i32);
+            thread::sleep(Duration::from_millis(200));
+        }
     }
 }
 
@@ -275,6 +328,24 @@ pub fn is_local_server_healthy() -> bool {
 #[tauri::command]
 pub fn restart_embedded_server_cmd(app: AppHandle) {
     restart_embedded_server(&app);
+}
+
+#[tauri::command]
+pub fn get_cold_start_error() -> Option<String> {
+    COLD_START_ERROR.lock().ok().and_then(|guard| guard.clone())
+}
+
+#[tauri::command]
+pub fn get_embedded_server_log_path(app: AppHandle) -> Result<String, String> {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join("devfleet-server.log").display().to_string())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn retry_cold_start(app: AppHandle) -> Result<(), String> {
+    cold_start_desktop_api(&app)
 }
 
 fn server_healthy() -> bool {

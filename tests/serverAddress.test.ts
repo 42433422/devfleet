@@ -90,4 +90,29 @@ describe('serverAddress', () => {
     assert.equal(apiBaseToWsBase('https://tunnel.example.com'), 'wss://tunnel.example.com');
     assert.equal(apiBaseToWsBase('http://192.168.1.8:3001'), 'ws://192.168.1.8:3001');
   });
+
+  it('parseHealthResponse 本机地址要求 embedded:true', async () => {
+    const { parseHealthResponse } = await import('../src/lib/serverAddress.ts');
+    assert.equal(
+      await parseHealthResponse(
+        new Response(JSON.stringify({ success: true, embedded: true }), { status: 200 }),
+        true,
+      ),
+      true,
+    );
+    assert.equal(
+      await parseHealthResponse(
+        new Response(JSON.stringify({ success: true, embedded: false }), { status: 200 }),
+        true,
+      ),
+      false,
+    );
+    assert.equal(
+      await parseHealthResponse(
+        new Response(JSON.stringify({ success: true, embedded: false }), { status: 200 }),
+        false,
+      ),
+      true,
+    );
+  });
 });

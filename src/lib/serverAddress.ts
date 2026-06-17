@@ -113,10 +113,32 @@ export type ServerProbeResult = {
   websocket: { ok: boolean; message: string };
 };
 
+type HealthBody = {
+  success?: boolean;
+  embedded?: boolean;
+};
+
+/** 解析 /api/health；本机地址要求 embedded:true，与 Rust server_healthy 一致 */
+export async function parseHealthResponse(
+  res: Response,
+  requireEmbedded: boolean,
+): Promise<boolean> {
+  if (!res.ok) return false;
+  try {
+    const body = (await res.json()) as HealthBody;
+    if (body.success !== true) return false;
+    if (requireEmbedded && body.embedded !== true) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** 单次 HTTP health 探测 */
 export async function probeApiHealth(apiBase: string, timeoutMs = 3000): Promise<boolean> {
   const base = normalizeApiBaseUrl(apiBase);
   if (!isValidApiBaseUrl(base)) return false;
+  const requireEmbedded = isLocalApiUrl(base);
 
   const tunnelHeaders: Record<string, string> = {};
   try {
@@ -132,7 +154,7 @@ export async function probeApiHealth(apiBase: string, timeoutMs = 3000): Promise
     const timer = window.setTimeout(() => controller.abort(), timeoutMs);
     const res = await fetch(`${base}/api/health`, { signal: controller.signal, headers: tunnelHeaders });
     window.clearTimeout(timer);
-    return res.ok;
+    return parseHealthResponse(res, requireEmbedded);
   } catch {
     return false;
   }
@@ -204,13 +226,19 @@ export async function probeServerReachability(apiBase: string, timeoutMs = 8000)
   }
 
   let apiResult = { ok: false, message: '连接失败' };
+  const requireEmbedded = isLocalApiUrl(base);
   try {
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), timeoutMs);
     const res = await fetch(`${base}/api/health`, { signal: controller.signal, headers: tunnelHeaders });
     window.clearTimeout(timer);
-    if (res.ok) {
+    if (await parseHealthResponse(res, requireEmbedded)) {
       apiResult = { ok: true, message: 'HTTP API 正常' };
+    } else if (res.ok) {
+      apiResult = {
+        ok: false,
+        message: requireEmbedded ? 'HTTP 200 但非 DevFleet 内嵌 API' : `HTTP ${res.status}`,
+      };
     } else {
       apiResult = { ok: false, message: `HTTP ${res.status}` };
     }

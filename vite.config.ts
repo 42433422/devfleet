@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tsconfigPaths from "vite-tsconfig-paths";
+import { resolve } from 'node:path';
 
 const apiProxyTarget = process.env.VITE_API_PROXY_TARGET || 'http://localhost:3001';
 const host = process.env.TAURI_DEV_HOST;
@@ -17,6 +18,14 @@ export default defineConfig({
     }),
     tsconfigPaths(),
   ],
+  build: {
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, 'index.html'),
+        backendError: resolve(__dirname, 'backend-error.html'),
+      },
+    },
+  },
   server: {
     host: host || undefined,
     port: 5173,

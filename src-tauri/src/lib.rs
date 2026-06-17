@@ -17,8 +17,11 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             app.manage(server::EmbeddedServer::default());
-            if let Err(error) = server::cold_start_desktop_api(app.handle()) {
-                log::error!("[DevFleet] {error}");
+            let cold_start_ok = server::cold_start_desktop_api(app.handle()).is_ok();
+            if !cold_start_ok {
+                if let Some(error) = server::get_cold_start_error() {
+                    log::error!("[DevFleet] {error}");
+                }
             }
             server::ensure_server_running(app.handle());
 
@@ -26,10 +29,18 @@ pub fn run() {
             let min_width = win.min_width.unwrap_or(800.0);
             let min_height = win.min_height.unwrap_or(600.0);
 
-            let url = resolve_webview_url(app);
+            let url = if cold_start_ok {
+                resolve_webview_url(app)
+            } else {
+                WebviewUrl::App("backend-error.html".into())
+            };
 
             WebviewWindowBuilder::new(app, win.label.clone(), url)
-                .title(win.title.clone())
+                .title(if cold_start_ok {
+                    win.title.clone()
+                } else {
+                    "DevFleet - 后端启动失败".into()
+                })
                 .inner_size(win.width, win.height)
                 .min_inner_size(min_width, min_height)
                 .center()
@@ -38,14 +49,9 @@ pub fn run() {
                 .on_navigation(|url| network::allow_navigation(&url))
                 .build()?;
 
-            let agent_state = agent::AgentState::load(&app.handle());
-            agent::start_saved_agent(&agent_state);
-            let agent_for_autobind = agent_state.clone();
-            let app_for_autobind = app.handle().clone();
-            std::thread::spawn(move || {
-                agent::try_auto_bind_localhost(&app_for_autobind, &agent_for_autobind);
-            });
-            app.manage(agent_state);
+            if cold_start_ok {
+                start_desktop_services(app.handle())?;
+            }
 
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {
@@ -70,6 +76,10 @@ pub fn run() {
             network::open_external_url,
             network::open_trae_install,
             server::restart_embedded_server_cmd,
+            server::get_cold_start_error,
+            server::get_embedded_server_log_path,
+            server::retry_cold_start,
+            start_desktop_services_cmd,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -103,4 +113,27 @@ fn dev_server_available(dev_url: &url::Url) -> bool {
         Err(_) => return false,
     };
     TcpStream::connect_timeout(&addr, Duration::from_millis(400)).is_ok()
+}
+
+fn start_desktop_services(app: &tauri::AppHandle) -> Result<(), String> {
+    if app.try_state::<agent::AgentState>().is_some() {
+        return Ok(());
+    }
+    if !server::is_local_server_healthy() {
+        return Err("内嵌 API 未就绪".into());
+    }
+    let agent_state = agent::AgentState::load(app);
+    agent::start_saved_agent(&agent_state);
+    let agent_for_autobind = agent_state.clone();
+    let app_for_autobind = app.clone();
+    std::thread::spawn(move || {
+        agent::try_auto_bind_localhost(&app_for_autobind, &agent_for_autobind);
+    });
+    app.manage(agent_state);
+    Ok(())
+}
+
+#[tauri::command]
+fn start_desktop_services_cmd(app: tauri::AppHandle) -> Result<(), String> {
+    start_desktop_services(&app)
 }
