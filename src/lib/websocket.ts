@@ -1,6 +1,7 @@
 import { useDevicesStore, type DeviceCapabilities, type DeviceStatus, type ToolStatus } from '@/store/devices';
 import { useTasksStore, type LogEntry, type SubTaskStatus, type Task } from '@/store/tasks';
 import { getApiBaseUrl } from '@/lib/api';
+import { shouldUseViteDevProxy } from '@/lib/apiBase';
 import { apiBaseToWsBase } from '@/lib/serverAddress';
 
 type WSMessage =
@@ -48,9 +49,11 @@ class WebSocketClient {
     this.lastCallbacks = callbacks;
     this.isConnecting = true;
 
-    const wsHost = host || getApiBaseUrl().replace(/^https?:\/\//, '') || 'localhost:3001';
+    const wsHost = host || getApiBaseUrl().replace(/^https?:\/\//, '') || '127.0.0.1:3001';
     const configuredBase = (import.meta.env.VITE_WS_BASE_URL || apiBaseToWsBase(getApiBaseUrl()) || '').replace(/\/$/, '');
-    const wsBase = configuredBase || `ws://${wsHost}`;
+    const wsBase = shouldUseViteDevProxy()
+      ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
+      : configuredBase || `ws://${wsHost}`;
     const url = `${wsBase}/ws/client?token=${encodeURIComponent(token)}`;
 
     try {

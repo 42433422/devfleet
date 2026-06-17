@@ -21,6 +21,88 @@ const apiBase = (process.env.DEVFLEET_API_URL || 'http://localhost:3001').replac
 const workspaceRoot = process.env.DEVFLEET_WORKSPACE_ROOT || '/tmp/devfleet-e2e/agent-workspace';
 const bareRepo = process.env.DEVFLEET_BARE_REPO || '/tmp/devfleet-e2e/bare.git';
 const wsUrl = `${apiBase.replace(/^http/, 'ws')}/ws/device?token=${encodeURIComponent(token)}`;
+const toolCommandTimeoutMs = (() => {
+  const raw = process.env.DEVFLEET_AI_AGENT_TIMEOUT_MS?.trim();
+  const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+  if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  return 900_000;
+})();
+
+function resolveAgentConfig() {
+  const paths = [
+    join(homedir(), 'Library/Application Support/com.devfleet.desktop/agent.json'),
+    join(homedir(), 'Library/Application Support/com.devfleet.app/agent.json'),
+  ];
+  for (const path of paths) {
+    if (!existsSync(path)) continue;
+    try {
+      return JSON.parse(readFileSync(path, 'utf8'));
+    } catch {
+      // ignore
+    }
+  }
+  return null;
+}
+
+function resolveCursorAgentBin() {
+  if (process.env.DEVFLEET_CURSOR_AGENT?.trim()) {
+    return process.env.DEVFLEET_CURSOR_AGENT.trim();
+  }
+  const local = join(homedir(), '.local/bin/agent');
+  if (existsSync(local)) return local;
+  return 'agent';
+}
+
+function resolveCodexAgentBin() {
+  if (process.env.DEVFLEET_CODEX_AGENT?.trim()) {
+    return process.env.DEVFLEET_CODEX_AGENT.trim();
+  }
+  const local = join(homedir(), '.local/bin/codex');
+  if (existsSync(local)) return local;
+  return 'codex';
+}
+
+function cursorAgentAvailable() {
+  const bin = resolveCursorAgentBin();
+  if (bin.includes('/') || bin.includes('\\')) return existsSync(bin);
+  return true;
+}
+
+function codexAgentAvailable() {
+  const bin = resolveCodexAgentBin();
+  if (bin.includes('/') || bin.includes('\\')) return existsSync(bin);
+  return true;
+}
+
+async function runCursorAgent(taskDir, prompt) {
+  const agentBin = resolveCursorAgentBin();
+  const { stdout, stderr } = await execFileAsync(
+    agentBin,
+    ['-p', '--force', '--trust', '--output-format', 'text', prompt],
+    {
+      cwd: taskDir,
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: toolCommandTimeoutMs,
+      env: process.env,
+    },
+  );
+  return (stdout || stderr || '').trim();
+}
+
+async function runCodexAgent(taskDir, prompt) {
+  const codexBin = resolveCodexAgentBin();
+  const { stdout, stderr } = await execFileAsync(
+    codexBin,
+    ['exec', '--sandbox', 'workspace-write', '--ephemeral', prompt],
+    {
+      cwd: taskDir,
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: toolCommandTimeoutMs,
+      env: process.env,
+    },
+  );
+  return (stdout || stderr || '').trim();
+}
 
 function resolveDeviceToken() {
   const paths = [
@@ -152,7 +234,78 @@ async function handleTask(ws, task) {
     status: 'running',
   });
 
-  if (!(await waitForMeaningfulChanges(taskDir))) {
+  const agentConfig = resolveAgentConfig();
+  const devTool = task.tool || agentConfig?.devTool;
+  const useCursor =
+    process.env.DEVFLEET_E2E_CURSOR !== '0'
+    && (devTool === 'cursor' || process.env.DEVFLEET_FORCE_CURSOR === '1')
+    && cursorAgentAvailable();
+  const useCodex =
+    (devTool === 'codex' || process.env.DEVFLEET_FORCE_CODEX === '1')
+    && codexAgentAvailable();
+
+  if (useCursor) {
+    send(ws, {
+      type: 'task_log',
+      task_id: task.task_id,
+      subtask_id: task.subtask_id,
+      content: `[e2e-agent] 调用 Cursor Agent CLI 修改代码`,
+      level: 'info',
+    });
+    try {
+      const output = await runCursorAgent(taskDir, task.description);
+      if (output) {
+        send(ws, {
+          type: 'task_log',
+          task_id: task.task_id,
+          subtask_id: task.subtask_id,
+          content: output.slice(0, 4000),
+          level: 'info',
+        });
+      }
+    } catch (err) {
+      send(ws, {
+        type: 'task_log',
+        task_id: task.task_id,
+        subtask_id: task.subtask_id,
+        content: `[e2e-agent] Cursor Agent 失败: ${err instanceof Error ? err.message : String(err)}`,
+        level: 'warn',
+      });
+    }
+  }
+
+  if (useCodex) {
+    send(ws, {
+      type: 'task_log',
+      task_id: task.task_id,
+      subtask_id: task.subtask_id,
+      content: '[e2e-agent] 调用 Codex CLI 修改代码',
+      level: 'info',
+    });
+    try {
+      const output = await runCodexAgent(taskDir, task.description);
+      if (output) {
+        send(ws, {
+          type: 'task_log',
+          task_id: task.task_id,
+          subtask_id: task.subtask_id,
+          content: output.slice(0, 4000),
+          level: 'info',
+        });
+      }
+    } catch (err) {
+      send(ws, {
+        type: 'task_log',
+        task_id: task.task_id,
+        subtask_id: task.subtask_id,
+        content: `[e2e-agent] Codex CLI 失败: ${err instanceof Error ? err.message : String(err)}`,
+        level: 'warn',
+      });
+    }
+  }
+
+  const waitMs = useCursor || useCodex ? 120_000 : 900_000;
+  if (!(await waitForMeaningfulChanges(taskDir, waitMs))) {
     send(ws, {
       type: 'task_progress',
       task_id: task.task_id,
@@ -174,15 +327,22 @@ async function handleTask(ws, task) {
 }
 
 function publishToolStatus(ws) {
+  const cursorStatus = cursorAgentAvailable() ? 'idle' : 'not_installed';
+  const codexStatus = codexAgentAvailable() ? 'idle' : 'not_installed';
   send(ws, {
     type: 'tool_status',
     tools: [
-      { tool_name: 'trae', status: 'idle' },
-      { tool_name: 'codex', status: 'idle' },
-      { tool_name: 'cursor', status: 'not_installed' },
+      { tool_name: 'trae', status: 'not_installed' },
+      { tool_name: 'codex', status: codexStatus },
+      { tool_name: 'cursor', status: cursorStatus },
       { tool_name: 'claude_code', status: 'not_installed' },
     ],
-    capabilities: defaultCapabilities(),
+    capabilities: {
+      ...defaultCapabilities(),
+      e2e_agent: true,
+      cursor_agent_cli: cursorAgentAvailable(),
+      codex_cli: codexAgentAvailable(),
+    },
   });
 }
 

@@ -4,9 +4,12 @@ import app from './app.js';
 import { flushDB } from './db/store.js';
 import { bootstrapDatabase } from './lib/dbBootstrap.js';
 import { attachWebSocket } from './websocket/manager.js';
+import { reapStaleRunningSubtasks } from './lib/dispatch.js';
 import { shutdownBuiltinTunnel, startBuiltinTunnel } from './tunnel/manager.js';
 
 const PORT = Number(process.env.PORT) || 3001;
+const HOST = process.env.DEVFLEET_HOST || '0.0.0.0';
+const SUBTASK_REAPER_MS = Number(process.env.DEVFLEET_SUBTASK_REAPER_MS) || 30_000;
 
 try {
   bootstrapDatabase();
@@ -22,8 +25,35 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 attachWebSocket(wss);
 
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`[DevFleet] API server ready on http://127.0.0.1:${PORT}`);
+let reapInterval: NodeJS.Timeout | null = null;
+
+function startSubtaskReaper() {
+  if (reapInterval) return;
+  reapInterval = setInterval(() => {
+    try {
+      const reclaimed = reapStaleRunningSubtasks();
+      if (reclaimed > 0) {
+        console.log(`[DevFleet] 已回收超时运行子任务: ${reclaimed}`);
+      }
+    } catch (error) {
+      console.error('[DevFleet] 回收超时子任务失败:', error instanceof Error ? error.message : error);
+    }
+  }, SUBTASK_REAPER_MS);
+  reapInterval.unref();
+}
+
+function stopSubtaskReaper() {
+  if (!reapInterval) return;
+  clearInterval(reapInterval);
+  reapInterval = null;
+}
+
+server.listen(PORT, HOST, () => {
+  console.log(`[DevFleet] API server ready on http://${HOST}:${PORT}`);
+  startSubtaskReaper();
+  if (HOST === '0.0.0.0') {
+    console.log(`[DevFleet] 局域网设备可连 http://<本机IP>:${PORT}`);
+  }
   if (process.env.DEVFLEET_DB_FILE) {
     console.log(`[DevFleet] database: ${process.env.DEVFLEET_DB_FILE}`);
   }
@@ -50,6 +80,7 @@ process.on('unhandledRejection', (reason) => {
 });
 
 const shutdown = () => {
+  stopSubtaskReaper();
   void shutdownBuiltinTunnel().finally(() => {
     server.close(() => {
       flushDB();

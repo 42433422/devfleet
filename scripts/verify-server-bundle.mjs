@@ -31,7 +31,10 @@ if (missing.length > 0) {
 
 execFileSync(
   nodeBin,
-  ['-e', "require('better-sqlite3'); require('bindings'); console.log('native ok');"],
+  [
+    '-e',
+    "require('bindings'); const Database = require('better-sqlite3'); const db = new Database(':memory:'); db.exec('select 1'); db.close(); console.log('native ok');",
+  ],
   {
     cwd: distServer,
     stdio: 'inherit',
@@ -40,7 +43,13 @@ execFileSync(
 );
 
 const probeDb = join(root, '.tmp-devfleet-bundle-probe.db');
-rmSync(probeDb, { force: true });
+const removeProbeDb = () => {
+  rmSync(probeDb, { force: true });
+  rmSync(`${probeDb}-shm`, { force: true });
+  rmSync(`${probeDb}-wal`, { force: true });
+};
+
+removeProbeDb();
 
 await new Promise((resolve, reject) => {
   const child = spawn(nodeBin, [serverCjs], {
@@ -80,5 +89,5 @@ await new Promise((resolve, reject) => {
   child.on('error', reject);
 });
 
-rmSync(probeDb, { force: true });
+removeProbeDb();
 console.log('Server bundle verification passed.');

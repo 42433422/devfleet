@@ -7,6 +7,15 @@ import tasksRoutes from './routes/tasks.js';
 import tunnelRoutes from './routes/tunnel.js';
 
 const app = express();
+if (process.env.DEVFLEET_AUTH_DEBUG === '1') {
+  app.use((req, _res, next): void => {
+    const auth = req.headers.authorization || '';
+    console.error(
+      `[req-debug] pid=${process.pid} ${req.method} ${req.url} authLen=${auth.length}`,
+    );
+    next();
+  });
+}
 
 if (process.env.TRUST_PROXY) {
   app.set('trust proxy', Number(process.env.TRUST_PROXY) || process.env.TRUST_PROXY);
@@ -78,7 +87,8 @@ app.get('/api/health', (req: Request, res: Response): void => {
   });
 });
 
-app.use((error: Error, req: Request, res: Response, next: NextFunction): void => {
+app.use((error: Error, req: Request, res: Response, _next: NextFunction): void => {
+  void _next;
   if (error.message === 'CORS origin not allowed') {
     res.status(403).json({ success: false, error: 'CORS origin not allowed' });
     return;

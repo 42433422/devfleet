@@ -199,6 +199,9 @@ fn is_internal_webview_host(host: &str) -> bool {
         || host == "127.0.0.1"
         || host == "tauri.localhost"
         || host.ends_with(".localhost")
+        || host.starts_with("192.168.")
+        || host.starts_with("10.")
+        || host.starts_with("172.")
 }
 
 /// 拦截 WebView 导航：deeplink / 外链用系统打开，避免整页 Load failed

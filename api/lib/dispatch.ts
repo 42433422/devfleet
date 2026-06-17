@@ -1,8 +1,27 @@
 import { db, type SubTask, type Task } from '../db/store.js';
 import { normalizeDevTool, selectExecutionDevices, type DevTool } from './utils.js';
-import { broadcast, hasDevice, sendToDevice } from '../websocket/manager.js';
+import { broadcast, getDeviceLinkHealth, hasDevice, sendToDevice } from '../websocket/manager.js';
 
 const MAX_ATTEMPTS_DEFAULT = 2;
+const MAX_SUBTASK_RUNNING_SECONDS = Number(process.env.DEVFLEET_SUBTASK_MAX_RUNNING_SECONDS || 3600);
+
+function runningSubtaskStaleMs() {
+  const override = Number(process.env.DEVFLEET_SUBTASK_STALE_MS);
+  if (Number.isFinite(override) && override > 0) {
+    return override;
+  }
+  return MAX_SUBTASK_RUNNING_SECONDS * 1000;
+}
+
+function now() {
+  return Date.now();
+}
+
+function parseUpdatedAt(updatedAt?: string) {
+  if (!updatedAt) return null;
+  const ms = Date.parse(updatedAt);
+  return Number.isNaN(ms) ? null : ms;
+}
 
 export function parseDependsOn(value: unknown): string[] {
   if (Array.isArray(value)) return value.map(String);
@@ -30,6 +49,31 @@ export function isSubBlocked(sub: SubTask, subs: SubTask[]): boolean {
   return sub.status === 'pending' && !areDependenciesMet(sub, subs);
 }
 
+function appendTaskLog(
+  userId: string,
+  taskId: string,
+  sub: SubTask,
+  message: string,
+  level: 'info' | 'warn' | 'error' = 'warn',
+) {
+  const device = db.devices.findById(sub.device_id);
+  const log = db.logs.create({
+    sub_task_id: sub.id,
+    content: message,
+    level,
+    device_id: sub.device_id,
+    task_id: taskId,
+  });
+  broadcast(userId, {
+    type: 'task_log',
+    task_id: taskId,
+    subtask_id: sub.id,
+    device_id: sub.device_id,
+    device_name: device?.name,
+    log,
+  });
+}
+
 function deviceCanExecute(deviceId: string): boolean {
   if (!hasDevice(deviceId)) return false;
   const device = db.devices.findById(deviceId);
@@ -38,7 +82,10 @@ function deviceCanExecute(deviceId: string): boolean {
   if (tools.length === 0) return true;
   const devTool = normalizeDevTool(device.dev_tool);
   const row = tools.find((t) => t.tool_name === devTool);
-  return !row || row.status !== 'running' || !row.current_task;
+  if (!row) return true;
+  if (row.status === 'not_installed') return false;
+  if (row.status === 'running' && row.current_task) return false;
+  return true;
 }
 
 export function pickDeviceForSub(
@@ -60,7 +107,22 @@ export function dispatchSubTask(userId: string, task: Task, sub: SubTask): boole
   if (!['pending', 'running'].includes(sub.status)) return false;
   const subs = db.subTasks.findAllByTaskId(task.id);
   if (!areDependenciesMet(sub, subs)) return false;
-  if (!hasDevice(sub.device_id) || !deviceCanExecute(sub.device_id)) return false;
+
+  const link = getDeviceLinkHealth(sub.device_id);
+  if (!hasDevice(sub.device_id) || !deviceCanExecute(sub.device_id)) {
+    const reason = !link.healthy
+      ? `链路不可用（${link.reason}），暂停派发`
+      : `子任务未派发：设备 ${sub.device_id} 当前不可用（离线或执行器忙）`;
+    appendTaskLog(userId, task.id, sub, reason);
+    return false;
+  }
+
+  if (!link.healthy) {
+    const reason = `链路不可用（${link.reason}），暂停派发`;
+    db.subTasks.update(sub.id, { last_error: reason });
+    appendTaskLog(userId, task.id, sub, reason);
+    return false;
+  }
 
   const device = db.devices.findById(sub.device_id);
   const toolName = normalizeDevTool(device?.dev_tool || sub.tool_name);
@@ -218,13 +280,39 @@ export function reconcileTask(userId: string, taskId: string) {
 }
 
 export function rescheduleDeviceTasks(userId: string, deviceId: string): void {
-  // 设备 WS 短暂断开（Computer Use 等长操作）时，勿立即判失败 running 子任务
+  // 设备 WS 短暂断开（Computer Use 等长操作）时，避免立即释放 running 子任务，再由回收器按超时处理；
+  // 但 pending 任务可立即重试。
   const subs = db.subTasks.findAllByDeviceId(deviceId).filter((s) => s.status === 'pending');
   for (const sub of subs) {
     const task = db.tasks.findById(sub.task_id);
     if (!task || task.user_id !== userId) continue;
     handleSubTaskFailure(userId, sub.task_id, sub.id, '设备离线，自动换设备重试');
   }
+}
+
+export function reapStaleRunningSubtasks(): number {
+  const staleThresholdMs = runningSubtaskStaleMs();
+  let reclaimed = 0;
+  const nowAt = now();
+
+  for (const sub of db.subTasks.findAllByStatus('running')) {
+    const updatedAt = parseUpdatedAt(sub.updated_at) ?? parseUpdatedAt(sub.created_at);
+    if (updatedAt === null) continue;
+    if (nowAt - updatedAt < staleThresholdMs) continue;
+
+    const task = db.tasks.findById(sub.task_id);
+    if (!task) continue;
+
+    const seconds = Math.round((nowAt - updatedAt) / 1000);
+    const reason = `任务运行超时（${seconds}s），自动重试`;
+    const updated = handleSubTaskFailure(task.user_id, sub.task_id, sub.id, reason);
+    if (updated) {
+      appendTaskLog(task.user_id, sub.task_id, sub, reason, 'error');
+      reclaimed += 1;
+    }
+  }
+
+  return reclaimed;
 }
 
 export function executorMissing(deviceId: string): boolean {

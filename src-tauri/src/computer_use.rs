@@ -8,13 +8,7 @@ const TRAE_BUNDLE_NAMES: [&str; 4] = [
     "TRAE SOLO.app",
 ];
 
-const TRAE_PROCESS_NAMES: [&str; 5] = [
-    "TRAE CN",
-    "Trae CN",
-    "TRAE SOLO CN",
-    "TRAE SOLO",
-    "Trae",
-];
+const TRAE_PROCESS_NAMES: [&str; 5] = ["TRAE CN", "Trae CN", "TRAE SOLO CN", "TRAE SOLO", "Trae"];
 
 const TRAE_WORKSPACE_SETTINGS: &str = "{\n  \"security.workspace.trust.enabled\": false\n}\n";
 
@@ -140,14 +134,16 @@ fn run_trae_computer_use(workspace: &Path, prompt: &str, mode: TraeCuMode) -> Re
         &app,
     );
     run_osascript(&script).map_err(|error| {
-        format!(
-            "Trae 自动控制失败: {error}。请确认 macOS 辅助功能已授权 DevFleet 与 Trae。"
-        )
+        format!("Trae 自动控制失败: {error}。请确认 macOS 辅助功能已授权 DevFleet 与 Trae。")
     })
 }
 
 #[cfg(target_os = "macos")]
-fn submit_trae_new_task_macos(workspace: &Path, prompt: &str, _skip_wait: bool) -> Result<(), String> {
+fn submit_trae_new_task_macos(
+    workspace: &Path,
+    prompt: &str,
+    _skip_wait: bool,
+) -> Result<(), String> {
     run_trae_computer_use(workspace, prompt, TraeCuMode::SubmitOnly)
 }
 
@@ -202,10 +198,7 @@ end tell"#,
 #[cfg(target_os = "macos")]
 fn trae_workspace_window_is_open(workspace: &Path, application_name: &str) -> bool {
     let probe = build_trae_window_probe_script(application_name, workspace, None);
-    matches!(
-        run_osascript_capture(&probe).ok().as_deref(),
-        Some("ready")
-    )
+    matches!(run_osascript_capture(&probe).ok().as_deref(), Some("ready"))
 }
 
 #[cfg(target_os = "macos")]
@@ -259,7 +252,10 @@ fn run_osascript_capture(script: &str) -> Result<String, String> {
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let detail = if stderr.is_empty() { stdout } else { stderr };
-    Err(format_osascript_error(&detail, output.status.code().unwrap_or(-1)))
+    Err(format_osascript_error(
+        &detail,
+        output.status.code().unwrap_or(-1),
+    ))
 }
 
 #[cfg(target_os = "macos")]
@@ -305,7 +301,10 @@ fn run_osascript(script: &str) -> Result<(), String> {
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let detail = if stderr.is_empty() { stdout } else { stderr };
-    Err(format_osascript_error(&detail, output.status.code().unwrap_or(-1)))
+    Err(format_osascript_error(
+        &detail,
+        output.status.code().unwrap_or(-1),
+    ))
 }
 
 #[cfg(target_os = "macos")]
@@ -354,10 +353,7 @@ fn run_powershell_script(
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let detail = if stderr.is_empty() { stdout } else { stderr };
     Err(if detail.is_empty() {
-        format!(
-            "PowerShell 退出码 {}",
-            output.status.code().unwrap_or(-1)
-        )
+        format!("PowerShell 退出码 {}", output.status.code().unwrap_or(-1))
     } else {
         detail
     })
@@ -366,10 +362,7 @@ fn run_powershell_script(
 #[cfg(target_os = "windows")]
 fn write_prompt_temp_file(prompt: &str) -> Result<PathBuf, String> {
     let mut path = std::env::temp_dir();
-    path.push(format!(
-        "devfleet-trae-prompt-{}.txt",
-        std::process::id()
-    ));
+    path.push(format!("devfleet-trae-prompt-{}.txt", std::process::id()));
     std::fs::write(&path, prompt).map_err(|error| format!("无法写入临时 prompt 文件: {error}"))?;
     Ok(path)
 }
@@ -393,8 +386,8 @@ pub(crate) fn resolve_trae_script_path() -> Option<PathBuf> {
         }
     }
 
-    let dev_script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../scripts/computer-use/trae-new-task.ps1");
+    let dev_script =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scripts/computer-use/trae-new-task.ps1");
     if dev_script.is_file() {
         return Some(dev_script);
     }
@@ -988,14 +981,8 @@ mod tests {
         let workspace = Path::new("/tmp/devfleet-e2e/agent-workspace/task-abc");
         let app = Path::new("/Applications/Trae CN.app");
         let cli = app.join("Contents/Resources/app/bin/trae-cn");
-        let script = build_trae_new_task_script(
-            "hello\nworld",
-            "Trae CN",
-            workspace,
-            true,
-            Some(&cli),
-            app,
-        );
+        let script =
+            build_trae_new_task_script("hello\nworld", "Trae CN", workspace, true, Some(&cli), app);
         assert!(script.contains("\"TRAE CN\""));
         assert!(script.contains("open POSIX file workspacePath"));
         assert!(!script.contains("do shell script"));
@@ -1014,7 +1001,8 @@ mod tests {
 
     #[test]
     fn workspace_window_needles_include_folder_and_parent() {
-        let needles = workspace_window_needles(Path::new("/tmp/devfleet-e2e/agent-workspace/uuid-task"));
+        let needles =
+            workspace_window_needles(Path::new("/tmp/devfleet-e2e/agent-workspace/uuid-task"));
         assert!(needles.contains(&"uuid-task".to_string()));
         assert!(needles.contains(&"agent-workspace".to_string()));
     }

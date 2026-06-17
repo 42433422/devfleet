@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import tsconfigPaths from "vite-tsconfig-paths";
 import { resolve } from 'node:path';
 
-const apiProxyTarget = process.env.VITE_API_PROXY_TARGET || 'http://localhost:3001';
+const apiProxyTarget = process.env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:3001';
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
@@ -27,7 +27,7 @@ export default defineConfig({
     },
   },
   server: {
-    host: host || undefined,
+    host: host || '127.0.0.1',
     port: 5173,
     strictPort: true,
     headers: process.env.NODE_ENV === 'development' ? {

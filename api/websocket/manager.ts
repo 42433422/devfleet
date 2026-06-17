@@ -12,7 +12,12 @@ import {
 } from '../lib/dispatch.js';
 import type { ToolStatusItem } from '../db/store.js';
 
-type ClientWS = WebSocket & { _userId?: string; _heartbeatTimer?: ReturnType<typeof setInterval>; _pongTimer?: ReturnType<typeof setTimeout> };
+type ClientWS = WebSocket & {
+  _userId?: string;
+  _deviceId?: string;
+  _heartbeatTimer?: ReturnType<typeof setInterval>;
+  _pongTimer?: ReturnType<typeof setTimeout>;
+};
 
 interface WSMessage {
   type: string;
@@ -30,6 +35,19 @@ const clients: Set<ClientWS> = new Set();
 const deviceWS = new Map<string, WebSocket>();
 const HEARTBEAT_MS = Number(process.env.DEVFLEET_WS_HEARTBEAT_MS) || 30_000;
 const PONG_TIMEOUT_MS = Number(process.env.DEVFLEET_WS_PONG_TIMEOUT_MS) || 10_000;
+const DEVICE_LINK_HEALTHY_MS = Number(process.env.DEVFLEET_DEVICE_LINK_HEALTHY_MS)
+  || (HEARTBEAT_MS * 2 + PONG_TIMEOUT_MS + 5_000);
+const DEVICE_LINK_STALE_MS = Number(process.env.DEVFLEET_DEVICE_LINK_STALE_MS) || (DEVICE_LINK_HEALTHY_MS * 2);
+
+interface DeviceLinkState {
+  deviceId: string;
+  connectedAtMs: number;
+  lastSeenMs: number;
+  lastPongMs?: number;
+  lastReason: string;
+}
+
+const deviceLinks = new Map<string, DeviceLinkState>();
 
 function clearHeartbeat(ws: ClientWS | WebSocket) {
   const socket = ws as ClientWS;
@@ -52,6 +70,68 @@ function schedulePongTimeout(ws: ClientWS) {
       // ignore
     }
   }, PONG_TIMEOUT_MS);
+}
+
+function markDeviceLinkHealthy(deviceId: string, reason: string) {
+  const now = Date.now();
+  const state = deviceLinks.get(deviceId);
+  if (state) {
+    state.lastSeenMs = now;
+    state.lastReason = reason;
+    return;
+  }
+  deviceLinks.set(deviceId, {
+    deviceId,
+    connectedAtMs: now,
+    lastSeenMs: now,
+    lastReason: reason,
+  });
+}
+
+function markDevicePong(deviceId: string) {
+  const now = Date.now();
+  const state = deviceLinks.get(deviceId);
+  if (state) {
+    state.lastSeenMs = now;
+    state.lastPongMs = now;
+    state.lastReason = '收到 pong';
+    return;
+  }
+  deviceLinks.set(deviceId, {
+    deviceId,
+    connectedAtMs: now,
+    lastSeenMs: now,
+    lastPongMs: now,
+    lastReason: '收到 pong',
+  });
+}
+
+function clearDeviceLink(deviceId: string) {
+  deviceLinks.delete(deviceId);
+}
+
+export function getDeviceLinkHealth(deviceId: string) {
+  const state = deviceLinks.get(deviceId);
+  if (!state || !deviceWS.has(deviceId)) {
+    return { healthy: false, reason: '设备离线（无 WebSocket）', lastReason: state?.lastReason };
+  }
+  const now = Date.now();
+  const lastActive = state.lastPongMs || state.lastSeenMs;
+  if (now - lastActive > DEVICE_LINK_STALE_MS) {
+    return {
+      healthy: false,
+      reason: `链路长时间无响应（${Math.round((now - lastActive) / 1000)}s）`,
+      lastReason: state.lastReason,
+    };
+  }
+  if (now - lastActive > DEVICE_LINK_HEALTHY_MS) {
+    return {
+      healthy: false,
+      reason: `链路心跳抖动（${Math.round((now - lastActive) / 1000)}s）`,
+      lastReason: state.lastReason,
+    };
+  }
+  return { healthy: true, reason: '链路正常', lastReason: state.lastReason };
 }
 
 function startHeartbeat(ws: ClientWS) {
@@ -79,6 +159,10 @@ function handleAppMessage(ws: WebSocket, raw: Buffer | ArrayBuffer | Buffer[]) {
       if (ws.readyState === ws.OPEN) {
         ws.send(JSON.stringify({ type: 'pong' }));
       }
+      const socket = ws as ClientWS;
+      if (socket._deviceId) {
+        markDeviceLinkHealthy(socket._deviceId, '收到客户端心跳');
+      }
     }
   } catch {
     // ignore non-json frames
@@ -94,6 +178,9 @@ export function attachWebSocket(wss: WSServer) {
       if (ws._pongTimer) {
         clearTimeout(ws._pongTimer);
         ws._pongTimer = undefined;
+      }
+      if (ws._deviceId) {
+        markDevicePong(ws._deviceId);
       }
     });
 
@@ -127,7 +214,9 @@ export function attachWebSocket(wss: WSServer) {
       }
       const previous = deviceWS.get(device.id);
       if (previous && previous !== ws) previous.close(4000, '设备已在新的连接上线');
+      ws._deviceId = device.id;
       deviceWS.set(device.id, ws);
+      markDeviceLinkHealthy(device.id, '连接已建立');
       startHeartbeat(ws);
       db.devices.update(device.id, { status: 'online', activated: true });
       sendBindingIdentity(device.id);
@@ -147,10 +236,12 @@ export function attachWebSocket(wss: WSServer) {
             if (ws.readyState === ws.OPEN) {
               ws.send(JSON.stringify({ type: 'pong' }));
             }
+            markDeviceLinkHealthy(device.id, '收到设备心跳');
             return;
           }
 
           if (msg.type === 'tool_status') {
+            markDeviceLinkHealthy(device.id, '工具状态上报');
             if (!msg.capabilities || typeof msg.capabilities !== 'object') {
               return;
             }
@@ -176,6 +267,7 @@ export function attachWebSocket(wss: WSServer) {
           }
 
           if (msg.type === 'task_progress' && msg.task_id && msg.subtask_id) {
+            markDeviceLinkHealthy(device.id, '任务进度上报');
             const task = db.tasks.findById(msg.task_id);
             const sub = db.subTasks.findById(msg.subtask_id);
             if (!task || !sub || task.user_id !== device.user_id || sub.task_id !== task.id || sub.device_id !== device.id) return;
@@ -210,6 +302,7 @@ export function attachWebSocket(wss: WSServer) {
           }
 
           if (msg.type === 'task_log' && msg.task_id && msg.subtask_id && msg.content?.trim()) {
+            markDeviceLinkHealthy(device.id, '任务日志上报');
             const task = db.tasks.findById(msg.task_id);
             const sub = db.subTasks.findById(msg.subtask_id);
             if (!task || !sub || task.user_id !== device.user_id || sub.task_id !== task.id || sub.device_id !== device.id) return;
@@ -239,6 +332,7 @@ export function attachWebSocket(wss: WSServer) {
         if (deviceWS.get(device.id) !== ws) return;
         const closedSocket = ws;
         deviceWS.delete(device.id);
+        clearDeviceLink(device.id);
         const hasRunning = db.subTasks.findAllByDeviceId(device.id).some((s) => s.status === 'running');
         const offlineDelayMs = hasRunning ? 120_000 : 8_000;
         setTimeout(() => {
@@ -332,6 +426,7 @@ export function disconnectDeviceSocket(deviceId: string, reason = '设备已断�
     deviceWS.delete(deviceId);
     socket.close(4000, reason);
   }
+  clearDeviceLink(deviceId);
 }
 
 export function getOnlineDeviceIds() {

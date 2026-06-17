@@ -3,6 +3,8 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
+    collections::VecDeque,
+    net::IpAddr,
     path::{Path, PathBuf},
     process::{Command as StdCommand, Stdio},
     sync::{
@@ -12,11 +14,24 @@ use std::{
 };
 use tauri::{AppHandle, Manager, State};
 use tokio::{
-    process::Command,
+    io::AsyncReadExt,
+    net::TcpStream,
+    process::{ChildStderr, ChildStdout, Command},
     sync::mpsc,
     time::{self, Duration},
 };
 use tokio_tungstenite::{connect_async, tungstenite::Message};
+use url::Url;
+
+/// 绑定/激活走局域网 IP，必须禁用系统 HTTP 代理，否则 reqwest 会把 192.168.x.x 转发到代理导致失败
+fn lan_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .no_proxy()
+        .timeout(std::time::Duration::from_secs(20))
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -107,9 +122,20 @@ struct AgentInner {
     running_task: Mutex<Option<String>>,
     running_dev_tool: Mutex<Option<String>>,
     last_error: Mutex<Option<String>>,
+    pending_task_reports: Mutex<VecDeque<PendingTaskReport>>,
     generation: AtomicU64,
     loop_running: AtomicBool,
     paused: AtomicBool,
+}
+
+#[derive(Debug, Clone)]
+struct PendingTaskReport {
+    task_id: String,
+    subtask_id: String,
+    progress: u8,
+    status: String,
+    content: String,
+    level: String,
 }
 
 #[derive(Clone)]
@@ -136,6 +162,7 @@ impl AgentState {
                 running_task: Mutex::new(None),
                 running_dev_tool: Mutex::new(None),
                 last_error: Mutex::new(None),
+                pending_task_reports: Mutex::new(VecDeque::new()),
                 generation: AtomicU64::new(0),
                 loop_running: AtomicBool::new(false),
                 paused: AtomicBool::new(false),
@@ -246,6 +273,26 @@ impl AgentState {
             let Some(config) = config else {
                 return;
             };
+
+            if let Some(reason) = self
+                .check_api_link_health(&config.api_base_url, &config.device_id)
+                .await
+            {
+                set_mutex(
+                    &self.inner.last_error,
+                    Some(format!("链路不可用（API 健康检查失败: {reason}）")),
+                );
+                set_mutex(&self.inner.connected, false);
+                if self.inner.generation.load(Ordering::SeqCst) != generation {
+                    return;
+                }
+                if !self.interruptible_sleep(generation, backoff_secs).await {
+                    return;
+                }
+                backoff_secs = (backoff_secs * 2).min(60);
+                continue;
+            }
+
             let ws_url = format!(
                 "{}/ws/device?token={}",
                 config
@@ -283,6 +330,32 @@ impl AgentState {
         }
     }
 
+    async fn check_api_link_health(&self, api_base_url: &str, _device_id: &str) -> Option<String> {
+        let base = api_base_url.trim_end_matches('/');
+        let url = format!("{}/api/health", base);
+        let response = lan_http_client().get(url).send().await;
+        match response {
+            Ok(res) => {
+                if !res.status().is_success() {
+                    return Some(format!("HTTP {}", res.status()));
+                }
+                let payload = res.json::<serde_json::Value>().await;
+                if let Ok(payload) = payload {
+                    let success = payload
+                        .get("success")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if !success {
+                        return Some("服务端健康检查返回失败（success=false）".into());
+                    }
+                    return None;
+                }
+                Some("健康检查响应解析失败".to_string())
+            }
+            Err(error) => Some(format!("{error}")),
+        }
+    }
+
     async fn interruptible_sleep(&self, generation: u64, seconds: u64) -> bool {
         for _ in 0..seconds * 10 {
             if self.inner.generation.load(Ordering::SeqCst) != generation {
@@ -291,6 +364,98 @@ impl AgentState {
             time::sleep(Duration::from_millis(100)).await;
         }
         true
+    }
+
+    fn enqueue_pending_task_report(&self, report: PendingTaskReport) {
+        if let Ok(mut queue) = self.inner.pending_task_reports.lock() {
+            queue.push_back(report);
+        }
+    }
+
+    async fn post_task_report(
+        &self,
+        config: &AgentConfig,
+        report: &PendingTaskReport,
+    ) -> Result<(), String> {
+        let url = format!(
+            "{}/api/devices/me/task-report",
+            config.api_base_url.trim_end_matches('/')
+        );
+        let response = lan_http_client()
+            .post(url)
+            .bearer_auth(&config.device_token)
+            .json(&json!({
+                "task_id": report.task_id,
+                "subtask_id": report.subtask_id,
+                "progress": report.progress,
+                "status": report.status,
+                "content": report.content,
+                "level": report.level,
+            }))
+            .send()
+            .await
+            .map_err(|error| format!("上报任务状态失败: {error}"))?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        let body = response.text().await.unwrap_or_default();
+        Err(format!("上报任务状态失败: HTTP {} {}", status, truncate(&body, 500)))
+    }
+
+    async fn flush_pending_task_reports(&self, config: &AgentConfig) {
+        loop {
+            let report = {
+                let mut queue = match self.inner.pending_task_reports.lock() {
+                    Ok(queue) => queue,
+                    Err(_) => return,
+                };
+                queue.pop_front()
+            };
+            let Some(report) = report else {
+                return;
+            };
+            if let Err(error) = self.post_task_report(config, &report).await {
+                log::warn!(
+                    "[DevFleet] failed to flush pending task report {} / {}: {}",
+                    report.task_id,
+                    report.subtask_id,
+                    error
+                );
+                if let Ok(mut queue) = self.inner.pending_task_reports.lock() {
+                    queue.push_front(report);
+                }
+                return;
+            }
+        }
+    }
+
+    async fn report_terminal_task_status(
+        &self,
+        config: &AgentConfig,
+        task: &ExecuteTask,
+        progress: u8,
+        status: &str,
+        content: String,
+        level: &str,
+    ) {
+        let report = PendingTaskReport {
+            task_id: task.task_id.clone(),
+            subtask_id: task.subtask_id.clone(),
+            progress,
+            status: status.to_string(),
+            content,
+            level: level.to_string(),
+        };
+        if let Err(error) = self.post_task_report(config, &report).await {
+            log::warn!(
+                "[DevFleet] terminal task report queued for retry {} / {}: {}",
+                task.task_id,
+                task.subtask_id,
+                error
+            );
+            self.enqueue_pending_task_report(report);
+        }
     }
 
     async fn run_connection<S>(
@@ -310,7 +475,12 @@ impl AgentState {
         tool_status.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
 
         let publish_tool_status = |state: &Self| -> Result<Value, String> {
-            let running_task = state.inner.running_task.lock().ok().and_then(|value| value.clone());
+            let running_task = state
+                .inner
+                .running_task
+                .lock()
+                .ok()
+                .and_then(|value| value.clone());
             let running_dev_tool = state
                 .inner
                 .running_dev_tool
@@ -335,6 +505,7 @@ impl AgentState {
             .send(Message::Text(initial_status.to_string().into()))
             .await
             .map_err(|error| error.to_string())?;
+        self.flush_pending_task_reports(&config).await;
 
         loop {
             tokio::select! {
@@ -352,6 +523,7 @@ impl AgentState {
                 }
                 let payload = publish_tool_status(self)?;
                 writer.send(Message::Text(payload.to_string().into())).await.map_err(|error| error.to_string())?;
+                self.flush_pending_task_reports(&config).await;
               }
               Some(payload) = outbound_rx.recv() => {
                 writer.send(Message::Text(payload.to_string().into())).await.map_err(|error| error.to_string())?;
@@ -418,10 +590,23 @@ impl AgentState {
 
         let task_id = task.task_id.clone();
         let result = self.execute_task_inner(&config, &task, &tx).await;
-        if let Err(error) = result {
-            send_log(&tx, &task, &error, "error");
-            send_progress(&tx, &task, 0, "failed");
-            set_mutex(&self.inner.last_error, Some(error));
+        match result {
+            Ok(final_sha) => {
+                self.report_terminal_task_status(
+                    &config,
+                    &task,
+                    100,
+                    "completed",
+                    format!("任务完成，最终提交: {final_sha}"),
+                    "info",
+                )
+                .await;
+            }
+            Err(error) => {
+                set_mutex(&self.inner.last_error, Some(error.clone()));
+                self.report_terminal_task_status(&config, &task, 0, "failed", error, "error")
+                    .await;
+            }
         }
 
         if let Ok(mut guard) = self.inner.running_task.lock() {
@@ -437,9 +622,14 @@ impl AgentState {
         config: &AgentConfig,
         task: &ExecuteTask,
         tx: &mpsc::UnboundedSender<Value>,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         validate_task(task)?;
+        if !task.repo_url.trim().is_empty() {
+            send_log(tx, task, "执行前检查仓库链路可达性", "info");
+            Self::assert_repo_reachability(task.repo_url.trim()).await?;
+        }
         let task_dir = self.prepare_task_workspace(config, task, tx).await?;
+        let mut baseline_head = git_current_head(&task_dir).await?;
         send_progress(tx, task, 25, "running");
 
         let dev_tool = task.tool.as_str();
@@ -461,7 +651,28 @@ impl AgentState {
                     "info",
                 );
                 send_progress(tx, task, 40, "running");
-                let output = run_cursor_agent(&task_dir, &prompt).await?;
+                let (program, prefix) =
+                    resolve_cursor_agent().ok_or_else(cursor_agent_missing_message)?;
+                let mut args = prefix;
+                args.extend([
+                    "-p".to_string(),
+                    "--force".to_string(),
+                    "--trust".to_string(),
+                    "--output-format".to_string(),
+                    "text".to_string(),
+                    prompt.to_string(),
+                ]);
+                let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                let output = run_logged_command(
+                    task,
+                    tx,
+                    Some(&task_dir),
+                    "cursor",
+                    &program,
+                    &arg_refs,
+                    Some(ai_agent_command_timeout()),
+                )
+                .await?;
                 if !output.trim().is_empty() {
                     send_log(tx, task, &truncate(&output, 4000), "info");
                 }
@@ -469,7 +680,24 @@ impl AgentState {
             "codex" => {
                 send_log(tx, task, "Codex CLI 正在设备本地分析并修改代码", "info");
                 send_progress(tx, task, 40, "running");
-                let output = run_codex_agent(&task_dir, &prompt).await?;
+                let codex = resolve_codex_cli()?;
+                send_log(tx, task, &format!("Codex 解析路径: {codex}"), "info");
+                let output = run_logged_command(
+                    task,
+                    tx,
+                    Some(&task_dir),
+                    "codex",
+                    &codex,
+                    &[
+                        "exec",
+                        "--sandbox",
+                        "workspace-write",
+                        "--ephemeral",
+                        &prompt,
+                    ],
+                    Some(ai_agent_command_timeout()),
+                )
+                .await?;
                 if !output.trim().is_empty() {
                     send_log(tx, task, &truncate(&output, 4000), "info");
                 }
@@ -506,8 +734,11 @@ impl AgentState {
                     .map_err(|error| format!("写入 MCP 配置失败: {error}"))?;
 
                 establish_trae_git_baseline(&task_dir, tx, task).await?;
+                baseline_head = git_current_head(&task_dir).await?;
 
-                let _ = computer_use::prepare_trae_workspace_settings(Path::new(&config.workspace_root));
+                let _ = computer_use::prepare_trae_workspace_settings(Path::new(
+                    &config.workspace_root,
+                ));
                 let _ = computer_use::prepare_trae_workspace_settings(&task_dir);
 
                 let trae_prompt = if task.description.trim().is_empty() {
@@ -561,8 +792,7 @@ impl AgentState {
 
                 if !dispatch_ok {
                     dispatch_ok =
-                        execute_trae_computer_use_fallback(&task_dir, &trae_prompt, tx, task)
-                            .await;
+                        execute_trae_computer_use_fallback(&task_dir, &trae_prompt, tx, task).await;
                 }
 
                 if !dispatch_ok {
@@ -582,7 +812,12 @@ impl AgentState {
                 );
                 send_progress(tx, task, 40, "running");
 
-                send_log(tx, task, "[pipeline:wait] 等待 Trae Agent 修改代码...", "info");
+                send_log(
+                    tx,
+                    task,
+                    "[pipeline:wait] 等待 Trae Agent 修改代码...",
+                    "info",
+                );
                 let timeout_secs: u64 = 600;
                 let poll_interval_secs: u64 = 10;
                 let start = std::time::Instant::now();
@@ -600,9 +835,17 @@ impl AgentState {
                 }
 
                 if !has_changes {
-                    return Err("等待 Trae Agent 超时，未检测到代码变更（排除 .devfleet/.trae 元数据）".to_string());
+                    return Err(
+                        "等待 Trae Agent 超时，未检测到代码变更（排除 .devfleet/.trae 元数据）"
+                            .to_string(),
+                    );
                 }
-                send_log(tx, task, "[pipeline:trae] 检测到 Trae Agent 代码变更", "info");
+                send_log(
+                    tx,
+                    task,
+                    "[pipeline:trae] 检测到 Trae Agent 代码变更",
+                    "info",
+                );
             }
             _ => {
                 if matches!(dev_tool, "claude_code") {
@@ -625,7 +868,24 @@ impl AgentState {
                     "info",
                 );
                 send_progress(tx, task, 40, "running");
-                let output = run_codex_agent(&task_dir, &prompt).await?;
+                let codex = resolve_codex_cli()?;
+                send_log(tx, task, &format!("Codex 解析路径: {codex}"), "info");
+                let output = run_logged_command(
+                    task,
+                    tx,
+                    Some(&task_dir),
+                    "codex",
+                    &codex,
+                    &[
+                        "exec",
+                        "--sandbox",
+                        "workspace-write",
+                        "--ephemeral",
+                        &prompt,
+                    ],
+                    Some(ai_agent_command_timeout()),
+                )
+                .await?;
                 if !output.trim().is_empty() {
                     send_log(tx, task, &truncate(&output, 4000), "info");
                 }
@@ -633,41 +893,164 @@ impl AgentState {
         }
         send_progress(tx, task, 80, "running");
 
-        run_command(
+        send_log(tx, task, "开始 Git 步骤：配置身份信息", "info");
+        run_logged_command(
+            task,
+            tx,
             Some(&task_dir),
+            "git",
             "git",
             &["config", "user.name", "Paibi Para Agent"],
+            Some(Duration::from_secs(30)),
         )
         .await?;
-        run_command(
+        run_logged_command(
+            task,
+            tx,
             Some(&task_dir),
+            "git",
             "git",
             &["config", "user.email", "agent@devfleet.local"],
+            Some(Duration::from_secs(30)),
         )
         .await?;
-        run_command(Some(&task_dir), "git", &["add", "-A"]).await?;
-        let changes = run_command(Some(&task_dir), "git", &["status", "--porcelain"]).await?;
-        if changes.trim().is_empty() {
-            return Err("自动执行器没有产生代码变更".to_string());
-        }
-        run_command(
+        run_logged_command(
+            task,
+            tx,
             Some(&task_dir),
             "git",
-            &["commit", "-m", &format!("devfleet: {}", task.title)],
+            "git",
+            &["add", "-A"],
+            Some(Duration::from_secs(60)),
+        )
+        .await?;
+        let changes = run_logged_command(
+            task,
+            tx,
+            Some(&task_dir),
+            "git",
+            "git",
+            &["status", "--porcelain"],
+            Some(Duration::from_secs(30)),
+        )
+        .await?;
+        let final_head = git_current_head(&task_dir).await?;
+        match determine_git_completion_mode(
+            baseline_head.as_deref(),
+            final_head.as_deref(),
+            &changes,
+        ) {
+            GitCompletionMode::NoChanges => {
+                return Err("自动执行器没有产生代码变更".to_string());
+            }
+            GitCompletionMode::ReuseExistingCommit => {
+                let sha = final_head.ok_or_else(|| "自动执行器已提交，但无法读取最终 HEAD".to_string())?;
+                send_log(
+                    tx,
+                    task,
+                    &format!("检测到自动执行器已自行提交，复用现有提交: {sha}"),
+                    "info",
+                );
+                send_progress(tx, task, 90, "running");
+                push_branch_if_remote(&task_dir, &task.work_branch, tx, task).await?;
+                send_log(
+                    tx,
+                    task,
+                    &format!("分支已就绪，提交: {}", sha.trim()),
+                    "info",
+                );
+                return Ok(sha);
+            }
+            GitCompletionMode::CommitPendingChanges => {}
+        }
+        let commit_message = format!("devfleet: {}", task.title);
+        send_log(tx, task, &format!("准备提交：{commit_message}"), "info");
+        run_logged_command(
+            task,
+            tx,
+            Some(&task_dir),
+            "git",
+            "git",
+            &["commit", "-m", &commit_message],
+            Some(Duration::from_secs(120)),
         )
         .await?;
         send_log(tx, task, "本地提交完成", "info");
         send_progress(tx, task, 90, "running");
         push_branch_if_remote(&task_dir, &task.work_branch, tx, task).await?;
-        let sha = run_command(Some(&task_dir), "git", &["rev-parse", "HEAD"]).await?;
+        let sha = run_logged_command(
+            task,
+            tx,
+            Some(&task_dir),
+            "git",
+            "git",
+            &["rev-parse", "HEAD"],
+            Some(Duration::from_secs(30)),
+        )
+        .await?;
         send_log(
             tx,
             task,
             &format!("分支已就绪，提交: {}", sha.trim()),
             "info",
         );
-        send_progress(tx, task, 100, "completed");
-        Ok(())
+        Ok(sha.trim().to_string())
+    }
+
+    fn parse_repo_endpoint(repo_url: &str) -> Option<(String, u16)> {
+        let trimmed = repo_url.trim();
+        if trimmed.is_empty()
+            || trimmed.starts_with("file://")
+            || Path::new(trimmed).is_absolute()
+            || trimmed.starts_with("./")
+            || trimmed.starts_with("../")
+        {
+            return None;
+        }
+
+        if trimmed.starts_with("git@") {
+            let after_at = trimmed.strip_prefix("git@")?;
+            let host = after_at
+                .split(':')
+                .next()?
+                .trim()
+                .trim_start_matches('[')
+                .trim_end_matches(']');
+            if host.is_empty() {
+                return None;
+            }
+            return Some((host.to_string(), 22));
+        }
+
+        let parsed = Url::parse(trimmed).ok()?;
+        let host = parsed.host_str()?.to_string();
+        let port = parsed.port().unwrap_or(match parsed.scheme() {
+            "http" => 80,
+            "https" => 443,
+            "ssh" => 22,
+            "git" => 22,
+            _ => 22,
+        });
+        Some((host, port))
+    }
+
+    async fn assert_repo_reachability(repo_url: &str) -> Result<(), String> {
+        let Some((host, port)) = Self::parse_repo_endpoint(repo_url) else {
+            return Ok(());
+        };
+
+        let timeout_ms = command_timeout_ms_env("DEVFLEET_REPO_NET_PROBE_MS", 3000);
+        let timeout = Duration::from_millis(timeout_ms);
+        let probe = time::timeout(timeout, TcpStream::connect(format!("{host}:{port}"))).await;
+        match probe {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(error)) => Err(format!(
+                "仓库链路检查失败（{host}:{port}）：{error}。请确认该端口/防火墙/NAT 可达"
+            )),
+            Err(_) => Err(format!(
+                "仓库链路检查超时（{host}:{port}，{timeout_ms}ms）. 请确认该端口/防火墙/NAT 可达"
+            )),
+        }
     }
 
     async fn prepare_task_workspace(
@@ -711,9 +1094,8 @@ impl AgentState {
 
         send_log(tx, task, "正在克隆仓库并准备独立工作分支", "info");
         send_progress(tx, task, 10, "running");
-        run_command(
+        run_git_command(
             None,
-            "git",
             &[
                 "clone",
                 "--branch",
@@ -722,14 +1104,25 @@ impl AgentState {
                 repo_url,
                 task_dir.to_string_lossy().as_ref(),
             ],
+            Duration::from_secs(600),
         )
         .await?;
-        run_command(
+        run_git_command(
             Some(&task_dir),
-            "git",
             &["checkout", "-b", &task.work_branch],
+            Duration::from_secs(120),
         )
         .await?;
+        send_log(
+            tx,
+            task,
+            &format!(
+                "仓库克隆完成，工作分支 {} 已就绪（{}）",
+                task.work_branch,
+                task_dir.display()
+            ),
+            "info",
+        );
         Ok(task_dir)
     }
 
@@ -802,12 +1195,17 @@ pub async fn agent_bind(
     if workspace_root.is_empty() || !Path::new(&workspace_root).is_absolute() {
         return Err("工作目录必须是绝对路径".to_string());
     }
-    let response = reqwest::Client::new()
+    let response = lan_http_client()
         .post(format!("{api_base_url}/api/devices/activate"))
         .json(&json!({ "bindCode": bind_code.trim().to_uppercase(), "deviceName": device_name }))
         .send()
         .await
-        .map_err(|error| format!("绑定请求失败: {error}"))?;
+        .map_err(|error| {
+            format!(
+                "绑定请求失败: {error}。请在工作设备执行 curl {}/api/health 确认能连通主设备",
+                api_base_url.trim_end_matches('/')
+            )
+        })?;
     if !response.status().is_success() {
         let error = response
             .json::<Value>()
@@ -934,7 +1332,7 @@ pub async fn agent_unbind(state: State<'_, AgentState>) -> Result<AgentStatus, S
         .ok()
         .and_then(|value| value.clone());
     if let Some(config) = config {
-        let response = reqwest::Client::new()
+        let response = lan_http_client()
             .post(format!(
                 "{}/api/devices/deactivate",
                 config.api_base_url.trim_end_matches('/')
@@ -1035,13 +1433,15 @@ pub fn try_auto_bind_localhost(_app: &AppHandle, state: &AgentState) {
         .post(format!("{LOCAL_API_BASE}/api/auth/guest"))
         .send()
     {
-        Ok(response) if response.status().is_success() => match response.json::<GuestAuthResponse>() {
-            Ok(body) => body.token,
-            Err(error) => {
-                log::warn!("[DevFleet] auto-bind skipped: guest response invalid: {error}");
-                return;
+        Ok(response) if response.status().is_success() => {
+            match response.json::<GuestAuthResponse>() {
+                Ok(body) => body.token,
+                Err(error) => {
+                    log::warn!("[DevFleet] auto-bind skipped: guest response invalid: {error}");
+                    return;
+                }
             }
-        },
+        }
         Ok(response) => {
             log::warn!(
                 "[DevFleet] auto-bind skipped: guest login failed: HTTP {}",
@@ -1135,14 +1535,15 @@ pub fn try_auto_bind_localhost(_app: &AppHandle, state: &AgentState) {
         }))
         .send()
     {
-        Ok(response) if response.status().is_success() => match response.json::<ActivationResponse>()
-        {
-            Ok(body) => body,
-            Err(error) => {
-                log::warn!("[DevFleet] auto-bind skipped: activate response invalid: {error}");
-                return;
+        Ok(response) if response.status().is_success() => {
+            match response.json::<ActivationResponse>() {
+                Ok(body) => body,
+                Err(error) => {
+                    log::warn!("[DevFleet] auto-bind skipped: activate response invalid: {error}");
+                    return;
+                }
             }
-        },
+        }
         Ok(response) => {
             let error = response
                 .json::<Value>()
@@ -1291,14 +1692,14 @@ fn scan_tools(current_task: Option<&str>, active_dev_tool: Option<&str>) -> Vec<
             let is_active = current_task.is_some() && active_dev_tool == Some(name);
             LocalToolStatus {
                 tool_name: name.to_string(),
-                status: if is_active {
+                status: if executable.is_none() {
+                    "not_installed"
+                } else if is_active {
                     "running"
                 } else if running {
                     "running"
-                } else if executable.is_some() {
-                    "idle"
                 } else {
-                    "not_installed"
+                    "idle"
                 }
                 .to_string(),
                 installed: executable.is_some(),
@@ -1396,21 +1797,26 @@ fn process_list() -> String {
 }
 
 fn user_local_bin_executable(binary: &str) -> Option<String> {
+    let home = std::env::var("USERPROFILE")
+        .ok()
+        .or_else(|| std::env::var("HOME").ok())?;
+    let candidates = vec![PathBuf::from(&home).join(".local").join("bin").join(binary)];
     #[cfg(target_os = "windows")]
     {
-        let _ = binary;
-        None
+        candidates.push(
+            PathBuf::from(&home)
+                .join(".cursor")
+                .join("bin")
+                .join(format!("{binary}.exe")),
+        );
+        candidates.push(
+            PathBuf::from(&home)
+                .join(".cursor")
+                .join("bin")
+                .join(binary),
+        );
     }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let home = std::env::var("HOME").ok()?;
-        let path = PathBuf::from(home).join(".local/bin").join(binary);
-        if path.is_file() {
-            Some(path.to_string_lossy().into_owned())
-        } else {
-            None
-        }
-    }
+    first_existing_file(candidates)
 }
 
 fn first_existing_file(candidates: impl IntoIterator<Item = PathBuf>) -> Option<String> {
@@ -1510,16 +1916,16 @@ fn find_executable(tool: &str) -> Option<String> {
             let candidates: Vec<PathBuf> = match tool {
                 "trae" => {
                     if let Some(app) = computer_use::find_trae_app_bundle() {
-                        if let Some(mac_os) = app
-                            .join("Contents/MacOS")
-                            .read_dir()
-                            .ok()
-                            .and_then(|entries| {
-                                entries
-                                    .flatten()
-                                    .find(|entry| entry.path().is_file())
-                                    .map(|entry| entry.path())
-                            })
+                        if let Some(mac_os) =
+                            app.join("Contents/MacOS")
+                                .read_dir()
+                                .ok()
+                                .and_then(|entries| {
+                                    entries
+                                        .flatten()
+                                        .find(|entry| entry.path().is_file())
+                                        .map(|entry| entry.path())
+                                })
                         {
                             return Some(mac_os.to_string_lossy().into_owned());
                         }
@@ -1583,13 +1989,7 @@ fn is_tool_process_running(tool: &str) -> bool {
     let processes = process_list();
     let process_names: &[&str] = match tool {
         "claude_code" => &["claude", "claude.exe"],
-        "trae" => &[
-            "trae",
-            "trae.exe",
-            "trae cn",
-            "trae solo cn",
-            "trae solo",
-        ],
+        "trae" => &["trae", "trae.exe", "trae cn", "trae solo cn", "trae solo"],
         "cursor" => &["cursor", "cursor.exe", "agent"],
         _ => &["codex", "codex.exe"],
     };
@@ -1678,17 +2078,52 @@ async fn git_has_meaningful_changes(task_dir: &Path) -> Result<bool, String> {
     let output = run_command(
         Some(task_dir),
         "git",
-        &[
-            "status",
-            "--porcelain",
-            "--",
-            ".",
-            ":!.devfleet",
-            ":!.trae",
-        ],
+        &["status", "--porcelain", "--", ".", ":!.devfleet", ":!.trae"],
     )
     .await?;
     Ok(!output.trim().is_empty())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum GitCompletionMode {
+    CommitPendingChanges,
+    ReuseExistingCommit,
+    NoChanges,
+}
+
+fn determine_git_completion_mode(
+    baseline_head: Option<&str>,
+    final_head: Option<&str>,
+    status_output: &str,
+) -> GitCompletionMode {
+    if !status_output.trim().is_empty() {
+        return GitCompletionMode::CommitPendingChanges;
+    }
+    if baseline_head != final_head {
+        return GitCompletionMode::ReuseExistingCommit;
+    }
+    GitCompletionMode::NoChanges
+}
+
+async fn git_current_head(cwd: &Path) -> Result<Option<String>, String> {
+    match run_command(Some(cwd), "git", &["rev-parse", "HEAD"]).await {
+        Ok(output) => {
+            let trimmed = output.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(trimmed.to_string()))
+            }
+        }
+        Err(error)
+            if error.contains("ambiguous argument 'HEAD'")
+                || error.contains("Needed a single revision")
+                || error.contains("unknown revision or path not in the working tree") =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 async fn git_ref_exists(cwd: &Path, reference: &str) -> bool {
@@ -1709,11 +2144,7 @@ async fn resolve_merge_ref(cwd: &Path, branch_name: &str) -> Result<String, Stri
     let _ = run_command(
         Some(cwd),
         "git",
-        &[
-            "fetch",
-            "origin",
-            &format!("{branch_name}:{branch_name}"),
-        ],
+        &["fetch", "origin", &format!("{branch_name}:{branch_name}")],
     )
     .await;
     if git_ref_exists(cwd, &origin_ref).await {
@@ -1997,25 +2428,26 @@ async fn execute_trae_computer_use_fallback(
     cu_ok
 }
 
-/// 解析 Cursor Agent CLI：`agent` 独立二进制，或 `cursor agent` 子命令。
+/// 解析 Cursor Agent CLI：优先独立 `agent` 二进制；macOS/Linux 可回退 `cursor agent`。
 fn resolve_cursor_agent() -> Option<(String, Vec<String>)> {
+    if let Ok(from_env) = std::env::var("DEVFLEET_CURSOR_AGENT") {
+        let trimmed = from_env.trim();
+        if !trimmed.is_empty() && Path::new(trimmed).is_file() {
+            return Some((trimmed.to_string(), Vec::new()));
+        }
+    }
     if let Some(path) = find_binary_in_path("agent") {
         return Some((path, Vec::new()));
     }
-    if let Some(path) = find_binary_in_path("cursor") {
-        return Some((path, vec!["agent".to_string()]));
+    if let Some(path) = user_local_bin_executable("agent") {
+        return Some((path, Vec::new()));
     }
     if let Some(bin_dir) = bundled_cursor_app_bin() {
         #[cfg(target_os = "windows")]
-        for name in ["agent.cmd", "agent.exe", "cursor.cmd", "cursor.exe"] {
+        for name in ["agent.cmd", "agent.exe"] {
             let candidate = bin_dir.join(name);
             if candidate.is_file() {
-                let prefix = if name.starts_with("cursor") {
-                    vec!["agent".to_string()]
-                } else {
-                    Vec::new()
-                };
-                return Some((candidate.to_string_lossy().into_owned(), prefix));
+                return Some((candidate.to_string_lossy().into_owned(), Vec::new()));
             }
         }
         #[cfg(not(target_os = "windows"))]
@@ -2026,17 +2458,297 @@ fn resolve_cursor_agent() -> Option<(String, Vec<String>)> {
             }
             let cursor = bin_dir.join("cursor");
             if cursor.is_file() {
-                return Some((cursor.to_string_lossy().into_owned(), vec!["agent".to_string()]));
+                return Some((
+                    cursor.to_string_lossy().into_owned(),
+                    vec!["agent".to_string()],
+                ));
             }
         }
+    }
+    #[cfg(not(target_os = "windows"))]
+    if let Some(path) = find_binary_in_path("cursor") {
+        return Some((path, vec!["agent".to_string()]));
     }
     None
 }
 
+fn ai_agent_command_timeout() -> Duration {
+    const DEFAULT_TIMEOUT_MS: u64 = 900_000;
+    std::env::var("DEVFLEET_AI_AGENT_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .map(Duration::from_millis)
+        .unwrap_or(Duration::from_millis(DEFAULT_TIMEOUT_MS))
+}
+
+fn is_cursor_shadowed_binary(program: &str) -> bool {
+    let exe = Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if exe.contains("cursor") || exe == "agent" || exe == "agent.exe" || exe == "agent.cmd" {
+        return true;
+    }
+    let lower = program.to_lowercase();
+    if lower.contains("/cursor/") || lower.contains("\\cursor\\") {
+        return true;
+    }
+    false
+}
+
+fn resolve_codex_cli() -> Result<String, String> {
+    let env_override = std::env::var("DEVFLEET_CODEX_CLI")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|path| !path.is_empty());
+    if let Some(program) = env_override {
+        if !Path::new(&program).is_file() {
+            return Err(format!("DEVFLEET_CODEX_CLI 指定路径无效：{program}"));
+        }
+        if is_cursor_shadowed_binary(&program) {
+            return Err(
+                "DEVFLEET_CODEX_CLI 指向 Cursor 相关可执行文件，不符合 Codex CLI 要求，请修正为真实的 codex 可执行文件".to_string(),
+            );
+        }
+        return Ok(program);
+    }
+
+    let default_program = find_executable("codex").or_else(|| user_local_bin_executable("codex"));
+    let Some(program) = default_program else {
+        return Err("未找到 Codex CLI。目标设备需安装并登录 Codex（codex login）".to_string());
+    };
+    if is_cursor_shadowed_binary(&program) {
+        return Err(
+            format!(
+                "未检测到明确的 Codex CLI（二进制 {program} 似乎是 Cursor/Agent 命令）。请执行 `where codex` 或 `which codex` 核对安装路径。"
+            ),
+        );
+    }
+    Ok(program)
+}
+
+fn command_timeout_ms_env(name: &str, default_ms: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default_ms)
+}
+
+fn command_timeouts(explicit: Option<Duration>) -> (Duration, Duration) {
+    let soft_ms = explicit
+        .map(|value| value.as_millis() as u64)
+        .unwrap_or_else(|| command_timeout_ms_env("DEVFLEET_COMMAND_SOFT_TIMEOUT_MS", 900_000));
+
+    let hard_ms = if let Some(explicit_ms) = explicit.map(|value| value.as_millis() as u64) {
+        let hard_margin = command_timeout_ms_env("DEVFLEET_COMMAND_HARD_MARGIN_MS", 30_000);
+        explicit_ms.saturating_add(hard_margin)
+    } else {
+        command_timeout_ms_env(
+            "DEVFLEET_COMMAND_HARD_TIMEOUT_MS",
+            soft_ms.saturating_add(30_000),
+        )
+    };
+
+    (
+        Duration::from_millis(soft_ms),
+        Duration::from_millis((soft_ms.max(1)).max(hard_ms)),
+    )
+}
+
+fn format_command(program: &str, args: &[&str]) -> String {
+    let mut rendered = Vec::with_capacity(args.len() + 1);
+    rendered.push(program.to_string());
+    rendered.extend(args.iter().map(|arg| {
+        let need_quote = arg.contains(' ') || arg.contains('"');
+        if need_quote {
+            format!("\"{}\"", arg.replace('"', "\\\""))
+        } else {
+            arg.to_string()
+        }
+    }));
+    rendered.join(" ")
+}
+
+fn is_lan_no_proxy_host(host: &str) -> bool {
+    let host = host
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_lowercase();
+    if host == "localhost" || host.ends_with(".local") {
+        return true;
+    }
+    match host.parse::<IpAddr>() {
+        Ok(IpAddr::V4(ip)) => ip.is_private() || ip.is_loopback() || ip.is_link_local(),
+        Ok(IpAddr::V6(ip)) => ip.is_loopback() || ip.is_unique_local(),
+        Err(_) => false,
+    }
+}
+
+fn no_proxy_hosts_from_args(args: &[&str]) -> Vec<String> {
+    let mut hosts = Vec::new();
+    for raw in args {
+        let token = raw.trim_matches(|ch: char| {
+            ch == '"' || ch == '\'' || ch == '<' || ch == '>' || ch == '(' || ch == ')'
+        });
+        let host = if token.starts_with("git@") {
+            token
+                .strip_prefix("git@")
+                .and_then(|value| value.split(':').next())
+                .map(str::to_string)
+        } else {
+            Url::parse(token)
+                .ok()
+                .and_then(|url| url.host_str().map(str::to_string))
+        };
+        let Some(host) = host else {
+            continue;
+        };
+        if is_lan_no_proxy_host(&host) && !hosts.iter().any(|item| item == &host) {
+            hosts.push(host);
+        }
+    }
+    hosts
+}
+
+fn append_no_proxy_env(command: &mut Command, hosts: &[String]) {
+    if hosts.is_empty() {
+        return;
+    }
+    let mut entries: Vec<String> = std::env::var("NO_PROXY")
+        .or_else(|_| std::env::var("no_proxy"))
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(str::to_string)
+        .collect();
+    for fixed in ["localhost", "127.0.0.1", "::1", ".local"] {
+        if !entries.iter().any(|entry| entry == fixed) {
+            entries.push(fixed.to_string());
+        }
+    }
+    for host in hosts {
+        if !entries.iter().any(|entry| entry == host) {
+            entries.push(host.clone());
+        }
+    }
+    let value = entries.join(",");
+    command.env("NO_PROXY", &value).env("no_proxy", value);
+}
+
+async fn run_logged_command(
+    task: &ExecuteTask,
+    tx: &mpsc::UnboundedSender<Value>,
+    cwd: Option<&Path>,
+    stage: &str,
+    program: &str,
+    args: &[&str],
+    timeout: Option<Duration>,
+) -> Result<String, String> {
+    let command_line = format_command(program, args);
+    send_log(
+        tx,
+        task,
+        &format!("[pipeline:{stage}] 准备执行: {command_line}"),
+        "info",
+    );
+    let started_at = std::time::Instant::now();
+    let output = run_command_timed(cwd, program, args, timeout).await;
+    let elapsed = started_at.elapsed().as_secs_f64();
+
+    match &output {
+        Ok(stdout) => {
+            send_log(
+                tx,
+                task,
+                &format!("[pipeline:{stage}] 完成 ({}s)", format!("{elapsed:.1}")),
+                "info",
+            );
+            if !stdout.trim().is_empty() {
+                send_log(
+                    tx,
+                    task,
+                    &format!(
+                        "[pipeline:{stage}] 标准输出片段: {}",
+                        truncate(&stdout, 1000)
+                    ),
+                    "info",
+                );
+            }
+        }
+        Err(error) => {
+            send_log(
+                tx,
+                task,
+                &format!(
+                    "[pipeline:{stage}] 失败 ({}s): {error}",
+                    format!("{elapsed:.1}")
+                ),
+                "error",
+            );
+        }
+    }
+
+    output
+}
+
+#[cfg(unix)]
+fn kill_process_tree_unix(pid: u32, hard: bool) -> bool {
+    let pid_s = pid.to_string();
+    let signal = if hard { "KILL" } else { "TERM" };
+
+    let _ = StdCommand::new("pkill")
+        .arg(format!("-{signal}"))
+        .arg("-P")
+        .arg(&pid_s)
+        .status();
+
+    let _ = StdCommand::new("kill")
+        .arg(format!("-{signal}"))
+        .arg(&pid_s)
+        .status();
+    true
+}
+
+#[cfg(windows)]
+fn kill_process_tree_windows(pid: u32, _hard: bool) -> bool {
+    let pid_s = pid.to_string();
+    let status = StdCommand::new("taskkill")
+        .args(["/PID", &pid_s, "/T", "/F"])
+        .status()
+        .ok();
+    status.is_some_and(|result| result.success())
+}
+
+fn kill_process_tree(pid: u32, hard: bool) -> bool {
+    #[cfg(unix)]
+    {
+        return kill_process_tree_unix(pid, hard);
+    }
+    #[cfg(windows)]
+    {
+        return kill_process_tree_windows(pid, hard);
+    }
+}
+
+async fn collect_stream_output(mut stream: ChildStdout) -> String {
+    let mut buffer = Vec::new();
+    let _ = stream.read_to_end(&mut buffer).await;
+    String::from_utf8_lossy(&buffer).to_string()
+}
+
+async fn collect_stream_output_err(mut stream: ChildStderr) -> String {
+    let mut buffer = Vec::new();
+    let _ = stream.read_to_end(&mut buffer).await;
+    String::from_utf8_lossy(&buffer).to_string()
+}
+
 async fn run_cursor_agent(cwd: &Path, prompt: &str) -> Result<String, String> {
-    let (program, prefix) = resolve_cursor_agent().ok_or_else(|| {
-        "未找到 Cursor Agent CLI。请安装：curl https://cursor.com/install -fsS | bash，并执行 agent login 或设置 CURSOR_API_KEY".to_string()
-    })?;
+    let (program, prefix) = resolve_cursor_agent().ok_or_else(cursor_agent_missing_message)?;
     let mut args: Vec<String> = prefix;
     args.extend([
         "-p".to_string(),
@@ -2047,13 +2759,39 @@ async fn run_cursor_agent(cwd: &Path, prompt: &str) -> Result<String, String> {
         prompt.to_string(),
     ]);
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    run_command(Some(cwd), &program, &arg_refs).await
+    let output = run_command_timed(
+        Some(cwd),
+        &program,
+        &arg_refs,
+        Some(ai_agent_command_timeout()),
+    )
+    .await?;
+    if looks_like_cursor_electron_stub(&output) {
+        return Err(cursor_agent_missing_message());
+    }
+    Ok(output)
+}
+
+fn cursor_agent_missing_message() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        "未找到可用的 Cursor Agent CLI（独立 agent 命令）。Windows 不能用 cursor agent 子命令冒充。请在 Git Bash/WSL 执行: curl https://cursor.com/install -fsS | bash，然后 agent login 或设置 CURSOR_API_KEY；也可设置 DEVFLEET_CURSOR_AGENT 指向 agent.exe 的绝对路径。".to_string()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "未找到 Cursor Agent CLI。请安装：curl https://cursor.com/install -fsS | bash，并执行 agent login 或设置 CURSOR_API_KEY".to_string()
+    }
+}
+
+fn looks_like_cursor_electron_stub(output: &str) -> bool {
+    let lower = output.to_lowercase();
+    lower.contains("not in the list of known options")
+        || lower.contains("warning: 'p' is not in the list")
 }
 
 async fn run_codex_agent(cwd: &Path, prompt: &str) -> Result<String, String> {
-    let codex = find_executable("codex")
-        .ok_or_else(|| "未找到 Codex CLI。目标设备需安装并登录 Codex（codex login）".to_string())?;
-    run_command(
+    let codex = resolve_codex_cli()?;
+    run_command_timed(
         Some(cwd),
         &codex,
         &[
@@ -2063,6 +2801,7 @@ async fn run_codex_agent(cwd: &Path, prompt: &str) -> Result<String, String> {
             "--ephemeral",
             prompt,
         ],
+        Some(ai_agent_command_timeout()),
     )
     .await
 }
@@ -2100,6 +2839,36 @@ fn find_binary_in_path(binary: &str) -> Option<String> {
 }
 
 async fn run_command(cwd: Option<&Path>, program: &str, args: &[&str]) -> Result<String, String> {
+    run_command_timed(cwd, program, args, None).await
+}
+
+async fn run_git_command(
+    cwd: Option<&Path>,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<String, String> {
+    run_command_timed(cwd, "git", args, Some(timeout))
+        .await
+        .map_err(|error| {
+            if error.contains("超时") {
+                format!(
+                    "{error}。请检查 Win 访问 GitHub 是否需代理，或在本机代理执行: git {}",
+                    args.join(" ")
+                )
+            } else {
+                error
+            }
+        })
+}
+
+async fn run_command_timed(
+    cwd: Option<&Path>,
+    program: &str,
+    args: &[&str],
+    timeout: Option<Duration>,
+) -> Result<String, String> {
+    let (soft_timeout, hard_timeout) = command_timeouts(timeout);
+    let command_line = format_command(program, args);
     let mut command = Command::new(program);
     command
         .args(args)
@@ -2109,25 +2878,106 @@ async fn run_command(cwd: Option<&Path>, program: &str, args: &[&str]) -> Result
         .stderr(Stdio::piped())
         .env("CI", "1")
         .env("NO_COLOR", "1")
-        .env("TERM", "dumb");
+        .env("TERM", "dumb")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "Never");
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
-    let output = command
-        .output()
-        .await
+    let no_proxy_hosts = no_proxy_hosts_from_args(args);
+    append_no_proxy_env(&mut command, &no_proxy_hosts);
+
+    let mut child = command
+        .spawn()
         .map_err(|error| format!("无法启动 {program}: {error}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    if output.status.success() {
+    let pid = child
+        .id()
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let command_pid = child.id().unwrap_or_default();
+    if command_pid == 0 {
+        let _ = child.kill().await;
+        return Err(format!("执行 {command_line} 失败: 获取进程 ID 失败"));
+    }
+
+    let stdout_handle = child
+        .stdout
+        .take()
+        .map(|stream| tokio::spawn(collect_stream_output(stream)));
+    let stderr_handle = child
+        .stderr
+        .take()
+        .map(|stream| tokio::spawn(collect_stream_output_err(stream)));
+
+    let status = match time::timeout(soft_timeout, child.wait()).await {
+        Ok(result) => result.map_err(|error| format!("执行 {command_line} 失败: {error}"))?,
+        Err(_) => {
+            let mut hard_timed_out = false;
+            let hard_timed_out_first = hard_timeout > soft_timeout;
+            let killed = kill_process_tree(command_pid, hard_timed_out_first);
+            if hard_timeout > soft_timeout {
+                let remaining = hard_timeout.saturating_sub(soft_timeout);
+                match time::timeout(remaining, child.wait()).await {
+                    Ok(Ok(_)) => {}
+                    _ => {
+                        hard_timed_out = true;
+                        let _ = kill_process_tree(command_pid, true);
+                    }
+                }
+            }
+            let reason = if hard_timed_out {
+                "硬超时"
+            } else {
+                "软超时"
+            };
+            let stdout = if let Some(handle) = stdout_handle {
+                time::timeout(Duration::from_secs(2), handle)
+                    .await
+                    .ok()
+                    .and_then(|result| result.ok())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let stderr = if let Some(handle) = stderr_handle {
+                time::timeout(Duration::from_secs(2), handle)
+                    .await
+                    .ok()
+                    .and_then(|result| result.ok())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            return Err(format!(
+                "{reason}终止进程 (pid={pid})：{command_line} (软超时 {}s / 硬超时 {}s，已尝试杀死={killed})\nstdout:{}\nstderr:{}",
+                soft_timeout.as_secs(),
+                hard_timeout.as_secs(),
+                truncate(&stdout, 1000),
+                truncate(&stderr, 1000),
+            ));
+        }
+    };
+
+    let stdout = if let Some(handle) = stdout_handle {
+        handle.await.unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let stderr = if let Some(handle) = stderr_handle {
+        handle.await.unwrap_or_default()
+    } else {
+        String::new()
+    };
+    if status.success() {
         Ok(if stdout.trim().is_empty() {
             stderr
         } else {
             stdout
         })
     } else {
+        let exit_code = status.code().unwrap_or(-1);
         Err(format!(
-            "命令失败: {program} {}\n{}",
+            "命令失败: {command_line} (exit {exit_code})\nargs={}\n{}",
             args.join(" "),
             truncate(&stderr, 4000)
         ))
@@ -2178,12 +3028,7 @@ pub async fn agent_merge_task(
 
     let _ = run_command(Some(cwd), "git", &["fetch", "--all", "--prune"]).await;
     run_command(Some(cwd), "git", &["checkout", &branch]).await?;
-    let _ = run_command(
-        Some(cwd),
-        "git",
-        &["pull", "--ff-only", "origin", &branch],
-    )
-    .await;
+    let _ = run_command(Some(cwd), "git", &["pull", "--ff-only", "origin", &branch]).await;
 
     for branch_name in &subtask_branches {
         let merge_ref = resolve_merge_ref(cwd, branch_name).await?;
@@ -2244,9 +3089,12 @@ fn validate_task(task: &ExecuteTask) -> Result<(), String> {
         && !(repo_url.starts_with("https://")
             || repo_url.starts_with("http://")
             || repo_url.starts_with("git@")
+            || repo_url.starts_with("git://")
             || repo_url.starts_with("file://"))
     {
-        return Err("仓库地址必须是 HTTP(S)、SSH、file:// Git 地址，或留空使用本地目录".to_string());
+        return Err(
+            "仓库地址必须是 HTTP(S)、SSH、file:// Git 地址，或留空使用本地目录".to_string(),
+        );
     }
     for branch in [&task.base_branch, &task.work_branch] {
         if branch.is_empty()
@@ -2328,6 +3176,14 @@ mod tests {
     }
 
     #[test]
+    fn detects_cursor_electron_stub_output() {
+        assert!(looks_like_cursor_electron_stub(
+            "Warning: 'p' is not in the list of known options"
+        ));
+        assert!(!looks_like_cursor_electron_stub("done"));
+    }
+
+    #[test]
     fn task_lock_prevents_double_claim() {
         let slot = Mutex::new(None::<String>);
 
@@ -2365,5 +3221,29 @@ mod tests {
             }
         };
         assert!(third_claim);
+    }
+
+    #[test]
+    fn git_completion_mode_detects_pending_changes() {
+        assert_eq!(
+            determine_git_completion_mode(Some("abc"), Some("abc"), " M README.md\n"),
+            GitCompletionMode::CommitPendingChanges
+        );
+    }
+
+    #[test]
+    fn git_completion_mode_reuses_existing_commit_when_head_moves() {
+        assert_eq!(
+            determine_git_completion_mode(Some("abc"), Some("def"), ""),
+            GitCompletionMode::ReuseExistingCommit
+        );
+    }
+
+    #[test]
+    fn git_completion_mode_reports_no_changes_when_clean_and_same_head() {
+        assert_eq!(
+            determine_git_completion_mode(Some("abc"), Some("abc"), ""),
+            GitCompletionMode::NoChanges
+        );
     }
 }

@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { createApiClient } from './api-client.js';
 import { startTraeTaskWithComputerUse, openTraeWorkspace, submitTraeNewTask } from './computer-use.js';
 
 const execFileAsync = promisify(execFile);
@@ -16,6 +17,20 @@ interface SubTask {
   status: 'pending' | 'running' | 'completed' | 'failed';
   branch_name: string;
   progress: number;
+}
+
+interface DeviceTool {
+  toolName: 'codex' | 'trae' | 'cursor' | 'claude_code';
+  status: 'running' | 'idle' | 'not_installed';
+  currentTask?: string;
+}
+
+interface Device {
+  id: string;
+  name: string;
+  status: 'online' | 'offline' | 'connecting';
+  devTool: 'codex' | 'trae' | 'cursor' | 'claude_code';
+  tools: DeviceTool[];
 }
 
 interface Task {
@@ -33,20 +48,11 @@ const result = (value: unknown) => ({
   content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }],
 });
 
-const api = async <T>(path: string, options: RequestInit = {}): Promise<T> => {
-  if (!token) throw new Error('缺少 DEVFLEET_TOKEN，请在 MCP 环境变量中配置登录令牌');
-  const response = await fetch(`${apiBaseUrl}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-      ...options.headers,
-    },
-  });
-  const body = await response.json() as T & { error?: string };
-  if (!response.ok) throw new Error(body.error || `排比 Para API 请求失败 (${response.status})`);
-  return body;
-};
+const apiClient = createApiClient({ apiBaseUrl, token });
+const api = <T>(
+  path: string,
+  options: RequestInit & { allowGuestRefresh?: boolean } = {},
+): Promise<T> => apiClient.request<T>(path, options);
 
 server.registerTool('devfleet_list_devices', {
   title: '列出排比 Para 设备',
@@ -57,11 +63,10 @@ server.registerTool('devfleet_next_task', {
   title: '获取当前设备的待执行任务',
   description: 'Trae Agent 调用此工具获取排比 Para 派发给本设备的任务。返回任务标题、描述、工作分支等信息；无任务时返回 null。',
 }, async () => {
-  const response = await fetch(`${apiBaseUrl}/api/devices/me/pending-task`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  const body = await response.json() as { task?: Record<string, unknown> | null; error?: string };
-  if (!response.ok) throw new Error(body.error || `获取待执行任务失败 (${response.status})`);
+  const body = await api<{ task?: Record<string, unknown> | null }>(
+    '/api/devices/me/pending-task',
+    { allowGuestRefresh: false },
+  );
   return result(body.task);
 });
 
@@ -77,16 +82,11 @@ server.registerTool('devfleet_report_task_progress', {
     level: z.enum(['info', 'warn', 'error', 'debug']).default('info').describe('日志级别'),
   },
 }, async (input) => {
-  const response = await fetch(`${apiBaseUrl}/api/devices/me/task-report`, {
+  const body = await api<Record<string, unknown>>('/api/devices/me/task-report', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
     body: JSON.stringify(input),
+    allowGuestRefresh: false,
   });
-  const body = await response.json() as Record<string, unknown> & { error?: string };
-  if (!response.ok) throw new Error(body.error || `回写任务进度失败 (${response.status})`);
   return result(body);
 });
 
@@ -143,6 +143,56 @@ server.registerTool('devfleet_dispatch_task', {
   body: JSON.stringify(input),
 })));
 
+server.registerTool('devfleet_call_remote_codex', {
+  title: '调用远端设备 Codex CLI 完成任务',
+  description: '主设备 AI 的一键远端 Codex 入口：确认目标设备在线，将目标设备开发工具切到 codex，派发 prompt 到该设备本地 Codex CLI，等待完成，并可选在主设备合并分支。',
+  inputSchema: {
+    device_id: z.string().min(1).describe('目标工作设备 ID（通常是 Win32，来自 devfleet_list_devices）'),
+    prompt: z.string().min(1).describe('要交给远端 Codex CLI 执行的任务要求'),
+    title: z.string().default('远端 Codex 任务').describe('任务标题'),
+    repo_url: z.string().optional().describe('Git 仓库地址；留空则使用工作设备本地目录'),
+    branch: z.string().default('main').describe('基础分支'),
+    wait: z.boolean().default(true).describe('是否等待远端 Codex 子任务完成'),
+    timeout_seconds: z.number().int().min(5).max(3600).default(900).describe('等待远端任务完成的超时时间'),
+    merge: z.boolean().default(false).describe('完成后是否在主设备本地仓库合并远端分支'),
+    workspace_path: z.string().optional().describe('merge=true 时主设备本地仓库绝对路径'),
+    push: z.boolean().default(true).describe('merge=true 时是否推送基础分支'),
+  },
+}, async (input) => {
+  const device = await ensureRemoteCodexDevice(input.device_id);
+  const dispatch = await api<{ task: Task; subtask?: SubTask }>('/api/tasks', {
+    method: 'POST',
+    body: JSON.stringify({
+      title: input.title || '远端 Codex 任务',
+      prompt: input.prompt,
+      device_id: input.device_id,
+      repo_url: input.repo_url,
+      branch: input.branch || 'main',
+    }),
+  });
+
+  let finalTask = dispatch.task;
+  if (input.wait) {
+    finalTask = await waitForTask(dispatch.task.id, input.timeout_seconds || 900);
+  }
+
+  const mergeResult = input.merge
+    ? await mergeTaskBranches(dispatch.task.id, input.workspace_path || '', input.push ?? true)
+    : null;
+
+  return result({
+    success: input.wait ? ['completed', 'merged'].includes(finalTask.status) : true,
+    device: {
+      id: device.id,
+      name: device.name,
+      devTool: 'codex',
+    },
+    task: finalTask,
+    subtask: dispatch.subtask,
+    merge: mergeResult,
+  });
+});
+
 server.registerTool('devfleet_get_task', {
   title: '查询排比 Para 任务',
   description: '查询任务、各设备子任务、进度、分支和日志。',
@@ -157,14 +207,7 @@ server.registerTool('devfleet_wait_for_task', {
     timeout_seconds: z.number().int().min(5).max(3600).default(900),
   },
 }, async ({ task_id, timeout_seconds }) => {
-  const deadline = Date.now() + timeout_seconds * 1000;
-  let task: Task | null = null;
-  while (Date.now() < deadline) {
-    task = (await api<{ task: Task }>(`/api/tasks/${encodeURIComponent(task_id)}`)).task;
-    if (['completed', 'failed', 'merged'].includes(task.status)) return result(task);
-    await new Promise((resolve) => setTimeout(resolve, 3000));
-  }
-  throw new Error(`等待任务超时。最后状态: ${task?.status || 'unknown'}`);
+  return result(await waitForTask(task_id, timeout_seconds));
 });
 
 server.registerTool('devfleet_merge_task', {
@@ -176,6 +219,41 @@ server.registerTool('devfleet_merge_task', {
     push: z.boolean().default(true).describe('是否把合并后的基础分支推送到 origin'),
   },
 }, async ({ task_id, workspace_path, push }) => {
+  return result(await mergeTaskBranches(task_id, workspace_path, push));
+});
+
+async function waitForTask(taskId: string, timeoutSeconds: number): Promise<Task> {
+  const deadline = Date.now() + timeoutSeconds * 1000;
+  let task: Task | null = null;
+  while (Date.now() < deadline) {
+    task = (await api<{ task: Task }>(`/api/tasks/${encodeURIComponent(taskId)}`)).task;
+    if (['completed', 'failed', 'merged'].includes(task.status)) return task;
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+  }
+  throw new Error(`等待任务超时。最后状态: ${task?.status || 'unknown'}`);
+}
+
+async function ensureRemoteCodexDevice(deviceId: string): Promise<Device> {
+  const body = await api<{ devices: Device[] }>('/api/devices');
+  const device = body.devices.find((item) => item.id === deviceId);
+  if (!device) throw new Error(`目标设备不存在: ${deviceId}`);
+  if (device.status !== 'online') throw new Error(`目标设备未在线: ${device.name}`);
+  const codex = device.tools.find((tool) => tool.toolName === 'codex');
+  if (!codex || codex.status === 'not_installed') {
+    throw new Error(`目标设备 ${device.name} 未安装或未登录 Codex CLI`);
+  }
+  if (device.devTool !== 'codex') {
+    const updated = await api<{ device: Device }>(`/api/devices/${encodeURIComponent(deviceId)}/dev-tool`, {
+      method: 'PUT',
+      body: JSON.stringify({ devTool: 'codex' }),
+    });
+    return updated.device;
+  }
+  return device;
+}
+
+async function mergeTaskBranches(task_id: string, workspace_path: string, push: boolean) {
+  if (!workspace_path.trim()) throw new Error('merge=true 时必须提供 workspace_path');
   const task = (await api<{ task: Task }>(`/api/tasks/${encodeURIComponent(task_id)}`)).task;
   if (task.status !== 'completed') throw new Error(`任务尚未全部完成，当前状态: ${task.status}`);
   if (task.subTasks.some((subTask) => subTask.status !== 'completed')) throw new Error('仍有子任务未完成');
@@ -204,8 +282,8 @@ server.registerTool('devfleet_merge_task', {
     method: 'POST',
     body: JSON.stringify({ merge_commit_sha: commit }),
   });
-  return result({ success: true, task_id, branch: task.branch, commit, merged_branches: task.subTasks.map((item) => item.branch_name), pushed: push });
-});
+  return { success: true, task_id, branch: task.branch, commit, merged_branches: task.subTasks.map((item) => item.branch_name), pushed: push };
+}
 
 const git = async (cwd: string, args: string[]) => {
   try {
@@ -217,7 +295,18 @@ const git = async (cwd: string, args: string[]) => {
   }
 };
 
-const normalizeRepo = (value: string) => value.trim().replace(/\.git$/, '').replace(/^git@([^:]+):/, 'https://$1/').replace(/\/$/, '').toLowerCase();
+const normalizeRepo = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  const withoutFileScheme = trimmed.startsWith('file://')
+    ? trimmed.replace(/^file:\/\//i, '')
+    : trimmed;
+  return withoutFileScheme
+    .replace(/\.git$/, '')
+    .replace(/^git@([^:]+):/, 'https://$1/')
+    .replace(/\/$/, '')
+    .toLowerCase();
+};
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

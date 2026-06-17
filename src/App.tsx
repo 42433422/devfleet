@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { HashRouter as Router, Routes, Route, Navigate, Link } from 'react-router-dom';
 import { useAuthStore } from '@/store/auth';
 import { wsClient } from '@/lib/websocket';
@@ -7,13 +7,13 @@ import { isDesktopApp } from '@/lib/agent';
 import { autoFixLocalApiUrl, waitForServerReady } from '@/lib/serverAddress';
 import { recoverDesktopBackend, startDesktopBackendMonitor } from '@/lib/desktopServer';
 import Sidebar from '@/components/Sidebar';
-import Login from '@/pages/Login';
 import Devices from '@/pages/Devices';
 import Tasks from '@/pages/Tasks';
 import TaskDetail from '@/pages/TaskDetail';
 import Agent from '@/pages/Agent';
 import Integration from '@/pages/Integration';
 import SupportedToolsCorner from '@/components/SupportedToolsCorner';
+import { resetDevApiBasePick } from '@/lib/api';
 import { PRODUCT_NAME } from '@/lib/brand';
 
 function AppShell({ children }: { children: React.ReactNode }) {
@@ -27,21 +27,24 @@ function AppShell({ children }: { children: React.ReactNode }) {
 
 function Protected({ children }: { children: React.ReactNode }) {
   const { token, guestLogin } = useAuthStore();
-  const [loading, setLoading] = useState(!token);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const connectOnce = useRef(false);
 
   useEffect(() => {
-    if (token) return;
+    if (connectOnce.current) return;
+    connectOnce.current = true;
+
     setError('');
     const connect = async () => {
       if (isDesktopApp()) {
-        const ready = await waitForServerReady({ maxWaitMs: 60_000, intervalMs: 500 });
+        const ready = await waitForServerReady({ maxWaitMs: 30_000, intervalMs: 500 });
         if (!ready) {
           const recovered = await recoverDesktopBackend();
           if (!recovered) {
             const fixed = await autoFixLocalApiUrl();
             if (!fixed) {
-              const retry = await waitForServerReady({ maxWaitMs: 15_000, intervalMs: 500 });
+              const retry = await waitForServerReady({ maxWaitMs: 10_000, intervalMs: 500 });
               if (!retry) {
                 throw new Error(
                   `本机 ${PRODUCT_NAME} 服务未在 ${DEFAULT_API_BASE} 就绪。请完全退出后重新打开应用；若仍失败，查看 ~/Library/Application Support/com.devfleet.desktop/devfleet-server.log`,
@@ -58,7 +61,7 @@ function Protected({ children }: { children: React.ReactNode }) {
         setError(err instanceof Error ? err.message : `无法连接 ${PRODUCT_NAME} 服务`);
       })
       .finally(() => setLoading(false));
-  }, [token, guestLogin]);
+  }, [guestLogin]);
 
   if (loading) {
     return (
@@ -72,8 +75,8 @@ function Protected({ children }: { children: React.ReactNode }) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-bg-primary p-6">
         <div className="max-w-md w-full bg-zinc-900/70 border border-zinc-800 rounded-2xl p-6 text-center">
-          <h2 className="text-lg font-semibold text-white mb-2">无法自动进入</h2>
-          <p className="text-sm text-zinc-400 mb-1">{error || '访客登录失败'}</p>
+          <h2 className="text-lg font-semibold text-white mb-2">无法连接服务</h2>
+          <p className="text-sm text-zinc-400 mb-1">{error || '自动进入失败'}</p>
           <p className="text-xs text-zinc-600 mb-4">请确认 {PRODUCT_NAME} 服务端已启动（默认 {DEFAULT_API_BASE}）</p>
           <div className="flex flex-col gap-2">
             <button
@@ -82,9 +85,11 @@ function Protected({ children }: { children: React.ReactNode }) {
               onClick={() => {
                 setLoading(true);
                 setError('');
+                connectOnce.current = false;
+                resetDevApiBasePick();
                 const retry = async () => {
                   if (isDesktopApp()) {
-                    await waitForServerReady({ maxWaitMs: 15_000 });
+                    await waitForServerReady({ maxWaitMs: 10_000 });
                     await autoFixLocalApiUrl();
                   }
                   await guestLogin();
@@ -96,9 +101,6 @@ function Protected({ children }: { children: React.ReactNode }) {
             >
               重试连接
             </button>
-            <Link to="/login" className="w-full py-2.5 bg-zinc-800 text-zinc-200 rounded-lg text-sm">
-              前往登录 / 配置服务器
-            </Link>
             <Link to="/agent" className="text-xs text-zinc-500 hover:text-brand">
               打开本机设备代理
             </Link>
@@ -141,7 +143,7 @@ export default function App() {
       <WSConnector />
       <SupportedToolsCorner />
       <Routes>
-        <Route path="/login" element={<Login />} />
+        <Route path="/login" element={<Navigate to="/devices" replace />} />
         <Route path="/agent" element={<Agent />} />
         <Route path="/devices" element={<Protected><Devices /></Protected>} />
         <Route path="/tasks" element={<Protected><Tasks /></Protected>} />

@@ -6,7 +6,7 @@
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createWriteStream, existsSync, mkdirSync, rmSync, chmodSync, cpSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
@@ -127,17 +127,42 @@ const copyNativePackages = () => {
   }
 };
 
-const resolveNpmCli = () => {
+const resolveNodeGypCli = () => {
   const candidates = process.platform === 'win32'
     ? [
-        join(runtimeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js'),
-        join(runtimeDir, 'npm', 'bin', 'npm-cli.js'),
+        join(runtimeDir, 'node_modules', 'npm', 'node_modules', 'node-gyp', 'bin', 'node-gyp.js'),
+        join(runtimeDir, 'npm', 'node_modules', 'node-gyp', 'bin', 'node-gyp.js'),
       ]
     : [
-        join(runtimeDir, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
-        join(runtimeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+        join(runtimeDir, 'lib', 'node_modules', 'npm', 'node_modules', 'node-gyp', 'bin', 'node-gyp.js'),
+        join(runtimeDir, 'node_modules', 'npm', 'node_modules', 'node-gyp', 'bin', 'node-gyp.js'),
       ];
   return candidates.find((candidate) => existsSync(candidate));
+};
+
+const nativeBuildEnv = (nodeBin) => {
+  const env = { ...process.env };
+  for (const key of [
+    'npm_config_nodedir',
+    'NPM_CONFIG_NODEDIR',
+    'npm_config_node_gyp',
+    'NPM_CONFIG_NODE_GYP',
+    'npm_config_runtime',
+    'NPM_CONFIG_RUNTIME',
+    'npm_config_target',
+    'NPM_CONFIG_TARGET',
+    'npm_config_disturl',
+    'NPM_CONFIG_DISTURL',
+  ]) {
+    delete env[key];
+  }
+
+  env.npm_config_build_from_source = 'true';
+  env.npm_config_runtime = 'node';
+  env.npm_config_target = NODE_VERSION;
+  env.npm_config_disturl = 'https://nodejs.org/download/release';
+  env.PATH = `${dirname(nodeBin)}${delimiter}${env.PATH || ''}`;
+  return env;
 };
 
 const rebuildBetterSqlite3 = (nodeBin) => {
@@ -153,30 +178,41 @@ const rebuildBetterSqlite3 = (nodeBin) => {
     execFileSync(
       nodeBin,
       [prebuildInstall, '--runtime', 'node', '--target', NODE_VERSION, '--arch', nodeArch()],
-      { cwd: betterSqlite3Dir, stdio: 'inherit' },
+      { cwd: betterSqlite3Dir, stdio: 'inherit', env: nativeBuildEnv(nodeBin) },
     );
     return;
   }
 
-  const npmCli = resolveNpmCli();
-  if (!npmCli) {
-    throw new Error(`缺少 npm-cli（已检查 bundled runtime 内 npm 路径）`);
+  const nodeGypCli = resolveNodeGypCli();
+  if (!nodeGypCli) {
+    throw new Error(`缺少 node-gyp（已检查 bundled runtime 内 npm 路径）`);
   }
-  console.log(`Rebuilding better-sqlite3 with ${nodeBin}`);
-  execFileSync(nodeBin, [npmCli, 'rebuild', '--build-from-source', 'better-sqlite3'], {
-    cwd: betterSqlite3Dir,
-    stdio: 'inherit',
-    env: {
-      ...process.env,
-      npm_config_build_from_source: 'true',
+
+  console.log(`Rebuilding better-sqlite3 with ${nodeBin} for node ${NODE_VERSION}`);
+  execFileSync(
+    nodeBin,
+    [
+      nodeGypCli,
+      'rebuild',
+      '--release',
+      `--target=${NODE_VERSION}`,
+      '--dist-url=https://nodejs.org/download/release',
+    ],
+    {
+      cwd: betterSqlite3Dir,
+      stdio: 'inherit',
+      env: nativeBuildEnv(nodeBin),
     },
-  });
+  );
 };
 
 const verifyBundle = (nodeBin) => {
   execFileSync(
     nodeBin,
-    ['-e', "require('better-sqlite3'); console.log('better-sqlite3 ok');"],
+    [
+      '-e',
+      "const Database = require('better-sqlite3'); const db = new Database(':memory:'); db.exec('select 1'); db.close(); console.log('better-sqlite3 native ok');",
+    ],
     {
       cwd: distServer,
       stdio: 'inherit',

@@ -8,6 +8,7 @@ import {
   areDependenciesMet,
   isSubBlocked,
   parseDependsOn,
+  reapStaleRunningSubtasks,
 } from '../api/lib/dispatch.js';
 import { splitTaskIntoSubs } from '../api/lib/utils.js';
 
@@ -53,6 +54,78 @@ test('parseDependsOn 支持数组与 JSON 字符串', () => {
   assert.deepEqual(parseDependsOn(['a', 'b']), ['a', 'b']);
   assert.deepEqual(parseDependsOn('["x"]'), ['x']);
   assert.deepEqual(parseDependsOn('invalid'), []);
+});
+
+test('run 超时的 running 子任务会被回收为重试/失败', async () => {
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'devfleet-stale-subtask-'));
+  process.env.DEVFLEET_DB_FILE = path.join(tempDir, 'devfleet.db');
+  process.env.JWT_SECRET = 'dispatch-reaper-test';
+  const prevStaleMs = process.env.DEVFLEET_SUBTASK_STALE_MS;
+  const prevDbFile = process.env.DEVFLEET_DB_FILE;
+  const prevJwtSecret = process.env.JWT_SECRET;
+  process.env.DEVFLEET_SUBTASK_STALE_MS = '1000';
+
+  try {
+    const { db } = await import('../api/db/store.js');
+    const { getDatabase } = await import('../api/db/sqlite.js');
+    const user = db.users.create({ email: 'reaper@test.local', password_hash: 'x', is_guest: false });
+    const device = db.devices.create({
+      user_id: user.id,
+      name: 'reaper-device',
+      status: 'online',
+      capabilities: JSON.stringify({}),
+      dev_tool: 'codex',
+    });
+    const task = db.tasks.create({
+      user_id: user.id,
+      title: 'reaper-task',
+      description: 'reaper',
+      status: 'running',
+      repo_url: '',
+      branch: 'main',
+    });
+    const subtask = db.subTasks.create({
+      task_id: task.id,
+      device_id: device.id,
+      tool_name: 'codex',
+      status: 'running',
+      branch_name: 'devfleet/reaper',
+      title: '卡死重放',
+      progress: 40,
+    });
+
+    const old = new Date(Date.now() - 2000).toISOString();
+    getDatabase().prepare('UPDATE sub_tasks SET updated_at = ? WHERE id = ?').run(old, subtask.id);
+
+    const reclaimed = reapStaleRunningSubtasks();
+    assert.equal(reclaimed, 1);
+
+    const updated = db.subTasks.findById(subtask.id);
+    assert.ok(updated);
+    assert.equal(updated!.status, 'failed');
+    assert.equal(updated!.attempt_count, 1);
+    assert.ok(updated!.last_error?.startsWith('任务运行超时'));
+  } finally {
+    if (prevStaleMs === undefined) {
+      delete process.env.DEVFLEET_SUBTASK_STALE_MS;
+    } else {
+      process.env.DEVFLEET_SUBTASK_STALE_MS = prevStaleMs;
+    }
+    if (prevDbFile === undefined) {
+      delete process.env.DEVFLEET_DB_FILE;
+    } else {
+      process.env.DEVFLEET_DB_FILE = prevDbFile;
+    }
+    if (prevJwtSecret === undefined) {
+      delete process.env.JWT_SECRET;
+    } else {
+      process.env.JWT_SECRET = prevJwtSecret;
+    }
+
+    const { closeDatabase } = await import('../api/db/sqlite.js');
+    closeDatabase();
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });
 
 test('schema upgrades 写入 capabilities 与 depends_on', async () => {

@@ -274,16 +274,21 @@ router.post('/bind', async (req: Request, res: Response): Promise<void> => {
   const userId = req.user!.id;
   const { name } = (req.body || {}) as { name?: string };
   const deviceName = (name || '新设备').toString().trim() || '新设备';
-  const device = db.devices.create({
-    user_id: userId,
-    name: deviceName,
-    bind_code: genBindCode(),
-    bind_code_expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
-    status: 'offline',
-    activated: false,
-    dev_tool: 'trae',
-  });
-  res.status(200).json({ bindCode: device.bind_code, deviceId: device.id, expiresAt: device.bind_code_expires_at });
+  try {
+    const device = db.devices.create({
+      user_id: userId,
+      name: deviceName,
+      bind_code: genBindCode(),
+      bind_code_expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+      status: 'offline',
+      activated: false,
+      dev_tool: 'trae',
+    });
+    res.status(200).json({ bindCode: device.bind_code, deviceId: device.id, expiresAt: device.bind_code_expires_at });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '创建设备失败';
+    res.status(500).json({ error: message });
+  }
 });
 
 router.post('/:id/connect', async (req: Request, res: Response): Promise<void> => {

@@ -71,11 +71,13 @@ CREATE TABLE IF NOT EXISTS sub_tasks (
   max_attempts INTEGER NOT NULL DEFAULT 2,
   last_error TEXT,
   created_at TEXT NOT NULL,
-  completed_at TEXT
+  completed_at TEXT,
+  updated_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_sub_tasks_task_id ON sub_tasks(task_id);
 CREATE INDEX IF NOT EXISTS idx_sub_tasks_device_id ON sub_tasks(device_id);
+CREATE INDEX IF NOT EXISTS idx_sub_tasks_updated_at ON sub_tasks(updated_at);
 
 CREATE TABLE IF NOT EXISTS log_entries (
   id TEXT PRIMARY KEY,

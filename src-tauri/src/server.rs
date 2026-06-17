@@ -55,8 +55,7 @@ pub fn cold_start_desktop_api(app: &AppHandle) -> Result<(), String> {
     })?;
     enforce_single_instance(&data_dir);
     stop_child(app);
-    purge_orphan_devfleet_api_processes(None);
-    kill_stale_listeners_on_port(EMBEDDED_API_PORT, None);
+    force_clear_port_for_embedded(None);
 
     let child = start_embedded_server(app).map_err(|error| {
         store_cold_start_error(&error);
@@ -103,8 +102,7 @@ pub fn shutdown_embedded_server(app: &AppHandle) {
 pub fn restart_embedded_server(app: &AppHandle) {
     log::info!("[DevFleet] manual embedded server restart requested");
     stop_child(app);
-    purge_orphan_devfleet_api_processes(None);
-    kill_stale_listeners_on_port(EMBEDDED_API_PORT, None);
+    force_clear_port_for_embedded(None);
     match start_embedded_server(app) {
         Ok(child) => {
             if let Some(state) = app.try_state::<EmbeddedServer>() {
@@ -256,8 +254,7 @@ fn stop_child(app: &AppHandle) {
 
 fn shutdown_embedded_api(app: &AppHandle) {
     stop_child(app);
-    purge_orphan_devfleet_api_processes(None);
-    kill_stale_listeners_on_port(EMBEDDED_API_PORT, None);
+    force_clear_port_for_embedded(None);
 }
 
 fn child_pid(app: &AppHandle) -> Option<u32> {
@@ -290,6 +287,10 @@ fn kill_stale_listeners_on_port(port: u16, except_pid: Option<u32>) {
                 libc::kill(pid as i32, libc::SIGTERM);
             }
             thread::sleep(Duration::from_millis(200));
+            unsafe {
+                libc::kill(pid as i32, libc::SIGKILL);
+            }
+            thread::sleep(Duration::from_millis(100));
         }
     }
     #[cfg(windows)]
@@ -350,29 +351,50 @@ pub fn retry_cold_start(app: AppHandle) -> Result<(), String> {
 }
 
 fn server_healthy() -> bool {
+    health_payload()
+        .map(|body| {
+            body.get("embedded")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+                && body
+                    .get("success")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false)
+        })
+        .unwrap_or(false)
+}
+
+fn health_payload() -> Option<serde_json::Value> {
     const HEALTH_URL: &str = "http://127.0.0.1:3001/api/health";
-    let client = match reqwest::blocking::Client::builder()
+    let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_millis(2000))
         .build()
-    {
-        Ok(client) => client,
-        Err(_) => return false,
-    };
-    let Ok(response) = client.get(HEALTH_URL).send() else {
-        return false;
-    };
+        .ok()?;
+    let response = client.get(HEALTH_URL).send().ok()?;
     if !response.status().is_success() {
-        return false;
+        return None;
     }
-    let Ok(body) = response.json::<serde_json::Value>() else {
-        return false;
-    };
-    body.get("embedded")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false)
-        && body.get("success")
-            .and_then(|value| value.as_bool())
-            .unwrap_or(false)
+    response.json::<serde_json::Value>().ok()
+}
+
+/// 冷启动前释放 3001：杀孤儿内嵌进程、开发态 tsx/nodemon，以及占用端口但 embedded=false 的 API。
+fn force_clear_port_for_embedded(except_pid: Option<u32>) {
+    purge_orphan_devfleet_api_processes(except_pid);
+    purge_processes_matching("nodemon", except_pid);
+    purge_processes_matching("concurrently", except_pid);
+    kill_stale_listeners_on_port(EMBEDDED_API_PORT, except_pid);
+    if health_payload().and_then(|body| body.get("embedded").and_then(|value| value.as_bool()))
+        == Some(false)
+    {
+        log::warn!(
+            "[DevFleet] port {EMBEDDED_API_PORT} has non-embedded API (dev tsx/nodemon); clearing"
+        );
+        purge_orphan_devfleet_api_processes(except_pid);
+        purge_processes_matching("tsx api/server", except_pid);
+        purge_processes_matching("api/server.ts", except_pid);
+        purge_processes_matching("nodemon", except_pid);
+        kill_stale_listeners_on_port(EMBEDDED_API_PORT, except_pid);
+    }
 }
 
 fn enforce_single_instance(data_dir: &Path) {
@@ -423,11 +445,16 @@ fn terminate_process(pid: i32) {
 }
 
 fn purge_orphan_devfleet_api_processes(except_pid: Option<u32>) {
+    purge_processes_matching("devfleet-server.cjs", except_pid);
+    // 开发态 npm run server / tsx 占 3001 会导致内嵌 API 无法绑定且 health embedded=false
+    purge_processes_matching("tsx api/server", except_pid);
+    purge_processes_matching("api/server.ts", except_pid);
+}
+
+fn purge_processes_matching(pattern: &str, except_pid: Option<u32>) {
     #[cfg(unix)]
     {
-        let output = StdCommand::new("pgrep")
-            .args(["-f", "devfleet-server.cjs"])
-            .output();
+        let output = StdCommand::new("pgrep").args(["-f", pattern]).output();
         let Ok(output) = output else {
             return;
         };
@@ -441,18 +468,17 @@ fn purge_orphan_devfleet_api_processes(except_pid: Option<u32>) {
             if except_pid == Some(pid as u32) {
                 continue;
             }
-            log::warn!("[DevFleet] stopping orphan devfleet-server pid {pid}");
+            log::warn!("[DevFleet] stopping orphan process ({pattern}) pid {pid}");
             terminate_process(pid);
         }
     }
     #[cfg(windows)]
     {
+        let ps = format!(
+            "Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -like '*{pattern}*' }} | Select-Object -ExpandProperty ProcessId"
+        );
         let output = StdCommand::new("powershell")
-            .args([
-                "-NoProfile",
-                "-Command",
-                "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*devfleet-server.cjs*' } | Select-Object -ExpandProperty ProcessId",
-            ])
+            .args(["-NoProfile", "-Command", &ps])
             .output();
         if let Ok(output) = output {
             for line in String::from_utf8_lossy(&output.stdout).lines() {
@@ -462,7 +488,7 @@ fn purge_orphan_devfleet_api_processes(except_pid: Option<u32>) {
                 if except_pid == Some(pid as u32) {
                     continue;
                 }
-                log::warn!("[DevFleet] stopping orphan devfleet-server pid {pid}");
+                log::warn!("[DevFleet] stopping orphan process ({pattern}) pid {pid}");
                 terminate_process(pid);
             }
         }
@@ -471,7 +497,10 @@ fn purge_orphan_devfleet_api_processes(except_pid: Option<u32>) {
 
 fn validate_embedded_bundle(server_dir: &Path) -> Result<(), String> {
     if !server_dir.join("devfleet-server.cjs").is_file() {
-        return Err(format!("缺少 {}", server_dir.join("devfleet-server.cjs").display()));
+        return Err(format!(
+            "缺少 {}",
+            server_dir.join("devfleet-server.cjs").display()
+        ));
     }
     if resolve_bundled_node(server_dir).is_none() {
         return Err(format!(
@@ -534,7 +563,14 @@ fn log_last_server_error(app: &AppHandle) {
     let Ok(raw) = std::fs::read_to_string(&log_path) else {
         return;
     };
-    let tail: String = raw.lines().rev().take(8).collect::<Vec<_>>().into_iter().rev().collect();
+    let tail: String = raw
+        .lines()
+        .rev()
+        .take(8)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     if !tail.is_empty() {
         log::warn!("[DevFleet] embedded server log tail:\n{tail}");
     }
@@ -542,10 +578,7 @@ fn log_last_server_error(app: &AppHandle) {
 
 fn start_embedded_server(app: &AppHandle) -> Result<Child, String> {
     let script = resolve_server_script(app).ok_or_else(|| macos_resource_install_hint(app))?;
-    let server_dir = script
-        .parent()
-        .ok_or("无效 server 目录")?
-        .to_path_buf();
+    let server_dir = script.parent().ok_or("无效 server 目录")?.to_path_buf();
     validate_embedded_bundle(&server_dir)?;
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let db_file = data_dir.join("devfleet.db");
@@ -569,28 +602,46 @@ fn start_embedded_server(app: &AppHandle) -> Result<Child, String> {
         .arg(&script)
         .env_clear()
         .env("PORT", "3001")
+        .env("DEVFLEET_HOST", "0.0.0.0")
         .env("DEVFLEET_DESKTOP", "1")
         .env("DEVFLEET_DATA_DIR", data_dir.to_string_lossy().into_owned())
         .env("DEVFLEET_DB_FILE", db_file.to_string_lossy().into_owned())
         .env("NODE_PATH", node_modules.to_string_lossy().into_owned());
 
-    command.spawn().map_err(|error| {
-        let msg = format!("spawn 失败: {error}");
-        if let Ok(mut file) = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(data_dir.join("devfleet-server.log"))
-        {
-            let _ = writeln!(file, "[DevFleet] {msg}");
-        }
-        msg
-    }).inspect(|_| {
-        log::info!("[DevFleet] starting embedded API server on http://127.0.0.1:3001");
-    })
+    command
+        .spawn()
+        .map_err(|error| {
+            let msg = format!("spawn 失败: {error}");
+            if let Ok(mut file) = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(data_dir.join("devfleet-server.log"))
+            {
+                let _ = writeln!(file, "[DevFleet] {msg}");
+            }
+            msg
+        })
+        .inspect(|_| {
+            log::info!(
+                "[DevFleet] starting embedded API server on http://0.0.0.0:3001 (LAN enabled)"
+            );
+        })
 }
 
 fn resolve_server_script(app: &AppHandle) -> Option<PathBuf> {
-    resolve_bundled_resource(app, "server/devfleet-server.cjs")
+    #[cfg(debug_assertions)]
+    {
+        let dev =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../dist-server/devfleet-server.cjs");
+        if dev.is_file() {
+            log::info!("[DevFleet] using dev server bundle: {}", dev.display());
+            return Some(dev);
+        }
+    }
+    if let Some(path) = resolve_bundled_resource(app, "server/devfleet-server.cjs") {
+        return Some(path);
+    }
+    None
 }
 
 #[cfg(target_os = "macos")]

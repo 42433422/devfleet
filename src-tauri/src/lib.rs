@@ -8,8 +8,8 @@ mod server;
 use std::net::TcpStream;
 use std::time::Duration;
 
-use tauri::{Manager, RunEvent};
 use tauri::webview::WebviewWindowBuilder;
+use tauri::{Manager, RunEvent};
 use tauri_utils::config::WebviewUrl;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -50,7 +50,9 @@ pub fn run() {
                 .build()?;
 
             if cold_start_ok {
-                start_desktop_services(app.handle())?;
+                if let Err(error) = start_desktop_services(app.handle()) {
+                    log::warn!("[DevFleet] desktop services deferred: {error}");
+                }
             }
 
             let app_handle = app.handle().clone();
@@ -93,7 +95,7 @@ pub fn run() {
 fn resolve_webview_url(app: &tauri::App) -> WebviewUrl {
     if cfg!(debug_assertions) {
         if let Some(dev_url) = app.config().build.dev_url.clone() {
-            if dev_server_available(&dev_url) {
+            if wait_for_dev_server(&dev_url) {
                 return WebviewUrl::External(dev_url);
             }
             log::warn!(
@@ -104,10 +106,26 @@ fn resolve_webview_url(app: &tauri::App) -> WebviewUrl {
     WebviewUrl::App("index.html".into())
 }
 
+fn wait_for_dev_server(dev_url: &url::Url) -> bool {
+    for attempt in 0..20 {
+        if dev_server_available(dev_url) {
+            return true;
+        }
+        if attempt < 19 {
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    }
+    false
+}
+
 fn dev_server_available(dev_url: &url::Url) -> bool {
     let host = dev_url.host_str().unwrap_or("127.0.0.1");
     let port = dev_url.port().unwrap_or(5173);
-    let host = if host == "localhost" { "127.0.0.1" } else { host };
+    let host = if host == "localhost" {
+        "127.0.0.1"
+    } else {
+        host
+    };
     let addr: std::net::SocketAddr = match format!("{host}:{port}").parse() {
         Ok(addr) => addr,
         Err(_) => return false,
