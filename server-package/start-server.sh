@@ -8,4 +8,10 @@ fi
 export JWT_SECRET="$(cat "$ROOT/data/jwt-secret.txt")"
 export DEVFLEET_DB_FILE="$ROOT/data/db.json"
 export PORT="${PORT:-3001}"
-exec node "$ROOT/devfleet-server.cjs"
+NODE_BIN="$ROOT/runtime/bin/node"
+if [ -f "$NODE_BIN" ]; then
+  chmod +x "$NODE_BIN" 2>/dev/null || true
+else
+  NODE_BIN="$(command -v node)"
+fi
+exec "$NODE_BIN" "$ROOT/devfleet-server.cjs"

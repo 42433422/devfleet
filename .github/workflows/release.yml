@@ -66,12 +66,6 @@ jobs:
           npm run mcp:build
           Copy-Item README.md dist-mcp\README.md
           Compress-Archive -Path dist-mcp\* -DestinationPath devfleet-mcp.zip -Force
-          npm run server:build
-          New-Item -ItemType Directory -Force -Path dist-server\package | Out-Null
-          Copy-Item server-package\* dist-server\package\ -Recurse -Force
-          Copy-Item dist-server\devfleet-server.cjs dist-server\package\ -Force
-          Copy-Item dist-server\node_modules dist-server\package\ -Recurse -Force
-          Compress-Archive -Path dist-server\package\* -DestinationPath devfleet-server.zip -Force
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
@@ -92,7 +86,7 @@ jobs:
             - **Windows**: 下载 `.msi` 或 `-setup.exe` 安装包
             - **Linux**: 下载 .AppImage 或 .deb 包运行
             - **Trae / Codex / Cursor MCP**: 下载 `devfleet-mcp.zip`
-            - **自托管服务端**: 下载 `devfleet-server.zip`（Node.js 20.19+）或使用仓库中的 Docker Compose
+            - **自托管服务端**: 下载与系统匹配的 `devfleet-server-<platform>.zip`（已内置 Node.js 22）或使用仓库中的 Docker Compose
 
             ### 新功能
             - 一次性绑定码和独立设备令牌
@@ -103,9 +97,45 @@ jobs:
           prerelease: false
           args: ${{ matrix.args }}
 
+      - name: Package server bundle
+        shell: pwsh
+        run: |
+          $platform = "${{ matrix.platform }}"
+          $args = "${{ matrix.args }}"
+          if ($platform -eq "windows-2022") {
+            $suffix = "windows-x64"
+          } elseif ($platform -eq "ubuntu-22.04") {
+            $suffix = "linux-x64"
+          } elseif ($args -like "*aarch64*") {
+            $suffix = "macos-arm64"
+          } else {
+            $suffix = "macos-x64"
+          }
+
+          $packageDir = Join-Path "dist-server" "package-$suffix"
+          Remove-Item -Recurse -Force $packageDir -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+          Copy-Item "server-package/*" $packageDir -Recurse -Force
+          Copy-Item "dist-server/devfleet-server.cjs" $packageDir -Force
+          Copy-Item "dist-server/node_modules" $packageDir -Recurse -Force
+          Copy-Item "dist-server/runtime" $packageDir -Recurse -Force
+
+          $zipName = "devfleet-server-$suffix.zip"
+          Remove-Item -Force $zipName -ErrorAction SilentlyContinue
+          Compress-Archive -Path (Join-Path $packageDir "*") -DestinationPath $zipName -Force
+          "SERVER_ZIP=$zipName" | Out-File -FilePath $env:GITHUB_ENV -Append
+
       - name: Upload MCP package
         if: startsWith(matrix.platform, 'windows')
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" devfleet-mcp.zip devfleet-server.zip --clobber
+        run: |
+          gh release delete-asset "${{ github.ref_name }}" devfleet-server.zip -y || true
+          gh release upload "${{ github.ref_name }}" devfleet-mcp.zip --clobber
+
+      - name: Upload server package
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" "$SERVER_ZIP" --clobber
