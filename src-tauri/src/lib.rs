@@ -17,6 +17,9 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             app.manage(server::EmbeddedServer::default());
+            if let Err(error) = server::cold_start_desktop_api(app.handle()) {
+                log::error!("[DevFleet] {error}");
+            }
             server::ensure_server_running(app.handle());
 
             let win = &app.config().app.windows[0];

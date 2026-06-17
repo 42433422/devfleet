@@ -70,11 +70,15 @@ app.use('/api/tasks', tasksRoutes);
 app.use('/api/tunnel', tunnelRoutes);
 
 app.get('/api/health', (req: Request, res: Response): void => {
-  res.status(200).json({ success: true, message: 'ok' });
+  res.status(200).json({
+    success: true,
+    message: 'ok',
+    embedded: process.env.DEVFLEET_DESKTOP === '1',
+    pid: process.pid,
+  });
 });
 
 app.use((error: Error, req: Request, res: Response, next: NextFunction): void => {
-  void next;
   if (error.message === 'CORS origin not allowed') {
     res.status(403).json({ success: false, error: 'CORS origin not allowed' });
     return;

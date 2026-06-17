@@ -162,8 +162,19 @@ fn which_executable(binary: &str) -> Option<String> {
     }
 }
 
-/// 后台启动子进程，避免 macOS 从 GUI 应用拉起时弹出 Terminal 窗口。
-/// stderr 由调用方自行配置（例如写入 devfleet-server.log）。
+/// 内嵌 API 子进程：无 setsid，随 DevFleet 主进程退出；不弹 Terminal。
+pub fn configure_embedded_server_command(command: &mut Command) {
+    command.stdin(Stdio::null());
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+}
+
+/// 其他后台子进程（仍隐藏窗口；Unix 下 setsid 与主进程分离）。
 pub fn configure_hidden_command(command: &mut Command) {
     command.stdin(Stdio::null()).stdout(Stdio::null());
 

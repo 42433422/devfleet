@@ -9,7 +9,9 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Manager};
 
-use crate::process_util::{configure_hidden_command, resolve_bundled_node, resolve_node_executable};
+use crate::process_util::{
+    configure_embedded_server_command, resolve_bundled_node, resolve_node_executable,
+};
 
 const EMBEDDED_API_PORT: u16 = 3001;
 
@@ -34,35 +36,66 @@ pub fn ensure_server_running(app: &AppHandle) {
     thread::spawn(move || watchdog_loop(handle));
 }
 
+/// 冷启动：清孤儿进程、占端口、同步拉起 API，窗口打开前必须成功。
+pub fn cold_start_desktop_api(app: &AppHandle) -> Result<(), String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+    enforce_single_instance(&data_dir);
+    purge_orphan_devfleet_api_processes(None);
+    kill_stale_listeners_on_port(EMBEDDED_API_PORT, None);
+
+    let child = start_embedded_server(app)?;
+    if let Some(state) = app.try_state::<EmbeddedServer>() {
+        if let Ok(mut guard) = state.0.lock() {
+            *guard = Some(child);
+        }
+    }
+
+    for _ in 0..360 {
+        if server_healthy() && has_child(app) {
+            log::info!("[DevFleet] embedded API cold start OK");
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+    log_last_server_error(app);
+    Err(format!(
+        "内嵌 API 在 {EMBEDDED_API_PORT} 未就绪（90s 超时）。请查看 {}",
+        data_dir.join("devfleet-server.log").display()
+    ))
+}
+
 pub fn shutdown_embedded_server(app: &AppHandle) {
     SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
-    stop_child(app);
+    shutdown_embedded_api(app);
 }
 
 pub fn restart_embedded_server(app: &AppHandle) {
     log::info!("[DevFleet] manual embedded server restart requested");
     stop_child(app);
+    purge_orphan_devfleet_api_processes(None);
     kill_stale_listeners_on_port(EMBEDDED_API_PORT, None);
-    if let Some(child) = start_embedded_server(app) {
-        if let Some(state) = app.try_state::<EmbeddedServer>() {
-            if let Ok(mut guard) = state.0.lock() {
-                *guard = Some(child);
+    match start_embedded_server(app) {
+        Ok(child) => {
+            if let Some(state) = app.try_state::<EmbeddedServer>() {
+                if let Ok(mut guard) = state.0.lock() {
+                    *guard = Some(child);
+                }
             }
-        }
-        for _ in 0..120 {
-            thread::sleep(Duration::from_millis(250));
-            if server_healthy() {
-                log::info!("[DevFleet] embedded API server restarted");
-                return;
+            for _ in 0..120 {
+                thread::sleep(Duration::from_millis(250));
+                if server_healthy() {
+                    log::info!("[DevFleet] embedded API server restarted");
+                    return;
+                }
             }
+            log_last_server_error(app);
         }
-        log_last_server_error(app);
+        Err(error) => log::error!("[DevFleet] restart failed: {error}"),
     }
 }
 
 fn watchdog_loop(app: AppHandle) {
-    bootstrap_embedded_server(&app);
-
     let mut unhealthy_streak = 0u8;
 
     while !SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
@@ -81,26 +114,30 @@ fn watchdog_loop(app: AppHandle) {
 
         if unhealthy_streak >= 2 {
             stop_child(&app);
-            kill_stale_listeners_on_port(EMBEDDED_API_PORT, child_pid(&app));
+            purge_orphan_devfleet_api_processes(child_pid(&app));
+            kill_stale_listeners_on_port(EMBEDDED_API_PORT, None);
             if !SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
-                if let Some(child) = start_embedded_server(&app) {
-                    if let Some(state) = app.try_state::<EmbeddedServer>() {
-                        if let Ok(mut guard) = state.0.lock() {
-                            *guard = Some(child);
+                match start_embedded_server(&app) {
+                    Ok(child) => {
+                        if let Some(state) = app.try_state::<EmbeddedServer>() {
+                            if let Ok(mut guard) = state.0.lock() {
+                                *guard = Some(child);
+                            }
+                        }
+                        for _ in 0..120 {
+                            thread::sleep(Duration::from_millis(250));
+                            if server_healthy() {
+                                log::info!("[DevFleet] embedded API server recovered");
+                                unhealthy_streak = 0;
+                                RESTART_BACKOFF_SECS.store(1, Ordering::SeqCst);
+                                break;
+                            }
+                        }
+                        if !server_healthy() {
+                            log_last_server_error(&app);
                         }
                     }
-                    for _ in 0..120 {
-                        thread::sleep(Duration::from_millis(250));
-                        if server_healthy() {
-                            log::info!("[DevFleet] embedded API server recovered");
-                            unhealthy_streak = 0;
-                            RESTART_BACKOFF_SECS.store(1, Ordering::SeqCst);
-                            break;
-                        }
-                    }
-                    if !server_healthy() {
-                        log_last_server_error(&app);
-                    }
+                    Err(error) => log::error!("[DevFleet] recovery start failed: {error}"),
                 }
             }
             let backoff = RESTART_BACKOFF_SECS.load(Ordering::SeqCst).min(30);
@@ -110,13 +147,17 @@ fn watchdog_loop(app: AppHandle) {
         }
 
         if !has_child(&app) && !server_healthy() {
+            purge_orphan_devfleet_api_processes(None);
             kill_stale_listeners_on_port(EMBEDDED_API_PORT, None);
-            if let Some(child) = start_embedded_server(&app) {
-                if let Some(state) = app.try_state::<EmbeddedServer>() {
-                    if let Ok(mut guard) = state.0.lock() {
-                        *guard = Some(child);
+            match start_embedded_server(&app) {
+                Ok(child) => {
+                    if let Some(state) = app.try_state::<EmbeddedServer>() {
+                        if let Ok(mut guard) = state.0.lock() {
+                            *guard = Some(child);
+                        }
                     }
                 }
+                Err(error) => log::error!("[DevFleet] watchdog start failed: {error}"),
             }
         }
 
@@ -171,35 +212,22 @@ fn stop_child(app: &AppHandle) {
         return;
     };
     if let Some(mut child) = guard.take() {
+        let pid = child.id();
         let _ = child.kill();
         let _ = child.wait();
+        #[cfg(unix)]
+        if pid > 0 {
+            unsafe {
+                libc::kill(pid as i32, libc::SIGKILL);
+            }
+        }
     }
 }
 
-fn bootstrap_embedded_server(app: &AppHandle) {
-    if has_child(app) && server_healthy() {
-        return;
-    }
-    if server_healthy() && !has_child(app) {
-        log::warn!("[DevFleet] port {EMBEDDED_API_PORT} responds but is not owned by DevFleet; reclaiming");
-        kill_stale_listeners_on_port(EMBEDDED_API_PORT, None);
-    }
-    if let Some(child) = start_embedded_server(app) {
-        if let Some(state) = app.try_state::<EmbeddedServer>() {
-            if let Ok(mut guard) = state.0.lock() {
-                *guard = Some(child);
-            }
-        }
-        for _ in 0..120 {
-            thread::sleep(Duration::from_millis(250));
-            if server_healthy() {
-                log::info!("[DevFleet] embedded API server ready");
-                return;
-            }
-        }
-        log::warn!("[DevFleet] embedded API server started but health check pending");
-        log_last_server_error(app);
-    }
+fn shutdown_embedded_api(app: &AppHandle) {
+    stop_child(app);
+    purge_orphan_devfleet_api_processes(None);
+    kill_stale_listeners_on_port(EMBEDDED_API_PORT, None);
 }
 
 fn child_pid(app: &AppHandle) -> Option<u32> {
@@ -250,10 +278,7 @@ pub fn restart_embedded_server_cmd(app: AppHandle) {
 }
 
 fn server_healthy() -> bool {
-    const HEALTH_URLS: [&str; 2] = [
-        "http://127.0.0.1:3001/api/health",
-        "http://localhost:3001/api/health",
-    ];
+    const HEALTH_URL: &str = "http://127.0.0.1:3001/api/health";
     let client = match reqwest::blocking::Client::builder()
         .timeout(Duration::from_millis(2000))
         .build()
@@ -261,25 +286,155 @@ fn server_healthy() -> bool {
         Ok(client) => client,
         Err(_) => return false,
     };
-    HEALTH_URLS.iter().any(|url| {
-        client
-            .get(*url)
-            .send()
-            .ok()
-            .map(|response| response.status().is_success())
+    let Ok(response) = client.get(HEALTH_URL).send() else {
+        return false;
+    };
+    if !response.status().is_success() {
+        return false;
+    }
+    let Ok(body) = response.json::<serde_json::Value>() else {
+        return false;
+    };
+    body.get("embedded")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+        && body.get("success")
+            .and_then(|value| value.as_bool())
             .unwrap_or(false)
-    })
 }
 
-fn resolve_embedded_node(server_dir: &Path) -> String {
-    if let Some(bundled) = resolve_bundled_node(server_dir) {
-        return bundled;
+fn enforce_single_instance(data_dir: &Path) {
+    let lock_path = data_dir.join("devfleet.pid");
+    if let Ok(raw) = std::fs::read_to_string(&lock_path) {
+        if let Ok(pid) = raw.trim().parse::<i32>() {
+            let self_pid = std::process::id() as i32;
+            if pid > 0 && pid != self_pid && process_alive(pid) {
+                log::warn!("[DevFleet] stopping previous app instance pid {pid}");
+                terminate_process(pid);
+                purge_orphan_devfleet_api_processes(None);
+                kill_stale_listeners_on_port(EMBEDDED_API_PORT, None);
+            }
+        }
     }
-    log::warn!(
-        "[DevFleet] bundled Node runtime missing under {}; falling back to system node",
-        server_dir.display()
-    );
-    resolve_node_executable().unwrap_or_else(|| "node".into())
+    let _ = std::fs::write(&lock_path, std::process::id().to_string());
+}
+
+fn process_alive(pid: i32) -> bool {
+    #[cfg(unix)]
+    {
+        unsafe { libc::kill(pid, 0) == 0 }
+    }
+    #[cfg(windows)]
+    {
+        use std::process::Command as Cmd;
+        Cmd::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}")])
+            .output()
+            .ok()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+}
+
+fn terminate_process(pid: i32) {
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(pid, libc::SIGTERM);
+    }
+    #[cfg(windows)]
+    {
+        let _ = StdCommand::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .output();
+    }
+    thread::sleep(Duration::from_millis(400));
+}
+
+fn purge_orphan_devfleet_api_processes(except_pid: Option<u32>) {
+    #[cfg(unix)]
+    {
+        let output = StdCommand::new("pgrep")
+            .args(["-f", "devfleet-server.cjs"])
+            .output();
+        let Ok(output) = output else {
+            return;
+        };
+        if !output.status.success() {
+            return;
+        }
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let Ok(pid) = line.trim().parse::<i32>() else {
+                continue;
+            };
+            if except_pid == Some(pid as u32) {
+                continue;
+            }
+            log::warn!("[DevFleet] stopping orphan devfleet-server pid {pid}");
+            terminate_process(pid);
+        }
+    }
+    #[cfg(windows)]
+    {
+        let output = StdCommand::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*devfleet-server.cjs*' } | Select-Object -ExpandProperty ProcessId",
+            ])
+            .output();
+        if let Ok(output) = output {
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
+                let Ok(pid) = line.trim().parse::<i32>() else {
+                    continue;
+                };
+                if except_pid == Some(pid as u32) {
+                    continue;
+                }
+                log::warn!("[DevFleet] stopping orphan devfleet-server pid {pid}");
+                terminate_process(pid);
+            }
+        }
+    }
+}
+
+fn validate_embedded_bundle(server_dir: &Path) -> Result<(), String> {
+    if !server_dir.join("devfleet-server.cjs").is_file() {
+        return Err(format!("缺少 {}", server_dir.join("devfleet-server.cjs").display()));
+    }
+    if resolve_bundled_node(server_dir).is_none() {
+        return Err(format!(
+            "安装包缺少 bundled Node：{}",
+            server_dir.join("runtime").display()
+        ));
+    }
+    for rel in [
+        "node_modules/better-sqlite3",
+        "node_modules/bindings",
+        "node_modules/file-uri-to-path",
+    ] {
+        let path = server_dir.join(rel);
+        if !path.exists() {
+            return Err(format!("安装包缺少 {}", path.display()));
+        }
+    }
+    Ok(())
+}
+
+fn resolve_embedded_node(server_dir: &Path) -> Result<String, String> {
+    if let Some(bundled) = resolve_bundled_node(server_dir) {
+        return Ok(bundled);
+    }
+    #[cfg(debug_assertions)]
+    {
+        if let Some(node) = resolve_node_executable() {
+            log::warn!("[DevFleet] dev mode: using system node {node}");
+            return Ok(node);
+        }
+    }
+    Err(format!(
+        "未找到 bundled Node（{}）。请重新安装 DevFleet",
+        server_dir.join("runtime").display()
+    ))
 }
 
 fn open_server_log(data_dir: &Path) -> Option<File> {
@@ -313,17 +468,21 @@ fn log_last_server_error(app: &AppHandle) {
     }
 }
 
-fn start_embedded_server(app: &AppHandle) -> Option<Child> {
-    let script = resolve_server_script(app)?;
-    let server_dir = script.parent()?.to_path_buf();
-    let data_dir = app.path().app_data_dir().ok()?;
+fn start_embedded_server(app: &AppHandle) -> Result<Child, String> {
+    let script = resolve_server_script(app).ok_or("未找到 server/devfleet-server.cjs")?;
+    let server_dir = script
+        .parent()
+        .ok_or("无效 server 目录")?
+        .to_path_buf();
+    validate_embedded_bundle(&server_dir)?;
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let db_file = data_dir.join("devfleet.db");
     let node_modules = server_dir.join("node_modules");
-    let node = resolve_embedded_node(&server_dir);
+    let node = resolve_embedded_node(&server_dir)?;
     log::info!("[DevFleet] embedded server db: {}", db_file.display());
     log::info!("[DevFleet] embedded server node: {node}");
 
-    let mut command = std::process::Command::new(&node);
+    let mut command = StdCommand::new(&node);
     if let Some(log_file) = open_server_log(&data_dir) {
         if let Ok(stdout) = log_file.try_clone() {
             command.stdout(Stdio::from(stdout));
@@ -332,35 +491,30 @@ fn start_embedded_server(app: &AppHandle) -> Option<Child> {
     } else {
         command.stdout(Stdio::null()).stderr(Stdio::null());
     }
-    configure_hidden_command(&mut command);
+    configure_embedded_server_command(&mut command);
     command
         .current_dir(&server_dir)
         .arg(&script)
-        .env_remove("PORT")
-        .env_remove("DEVFLEET_TUNNEL")
+        .env_clear()
         .env("PORT", "3001")
         .env("DEVFLEET_DESKTOP", "1")
         .env("DEVFLEET_DATA_DIR", data_dir.to_string_lossy().into_owned())
         .env("DEVFLEET_DB_FILE", db_file.to_string_lossy().into_owned())
         .env("NODE_PATH", node_modules.to_string_lossy().into_owned());
 
-    match command.spawn() {
-        Ok(child) => {
-            log::info!("[DevFleet] starting embedded API server on http://127.0.0.1:3001");
-            Some(child)
+    command.spawn().map_err(|error| {
+        let msg = format!("spawn 失败: {error}");
+        if let Ok(mut file) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(data_dir.join("devfleet-server.log"))
+        {
+            let _ = writeln!(file, "[DevFleet] {msg}");
         }
-        Err(error) => {
-            log::warn!("[DevFleet] could not start embedded server: {error}");
-            if let Ok(mut file) = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(data_dir.join("devfleet-server.log"))
-            {
-                let _ = writeln!(file, "[DevFleet] spawn failed: {error}");
-            }
-            None
-        }
-    }
+        msg
+    }).inspect(|_| {
+        log::info!("[DevFleet] starting embedded API server on http://127.0.0.1:3001");
+    })
 }
 
 fn resolve_server_script(app: &AppHandle) -> Option<PathBuf> {
