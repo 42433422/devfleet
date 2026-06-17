@@ -12,6 +12,7 @@ import {
 } from '@/lib/devTools';
 import { getApiBaseUrl } from '@/lib/apiBase';
 import ToolBadge from '@/components/ToolBadge';
+import { PRODUCT_NAME } from '@/lib/brand';
 
 const defaultWorkspace = navigator.platform.toLowerCase().includes('win') ? 'C:\\DevFleet\\workspaces' : `${navigator.platform.toLowerCase().includes('mac') ? '/Users/Shared' : '/tmp'}/DevFleet/workspaces`;
 
@@ -81,7 +82,7 @@ export default function Agent() {
       const serverMatch = text.match(/服务器地址[：:]\s*(https?:\/\/\S+)/i);
       const codeMatch = text.match(/绑定码[：:]\s*([A-Z0-9]{6})/i);
       if (!serverMatch && !codeMatch) {
-        setPastedHint('剪贴板里未找到 DevFleet 接入说明，请向主设备复制完整说明');
+        setPastedHint(`剪贴板里未找到 ${PRODUCT_NAME} 接入说明，请向主设备复制完整说明`);
         return;
       }
       setForm((current) => ({
@@ -165,7 +166,7 @@ export default function Agent() {
             </div>
             {pastedHint && <p className="text-xs text-brand/90">{pastedHint}</p>}
             <label className="block">
-              <span className="block text-xs text-zinc-500 mb-1.5">DevFleet 服务器地址</span>
+              <span className="block text-xs text-zinc-500 mb-1.5">{PRODUCT_NAME} 服务器地址</span>
               <input value={form.apiBaseUrl} onChange={(event) => setForm({ ...form, apiBaseUrl: event.target.value })} required placeholder="https://你的穿透域名 或 http://192.168.x.x:3001" className="w-full px-3 py-2.5 bg-zinc-950 border border-zinc-800 rounded-lg text-sm focus:outline-none focus:border-brand/50" />
               <span className="block text-[11px] text-zinc-600 mt-1.5">向主设备「设备管理」索取可复制地址；localhost 仅适用于服务端就在本机的情况。</span>
             </label>

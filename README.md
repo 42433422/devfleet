@@ -1,8 +1,8 @@
-# DevFleet
+# 排比 Para
 
 > **下载最新版**：[GitHub Releases（公开）](https://github.com/42433422/devfleet/releases/latest)
 
-DevFleet 是真实运行的多设备代码任务系统，由四部分组成：
+排比 Para（Paibi Para）是真实运行的多设备代码任务系统，由四部分组成：
 
 1. Tauri 桌面控制台。
 2. 内置于同一桌面程序的设备代理。
@@ -15,7 +15,7 @@ DevFleet 是真实运行的多设备代码任务系统，由四部分组成：
 
 **主设备**（调度 + 合并）：
 
-- DevFleet 桌面客户端或 Web 控制台
+- 排比 Para 桌面客户端或 Web 控制台
 - Trae / Codex / Cursor / Claude Code 任一 MCP（见「MCP 接入」）
 - 本地已有该 Git 仓库 clone（用于最终合并）
 
@@ -24,12 +24,12 @@ DevFleet 是真实运行的多设备代码任务系统，由四部分组成：
 - Git，并已配置仓库拉取和推送权限
 - 开发工具与执行器（由主设备在「设备管理」指定）：
   - **Cursor** → Cursor Agent CLI（`agent login` 或 `CURSOR_API_KEY`），**不需要 Codex**
-  - **Trae** → DevFleet 内置 Computer Use 控制 Trae 打开工作区、点击新任务并写入任务
-    - **macOS**：需给 DevFleet/Trae 授予“辅助功能”权限
-    - **Windows**：通过 PowerShell + UI Automation 控制；需交互式登录会话（RDP 断开或无桌面会话时可能失败），DevFleet 与 Trae 应同级权限运行
+  - **Trae** → 排比 Para 内置 Computer Use 控制 Trae 打开工作区、点击新任务并写入任务
+    - **macOS**：需给 排比 Para/Trae 授予“辅助功能”权限
+    - **Windows**：通过 PowerShell + UI Automation 控制；需交互式登录会话（RDP 断开或无桌面会话时可能失败），排比 Para 与 Trae 应同级权限运行
   - **Claude Code** → 可选打开 IDE + **Codex CLI** 自动改码
   - **Codex** → 仅 **Codex CLI**
-- DevFleet 本机代理在线
+- 排比 Para 本机代理在线
 
 ## 部署服务端
 
@@ -61,10 +61,10 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 ## 绑定设备
 
-1. 主控电脑安装 DevFleet，填写服务器地址并注册账号。
+1. 主控电脑安装 排比 Para，填写服务器地址并注册账号。
 2. 在“设备管理”生成绑定码，通过“本机设备代理”先绑定主控电脑，并在设备列表把它设为主设备。
 3. 再为每台目标电脑生成一个 10 分钟有效的一次性绑定码。
-4. 目标电脑安装同一个 DevFleet Windows 客户端，无需登录主账号，打开“本机设备代理”。
+4. 目标电脑安装同一个 排比 Para Windows 客户端，无需登录主账号，打开“本机设备代理”。
 5. 输入服务器地址和各自的绑定码。
 6. 目标电脑会显示绑定账号、主设备名称、**主设备指定的开发工具**、连接状态和本机工具状态；主设备变更会自动同步。
 

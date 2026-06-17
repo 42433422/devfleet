@@ -1,4 +1,6 @@
-/** 复制给任意 AI 助手，让其自动完成 DevFleet MCP 接入 */
+/** 复制给任意 AI 助手，让其自动完成排比 Para MCP 接入 */
+
+import { PRODUCT_NAME } from './brand';
 
 import {
   buildCodexMcpCommand,
@@ -49,18 +51,18 @@ export function buildMcpAutoSetupPrompt(options: McpSetupPromptOptions): string 
     ? '~/.claude.json 或 ~/Library/Application Support/Claude/claude_desktop_config.json'
     : '~/.claude.json';
 
-  return `请立即帮我在本机完成 DevFleet MCP 接入。不要只给教程——请直接写入配置文件或执行命令，完成后调用 devfleet_list_devices 验证并汇报结果。
+  return `请立即帮我在本机完成 ${PRODUCT_NAME} MCP 接入。不要只给教程——请直接写入配置文件或执行命令，完成后调用 devfleet_list_devices 验证并汇报结果。
 
 ## 你要做的事
 1. 判断我当前使用的 AI 客户端（Cursor / Trae CN / Trae / Codex CLI / Claude Code / 其他）
-2. 按下方对应方式写入 DevFleet MCP 配置（合并到已有 mcpServers，保留其他 server）
+2. 按下方对应方式写入 ${PRODUCT_NAME} MCP 配置（合并到已有 mcpServers，保留其他 server）
 3. 若 MCP 文件不存在：从 https://github.com/42433422/devfleet/releases/latest 下载 devfleet-mcp.zip 解压到合适目录，或让用户确认已解压
-4. 配置完成后调用 MCP 工具 devfleet_list_devices；成功则回复「DevFleet MCP 已就绪」+ 在线设备列表
+4. 配置完成后调用 MCP 工具 devfleet_list_devices；成功则回复「${PRODUCT_NAME} MCP 已就绪」+ 在线设备列表
 
 ## 连接参数（必须使用以下值）
 - MCP 入口文件: ${mcpPath}
-- DevFleet API: ${apiUrl}
-- DEVFLEET_TOKEN: ${token || '（用户需在 DevFleet Integration 页复制 JWT）'}
+- ${PRODUCT_NAME} API: ${apiUrl}
+- DEVFLEET_TOKEN: ${token || `（用户需在 ${PRODUCT_NAME} Integration 页复制 JWT）`}
 
 ## stdio 配置（所有客户端共用）
 ${JSON.stringify({ mcpServers: { devfleet: stdio } }, null, 2)}

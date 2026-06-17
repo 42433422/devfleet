@@ -1,3 +1,5 @@
+import { PRODUCT_NAME } from './brand';
+
 /** 主设备合并任务：桌面本地 Git 或 MCP 话术 */
 
 export type MergeTaskInput = {
@@ -12,7 +14,7 @@ export type MergeTaskInput = {
 export function buildMergeMcpPrompt(input: MergeTaskInput): string {
   const branches = input.subtaskBranches.map((b) => `- ${b}`).join('\n');
   const push = input.push !== false;
-  return `请帮我在主设备本地仓库完成 DevFleet 多设备分支合并，并确认成功。
+  return `请帮我在主设备本地仓库完成 ${PRODUCT_NAME} 多设备分支合并，并确认成功。
 
 ## 任务信息
 - task_id: ${input.taskId}

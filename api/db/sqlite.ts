@@ -24,9 +24,9 @@ function defaultUserDataDir(): string {
 
 function isPackagedServerCwd(): boolean {
   const cwd = process.cwd();
-  return /DevFleet\.app[\\/]Contents[\\/]Resources[\\/]server/i.test(cwd)
+  return /(?:DevFleet|PaibiPara)\.app[\\/]Contents[\\/]Resources[\\/]server/i.test(cwd)
     || /[\\/]resources[\\/]server$/i.test(cwd)
-    || /Program Files.*[\\/]DevFleet/i.test(cwd);
+    || /Program Files.*[\\/](?:DevFleet|PaibiPara)/i.test(cwd);
 }
 
 function resolveDbPath(): string {
@@ -64,7 +64,7 @@ function ensureDataDir() {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(
-      `无法创建数据库目录 ${DATA_DIR}：${message}。请确认 DevFleet 已安装到用户目录，且系统未拦截对 AppData/Application Support 的写入。`,
+      `无法创建数据库目录 ${DATA_DIR}：${message}。请确认排比 Para 已安装到用户目录，且系统未拦截对 AppData/Application Support 的写入。`,
     );
   }
 }

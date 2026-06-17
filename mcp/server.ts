@@ -44,18 +44,18 @@ const api = async <T>(path: string, options: RequestInit = {}): Promise<T> => {
     },
   });
   const body = await response.json() as T & { error?: string };
-  if (!response.ok) throw new Error(body.error || `DevFleet API 请求失败 (${response.status})`);
+  if (!response.ok) throw new Error(body.error || `排比 Para API 请求失败 (${response.status})`);
   return body;
 };
 
 server.registerTool('devfleet_list_devices', {
-  title: '列出 DevFleet 设备',
+  title: '列出排比 Para 设备',
   description: '列出已绑定设备、在线状态、默认设备以及 Trae / Codex / Cursor 等编程工具的当前状态。',
 }, async () => result(await api('/api/devices')));
 
 server.registerTool('devfleet_next_task', {
   title: '获取当前设备的待执行任务',
-  description: 'Trae Agent 调用此工具获取 DevFleet 派发给本设备的任务。返回任务标题、描述、工作分支等信息；无任务时返回 null。',
+  description: 'Trae Agent 调用此工具获取排比 Para 派发给本设备的任务。返回任务标题、描述、工作分支等信息；无任务时返回 null。',
 }, async () => {
   const response = await fetch(`${apiBaseUrl}/api/devices/me/pending-task`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -67,7 +67,7 @@ server.registerTool('devfleet_next_task', {
 
 server.registerTool('devfleet_report_task_progress', {
   title: '回写当前设备任务进度',
-  description: 'Trae Agent 完成阶段性代码修改后调用：向 DevFleet 回写日志和进度。最终完成仍由本机代理检测 Git 变更、提交并推送后确认。',
+  description: 'Trae Agent 完成阶段性代码修改后调用：向排比 Para 回写日志和进度。最终完成仍由本机代理检测 Git 变更、提交并推送后确认。',
   inputSchema: {
     task_id: z.string().min(1).describe('devfleet_next_task 返回的任务 ID'),
     subtask_id: z.string().min(1).describe('devfleet_next_task 返回的子任务 ID'),
@@ -144,7 +144,7 @@ server.registerTool('devfleet_dispatch_task', {
 })));
 
 server.registerTool('devfleet_get_task', {
-  title: '查询 DevFleet 任务',
+  title: '查询排比 Para 任务',
   description: '查询任务、各设备子任务、进度、分支和日志。',
   inputSchema: { task_id: z.string().min(1) },
 }, async ({ task_id }) => result(await api(`/api/tasks/${encodeURIComponent(task_id)}`)));
@@ -169,7 +169,7 @@ server.registerTool('devfleet_wait_for_task', {
 
 server.registerTool('devfleet_merge_task', {
   title: '在主设备真实合并多设备分支',
-  description: '在主设备本地仓库 fetch 并合并所有已完成子任务分支，然后推送基础分支；成功后才把 DevFleet 任务标记为已合并。',
+  description: '在主设备本地仓库 fetch 并合并所有已完成子任务分支，然后推送基础分支；成功后才把排比 Para 任务标记为已合并。',
   inputSchema: {
     task_id: z.string().min(1),
     workspace_path: z.string().min(1).describe('主设备上该 Git 仓库的绝对路径'),

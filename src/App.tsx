@@ -14,6 +14,7 @@ import TaskDetail from '@/pages/TaskDetail';
 import Agent from '@/pages/Agent';
 import Integration from '@/pages/Integration';
 import SupportedToolsCorner from '@/components/SupportedToolsCorner';
+import { PRODUCT_NAME } from '@/lib/brand';
 
 function AppShell({ children }: { children: React.ReactNode }) {
   return (
@@ -43,7 +44,7 @@ function Protected({ children }: { children: React.ReactNode }) {
               const retry = await waitForServerReady({ maxWaitMs: 15_000, intervalMs: 500 });
               if (!retry) {
                 throw new Error(
-                  `本机 DevFleet 服务未在 ${DEFAULT_API_BASE} 就绪。请完全退出后重新打开应用；若仍失败，查看 ~/Library/Application Support/com.devfleet.desktop/devfleet-server.log`,
+                  `本机 ${PRODUCT_NAME} 服务未在 ${DEFAULT_API_BASE} 就绪。请完全退出后重新打开应用；若仍失败，查看 ~/Library/Application Support/com.devfleet.desktop/devfleet-server.log`,
                 );
               }
             }
@@ -54,7 +55,7 @@ function Protected({ children }: { children: React.ReactNode }) {
     };
     connect()
       .catch((err) => {
-        setError(err instanceof Error ? err.message : '无法连接 DevFleet 服务');
+        setError(err instanceof Error ? err.message : `无法连接 ${PRODUCT_NAME} 服务`);
       })
       .finally(() => setLoading(false));
   }, [token, guestLogin]);
@@ -73,7 +74,7 @@ function Protected({ children }: { children: React.ReactNode }) {
         <div className="max-w-md w-full bg-zinc-900/70 border border-zinc-800 rounded-2xl p-6 text-center">
           <h2 className="text-lg font-semibold text-white mb-2">无法自动进入</h2>
           <p className="text-sm text-zinc-400 mb-1">{error || '访客登录失败'}</p>
-          <p className="text-xs text-zinc-600 mb-4">请确认 DevFleet 服务端已启动（默认 {DEFAULT_API_BASE}）</p>
+          <p className="text-xs text-zinc-600 mb-4">请确认 {PRODUCT_NAME} 服务端已启动（默认 {DEFAULT_API_BASE}）</p>
           <div className="flex flex-col gap-2">
             <button
               type="button"

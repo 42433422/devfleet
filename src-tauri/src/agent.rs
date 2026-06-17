@@ -488,7 +488,7 @@ impl AgentState {
                     .await
                     .map_err(|error| format!("创建 .devfleet 目录失败: {error}"))?;
                 let task_md = format!(
-                    "# DevFleet 任务\n\n## 标题\n{}\n\n## 要求\n{}\n\n## 工作分支\n{}\n\n完成后总结修改和验证结果。",
+                    "# 排比 Para 任务\n\n## 标题\n{}\n\n## 要求\n{}\n\n## 工作分支\n{}\n\n完成后总结修改和验证结果。",
                     task.title, task.description, task.work_branch
                 );
                 tokio::fs::write(devfleet_dir.join("TASK.md"), &task_md)
@@ -512,14 +512,14 @@ impl AgentState {
 
                 let trae_prompt = if task.description.trim().is_empty() {
                     format!(
-                        "DevFleet 子任务：{}\n工作分支：{}\n\n{}",
+                        "排比 Para 子任务：{}\n工作分支：{}\n\n{}",
                         task.title.trim(),
                         task.work_branch.trim(),
                         prompt.trim()
                     )
                 } else {
                     format!(
-                        "DevFleet 子任务：{}\n工作分支：{}\n\n{}",
+                        "排比 Para 子任务：{}\n工作分支：{}\n\n{}",
                         task.title.trim(),
                         task.work_branch.trim(),
                         task.description.trim()
@@ -636,7 +636,7 @@ impl AgentState {
         run_command(
             Some(&task_dir),
             "git",
-            &["config", "user.name", "DevFleet Agent"],
+            &["config", "user.name", "Paibi Para Agent"],
         )
         .await?;
         run_command(

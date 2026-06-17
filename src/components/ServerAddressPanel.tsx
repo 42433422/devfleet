@@ -13,6 +13,7 @@ import {
   type ServerProbeResult,
 } from '@/lib/serverAddress';
 import { isDesktopApp } from '@/lib/agent';
+import { PRODUCT_NAME } from '@/lib/brand';
 import { tunnelApi, type BuiltinTunnelStatus } from '@/lib/tunnelApi';
 
 type CopyKey = 'local' | 'lan' | 'share' | 'tunnel';
@@ -110,7 +111,7 @@ export default function ServerAddressPanel({ compact = false, showTunnelInput = 
     } catch (error) {
       const message = error instanceof Error ? error.message : '内置穿透操作失败';
       if (/Failed to fetch|NetworkError|Load failed/i.test(message)) {
-        setBuiltinError('无法连接服务端，请先在本机启动 DevFleet 服务端（npm run server 或 devfleet-server.zip）');
+        setBuiltinError(`无法连接服务端，请先在本机启动 ${PRODUCT_NAME} 服务端（npm run server 或 devfleet-server.zip）`);
         setServerOnline(false);
       } else {
         setBuiltinError(message);
@@ -253,7 +254,7 @@ export default function ServerAddressPanel({ compact = false, showTunnelInput = 
         <AddressRow
           label="局域网"
           value={lanUrl}
-          hint={lanIp ? `检测到本机 IP：${lanIp}` : '请在 DevFleet 桌面客户端查看'}
+          hint={lanIp ? `检测到本机 IP：${lanIp}` : `请在 ${PRODUCT_NAME} 桌面客户端查看`}
           icon={<Wifi size={12} />}
           copied={copied === 'lan'}
           onCopy={() => copy('lan', lanUrl)}

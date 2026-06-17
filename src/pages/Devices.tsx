@@ -6,6 +6,7 @@ import ToolBadge from '@/components/ToolBadge';
 import ServerAddressPanel from '@/components/ServerAddressPanel';
 import { buildDeviceBindInstructions, resolveShareableApiUrl } from '@/lib/serverAddress';
 import { isDesktopApp } from '@/lib/agent';
+import { PRODUCT_NAME } from '@/lib/brand';
 
 const statusConfig: Record<Device['status'], { color: string; text: string; icon: React.ReactNode }> = {
   online: { color: 'text-green-400', text: '在线', icon: <Wifi size={12} /> },
@@ -224,7 +225,7 @@ export default function Devices() {
               <div className="w-20 h-20 rounded-xl bg-zinc-800/60 flex items-center justify-center mb-4">
                 <QrCode size={32} className="text-zinc-500" strokeWidth={1.5} />
               </div>
-              <p className="text-sm text-zinc-400 mb-4">在目标设备安装并打开 DevFleet，进入“本机代理”后输入绑定码</p>
+              <p className="text-sm text-zinc-400 mb-4">在目标设备安装并打开 {PRODUCT_NAME}，进入“本机代理”后输入绑定码</p>
               <button
                 onClick={handleGenerateBindCode}
                 disabled={loading}
@@ -272,7 +273,7 @@ export default function Devices() {
                   </button>
                 </div>
                 <p className="text-xs text-zinc-500">
-                  <span className="text-amber-400">真实接入：</span>在目标设备打开 DevFleet 的「本机设备代理」，填入上方服务器地址与此绑定码
+                  <span className="text-amber-400">真实接入：</span>在目标设备打开 {PRODUCT_NAME} 的「本机设备代理」，填入上方服务器地址与此绑定码
                 </p>
                 {bindExpiresAt && <p className="text-xs text-zinc-600">有效期至：{formatTime(bindExpiresAt)}</p>}
                 <button

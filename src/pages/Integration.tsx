@@ -16,6 +16,7 @@ import { openDeeplink, openTraeInstall } from '@/lib/openExternal';
 import { mcpClientApi, type McpClientStatus, type McpClientTool } from '@/lib/mcpClient';
 import { buildAiCommanderPlaybook } from '@/lib/aiPlaybook';
 import { buildMcpAutoSetupPrompt } from '@/lib/mcpSetupPrompt';
+import { PRODUCT_NAME } from '@/lib/brand';
 import { copyToClipboard } from '@/lib/clipboard';
 import { defaultMergeWorkspace } from '@/lib/mergeTask';
 import ServerAddressPanel from '@/components/ServerAddressPanel';
@@ -172,7 +173,7 @@ export default function Integration() {
       if (mcpClientApi.isDesktop()) {
         const status = await mcpClientApi.install(tool, mcpOptions);
         setClientStatuses((current) => ({ ...current, [tool]: status }));
-        setInstallHint(`${DEV_TOOL_LABELS[tool]} 已完成 DevFleet MCP 配置。`);
+        setInstallHint(`${DEV_TOOL_LABELS[tool]} 已完成 ${PRODUCT_NAME} MCP 配置。`);
         await refreshStatuses();
         return;
       }

@@ -1,4 +1,5 @@
 import { DEFAULT_API_BASE, getApiBaseUrl, isLocalApiUrl, LOCAL_API_CANDIDATES } from './apiBase';
+import { PRODUCT_NAME } from './brand';
 
 export const PUBLIC_API_STORAGE_KEY = 'devfleet_public_api_url';
 
@@ -89,7 +90,7 @@ export function buildDeviceBindInstructions(options: {
   expiresAt?: string;
 }): string {
   const lines = [
-    'DevFleet 工作设备接入说明',
+    `${PRODUCT_NAME} 工作设备接入说明`,
     '',
     `服务器地址：${options.serverUrl}`,
     `绑定码：${options.bindCode}`,
@@ -100,7 +101,7 @@ export function buildDeviceBindInstructions(options: {
   lines.push(
     '',
     '步骤：',
-    '1. 在目标设备安装 DevFleet 桌面客户端',
+    `1. 在目标设备安装 ${PRODUCT_NAME} 桌面客户端`,
     '2. 打开「本机设备代理」',
     '3. 填入上面的服务器地址与绑定码',
   );
@@ -237,7 +238,7 @@ export async function probeServerReachability(apiBase: string, timeoutMs = 8000)
     } else if (res.ok) {
       apiResult = {
         ok: false,
-        message: requireEmbedded ? 'HTTP 200 但非 DevFleet 内嵌 API' : `HTTP ${res.status}`,
+        message: requireEmbedded ? `HTTP 200 但非 ${PRODUCT_NAME} 内嵌 API` : `HTTP ${res.status}`,
       };
     } else {
       apiResult = { ok: false, message: `HTTP ${res.status}` };

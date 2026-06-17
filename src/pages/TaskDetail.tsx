@@ -5,6 +5,7 @@ import { useTasksStore, type LogEntry } from '@/store/tasks';
 import { useDevicesStore } from '@/store/devices';
 import { DEV_TOOL_LABELS } from '@/lib/devTools';
 import { agentApi, isDesktopApp } from '@/lib/agent';
+import { PRODUCT_NAME } from '@/lib/brand';
 import { buildMergeMcpPrompt, defaultMergeWorkspace } from '@/lib/mergeTask';
 import { api } from '@/lib/api';
 import ToolBadge from '@/components/ToolBadge';
@@ -280,7 +281,7 @@ export default function TaskDetail() {
                   {merging ? '合并中…' : '本地 Git 合并并推送'}
                 </button>
               ) : (
-                <p className="text-xs text-zinc-500">在 DevFleet 桌面客户端中可一键本地合并；浏览器请复制 MCP 话术。</p>
+                <p className="text-xs text-zinc-500">在 {PRODUCT_NAME} 桌面客户端中可一键本地合并；浏览器请复制 MCP 话术。</p>
               )}
               <button
                 type="button"

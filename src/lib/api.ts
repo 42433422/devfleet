@@ -6,6 +6,7 @@ import {
   LOCAL_API_CANDIDATES,
   API_BASE_STORAGE_KEY,
 } from './apiBase';
+import { PRODUCT_NAME } from './brand';
 import { probeApiHealth } from './serverAddress';
 import { isDesktopApp } from './agent';
 import {
@@ -35,7 +36,7 @@ function formatNetworkError(error: unknown, baseUrl: string): Error {
   const message = error instanceof Error ? error.message : String(error);
   if (/Failed to fetch|NetworkError|Load failed|fetch failed/i.test(message)) {
     return new Error(
-      `无法连接 DevFleet 服务端（${baseUrl}）。请确认本机服务已启动，或在登录页将地址改回 ${DEFAULT_API_BASE}`,
+      `无法连接 ${PRODUCT_NAME} 服务端（${baseUrl}）。请确认本机服务已启动，或在登录页将地址改回 ${DEFAULT_API_BASE}`,
     );
   }
   return error instanceof Error ? error : new Error(message);

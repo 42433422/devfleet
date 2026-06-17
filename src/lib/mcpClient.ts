@@ -1,4 +1,5 @@
 import { isDesktopApp } from '@/lib/agent';
+import { PRODUCT_NAME } from '@/lib/brand';
 
 export type McpClientTool = 'trae' | 'codex' | 'cursor' | 'claude_code';
 export type McpClientState = 'not_installed' | 'not_configured' | 'configured' | 'needs_update' | 'error';
@@ -20,7 +21,7 @@ export interface McpClientOptions {
 }
 
 async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
-  if (!isDesktopApp()) throw new Error('请在 DevFleet 桌面客户端中使用一键配置');
+  if (!isDesktopApp()) throw new Error(`请在 ${PRODUCT_NAME} 桌面客户端中使用一键配置`);
   const { invoke: tauriInvoke } = await import('@tauri-apps/api/core');
   return tauriInvoke<T>(command, args);
 }

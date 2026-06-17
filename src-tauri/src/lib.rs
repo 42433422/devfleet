@@ -39,7 +39,7 @@ pub fn run() {
                 .title(if cold_start_ok {
                     win.title.clone()
                 } else {
-                    "DevFleet - 后端启动失败".into()
+                    "排比 Para - 后端启动失败".into()
                 })
                 .inner_size(win.width, win.height)
                 .min_inner_size(min_width, min_height)

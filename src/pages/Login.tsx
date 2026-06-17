@@ -4,6 +4,7 @@ import { CheckCircle2, Laptop, Loader2, LockKeyhole, Mail, Monitor, RefreshCw, Z
 import { useAuthStore } from '@/store/auth';
 import { DEFAULT_API_BASE, sanitizeStoredApiUrl } from '@/lib/apiBase';
 import { isDesktopApp } from '@/lib/agent';
+import { PRODUCT_NAME } from '@/lib/brand';
 import {
   autoFixLocalApiUrl,
   isValidApiBaseUrl,
@@ -180,7 +181,7 @@ export default function Login() {
           <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-gradient-to-br from-brand to-green-400 flex items-center justify-center shadow-xl shadow-brand/20">
             <Monitor size={28} className="text-black" />
           </div>
-          <h1 className="text-2xl font-bold tracking-tight text-white">DevFleet</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-white">{PRODUCT_NAME}</h1>
           <p className="text-sm text-zinc-500 mt-1">多设备协同开发控制平台</p>
         </div>
 
@@ -200,7 +201,7 @@ export default function Login() {
 
           <form onSubmit={submit} className="space-y-4">
             <label className="block">
-              <span className="block text-xs text-zinc-500 mb-1.5">DevFleet 服务器</span>
+              <span className="block text-xs text-zinc-500 mb-1.5">{PRODUCT_NAME} 服务器</span>
               <div className="flex gap-2">
                 <input
                   value={serverUrl}

@@ -13,6 +13,8 @@ import {
 } from '../lib/dispatch.js';
 import { hasDevice } from '../websocket/manager.js';
 
+const PRODUCT_NAME = '排比 Para';
+
 const router = Router();
 
 function serializeSubTask(sub: SubTask) {
@@ -174,7 +176,7 @@ async function handleAiSubtaskDispatch(
     return;
   }
   if (!hasDevice(deviceId)) {
-    res.status(400).json({ error: `设备 ${device.name} 未在线，请启动 DevFleet 本机代理` });
+    res.status(400).json({ error: `设备 ${device.name} 未在线，请启动 ${PRODUCT_NAME} 本机代理` });
     return;
   }
   if (executorMissing(deviceId)) {
@@ -288,7 +290,7 @@ async function handleUiAutoSplitTask(
   const onlineDevices = allDevices.filter((device) => hasDevice(device.id));
 
   if (onlineDevices.length === 0) {
-    res.status(400).json({ error: '没有在线设备。请先在目标设备启动 DevFleet 本机代理' });
+    res.status(400).json({ error: `没有在线设备。请先在目标设备启动 ${PRODUCT_NAME} 本机代理` });
     return;
   }
 

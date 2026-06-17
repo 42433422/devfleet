@@ -503,7 +503,7 @@ fn resolve_embedded_node(server_dir: &Path) -> Result<String, String> {
         }
     }
     Err(format!(
-        "未找到 bundled Node（{}）。请重新安装 DevFleet",
+        "未找到 bundled Node（{}）。请重新安装排比 Para",
         server_dir.join("runtime").display()
     ))
 }

@@ -62,7 +62,7 @@ root.innerHTML = `
   </style>
   <div class="card">
     <h1>内嵌后端未能启动</h1>
-    <p>DevFleet 无法在本机 3001 端口启动内嵌 API。主界面已阻止打开，避免断连体验。</p>
+    <p>排比 Para 无法在本机 3001 端口启动内嵌 API。主界面已阻止打开，避免断连体验。</p>
     <pre id="error">正在读取错误信息…</pre>
     <p class="log-path">日志：<span id="log-path">—</span></p>
     <div class="actions">

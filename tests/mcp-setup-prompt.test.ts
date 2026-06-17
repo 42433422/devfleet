@@ -10,7 +10,7 @@ test('buildMcpAutoSetupPrompt 包含连接参数与客户端指引', () => {
     platform: 'unix',
     traeVariant: 'cn',
   });
-  assert.match(prompt, /请立即帮我在本机完成 DevFleet MCP 接入/);
+  assert.match(prompt, /请立即帮我在本机完成 排比 Para MCP 接入/);
   assert.match(prompt, /\/tmp\/devfleet-mcp\.mjs/);
   assert.match(prompt, /http:\/\/localhost:3001/);
   assert.match(prompt, /test-jwt-token/);

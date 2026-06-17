@@ -1,6 +1,7 @@
 import { NavLink, useNavigate } from 'react-router-dom';
 import { Laptop, Monitor, PlugZap, Workflow, LogOut, User } from 'lucide-react';
 import { useAuthStore } from '@/store/auth';
+import { PRODUCT_NAME, PRODUCT_TAGLINE } from '@/lib/brand';
 
 export default function Sidebar() {
   const { user, logout } = useAuthStore();
@@ -22,8 +23,8 @@ export default function Sidebar() {
             <Monitor size={16} className="text-black" />
           </div>
           <div>
-            <h1 className="text-sm font-semibold text-white tracking-tight">DevFleet</h1>
-            <p className="text-[10px] text-zinc-500">多设备协同控制</p>
+            <h1 className="text-sm font-semibold text-white tracking-tight">{PRODUCT_NAME}</h1>
+            <p className="text-[10px] text-zinc-500">{PRODUCT_TAGLINE}</p>
           </div>
         </div>
       </div>

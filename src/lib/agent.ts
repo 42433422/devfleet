@@ -1,3 +1,5 @@
+import { PRODUCT_NAME } from './brand';
+
 export interface LocalToolStatus {
   toolName: 'trae' | 'codex' | 'cursor' | 'claude_code';
   status: 'running' | 'idle' | 'not_installed';
@@ -32,7 +34,7 @@ export interface AgentStatus {
 export const isDesktopApp = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 const invoke = async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
-  if (!isDesktopApp()) throw new Error('本机代理只能在 DevFleet 桌面客户端中运行');
+  if (!isDesktopApp()) throw new Error(`本机代理只能在 ${PRODUCT_NAME} 桌面客户端中运行`);
   const { invoke: tauriInvoke } = await import('@tauri-apps/api/core');
   return tauriInvoke<T>(command, args);
 };

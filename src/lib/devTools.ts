@@ -55,7 +55,7 @@ export const TOOL_RUNTIME_LABELS: Record<ToolRuntimeStatus, string> = {
 
 /** 未安装时的提示（不依赖下载链接，用户自行安装即可） */
 export const TOOL_INSTALL_HINTS: Record<DevTool, string> = {
-  trae: 'Trae IDE 设备会回退 Computer Use；如需纯 CLI 请安装 TRAE Agent（github.com/bytedance/trae-agent，命令 trae run）',
+  trae: 'Trae IDE 设备会回退 Computer Use；如需纯 CLI 请安装 TRAE Agent（github.com/bytedance/trae-agent，命令 trae-cli run），并设置 TRAE_CONFIG_FILE 环境变量',
   codex: '请安装 Codex CLI 并执行 codex login',
   cursor: '请安装 Cursor 或 Cursor Agent CLI（agent login）',
   claude_code: '请安装 Claude Code CLI 或桌面客户端',

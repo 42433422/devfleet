@@ -75,9 +75,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'DevFleet v__VERSION__'
+          releaseName: '排比 Para v__VERSION__'
           releaseBody: |
-            ## DevFleet v__VERSION__
+            ## 排比 Para v__VERSION__
 
             真实多设备协同开发控制平台
 
