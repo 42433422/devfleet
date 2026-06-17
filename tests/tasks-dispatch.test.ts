@@ -86,7 +86,7 @@ async function bootServer() {
       deviceSocket?.close();
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
       closeDatabase();
-      await rm(tempDir, { recursive: true, force: true });
+      await rm(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     },
   };
 }

@@ -124,7 +124,7 @@ test('run 超时的 running 子任务会被回收为重试/失败', async () => 
 
     const { closeDatabase } = await import('../api/db/sqlite.js');
     closeDatabase();
-    await rm(tempDir, { recursive: true, force: true });
+    await rm(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
 
@@ -134,56 +134,61 @@ test('schema upgrades 写入 capabilities 与 depends_on', async () => {
   process.env.JWT_SECRET = 'dispatch-test';
 
   const { db } = await import('../api/db/store.js');
-  const user = db.users.create({ email: 'dispatch@test.local', password_hash: 'x', is_guest: false });
-  const deviceA = db.devices.create({
-    user_id: user.id,
-    name: 'A',
-    status: 'online',
-    capabilities: JSON.stringify({ node_version: 'v22', docker: true, gpu: false }),
-  });
-  const deviceB = db.devices.create({
-    user_id: user.id,
-    name: 'B',
-    status: 'online',
-    capabilities: JSON.stringify({ node_version: 'v20', docker: false, gpu: true, gpu_name: 'RTX' }),
-  });
-  const task = db.tasks.create({
-    user_id: user.id,
-    title: 't',
-    description: 'd',
-    status: 'running',
-    repo_url: '',
-    branch: 'main',
-  });
-  const subA = db.subTasks.create({
-    task_id: task.id,
-    device_id: deviceA.id,
-    tool_name: 'codex',
-    status: 'completed',
-    branch_name: 'b1',
-    title: '第一步',
-    depends_on: [],
-    sort_order: 0,
-  });
-  const subB = db.subTasks.create({
-    task_id: task.id,
-    device_id: deviceB.id,
-    tool_name: 'codex',
-    status: 'pending',
-    branch_name: 'b2',
-    title: '第二步',
-    depends_on: [subA.id],
-    sort_order: 1,
-  });
+  const { closeDatabase } = await import('../api/db/sqlite.js');
 
-  const loadedA = db.devices.findById(deviceA.id);
-  const caps = parseCapabilities(loadedA?.capabilities);
-  assert.equal(caps?.node_version, 'v22');
+  try {
+    const user = db.users.create({ email: 'dispatch@test.local', password_hash: 'x', is_guest: false });
+    const deviceA = db.devices.create({
+      user_id: user.id,
+      name: 'A',
+      status: 'online',
+      capabilities: JSON.stringify({ node_version: 'v22', docker: true, gpu: false }),
+    });
+    const deviceB = db.devices.create({
+      user_id: user.id,
+      name: 'B',
+      status: 'online',
+      capabilities: JSON.stringify({ node_version: 'v20', docker: false, gpu: true, gpu_name: 'RTX' }),
+    });
+    const task = db.tasks.create({
+      user_id: user.id,
+      title: 't',
+      description: 'd',
+      status: 'running',
+      repo_url: '',
+      branch: 'main',
+    });
+    const subA = db.subTasks.create({
+      task_id: task.id,
+      device_id: deviceA.id,
+      tool_name: 'codex',
+      status: 'completed',
+      branch_name: 'b1',
+      title: '第一步',
+      depends_on: [],
+      sort_order: 0,
+    });
+    const subB = db.subTasks.create({
+      task_id: task.id,
+      device_id: deviceB.id,
+      tool_name: 'codex',
+      status: 'pending',
+      branch_name: 'b2',
+      title: '第二步',
+      depends_on: [subA.id],
+      sort_order: 1,
+    });
 
-  const subs = db.subTasks.findAllByTaskId(task.id);
-  assert.equal(areDependenciesMet(subB, subs), true);
-  subs.find((s) => s.id === subA.id)!.status = 'running';
-  assert.equal(areDependenciesMet(subB, subs), false);
+    const loadedA = db.devices.findById(deviceA.id);
+    const caps = parseCapabilities(loadedA?.capabilities);
+    assert.equal(caps?.node_version, 'v22');
 
-  await rm(tempDir, { recursive: true, force: true });
+    const subs = db.subTasks.findAllByTaskId(task.id);
+    assert.equal(areDependenciesMet(subB, subs), true);
+    subs.find((s) => s.id === subA.id)!.status = 'running';
+    assert.equal(areDependenciesMet(subB, subs), false);
+  } finally {
+    closeDatabase();
+    await rm(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
 });

@@ -43,6 +43,6 @@ test('WebSocket 应用层 ping/pong 心跳', async () => {
   } finally {
     server.close();
     closeDatabase();
-    await rm(tempDir, { recursive: true, force: true });
+    await rm(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });

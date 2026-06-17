@@ -51,20 +51,19 @@ function resolveDbPath(): string {
   return path.resolve(process.cwd(), 'api', 'data', 'devfleet.db');
 }
 
-const DATA_DIR = path.dirname(resolveDbPath());
-
 let dbInstance: DevFleetDatabase | null = null;
 let openDbPath: string | null = null;
 
-function ensureDataDir() {
+function ensureDataDir(targetPath: string) {
+  const dataDir = path.dirname(targetPath);
   try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(
-      `无法创建数据库目录 ${DATA_DIR}：${message}。请确认排比 Para 已安装到用户目录，且系统未拦截对 AppData/Application Support 的写入。`,
+      `无法创建数据库目录 ${dataDir}：${message}。请确认排比 Para 已安装到用户目录，且系统未拦截对 AppData/Application Support 的写入。`,
     );
   }
 }
@@ -80,7 +79,7 @@ export function getDatabase(): DevFleetDatabase {
   }
   if (dbInstance) return dbInstance;
 
-  ensureDataDir();
+  ensureDataDir(targetPath);
   migrateIfNeeded(targetPath);
 
   dbInstance = new Database(targetPath);
@@ -103,6 +102,11 @@ export function flushDB() {
 
 export function closeDatabase() {
   if (dbInstance) {
+    try {
+      dbInstance.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    } catch {
+      // ignore close-time checkpoint errors; close still releases the handle
+    }
     dbInstance.close();
     dbInstance = null;
     openDbPath = null;

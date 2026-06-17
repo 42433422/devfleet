@@ -41,7 +41,7 @@ test('全新空目录启动服务端可自动建库并完成 guest 登录', asyn
   } finally {
     server.close();
     closeDatabase();
-    await rm(tempDir, { recursive: true, force: true });
+    await rm(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
 
@@ -63,6 +63,6 @@ test('bootstrapDatabase 预置 guest 会话与默认设备', async () => {
     assert.ok(db.devices.countByUserId(guest.id) >= 1);
   } finally {
     closeDatabase();
-    await rm(tempDir, { recursive: true, force: true });
+    await rm(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });

@@ -23,7 +23,7 @@ async function withGuestServer(fn: (base: string) => Promise<void>): Promise<voi
   } finally {
     server.close();
     closeDatabase();
-    await rm(tempDir, { recursive: true, force: true });
+    await rm(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 }
 
@@ -140,6 +140,6 @@ test('guest 登录合并遗留 guest_* 账号数据', async () => {
   } finally {
     server.close();
     closeDatabase();
-    await rm(tempDir, { recursive: true, force: true });
+    await rm(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
