@@ -16,9 +16,10 @@ test('设备 WebSocket 重连后补发 pending execute_task', async () => {
   const { closeDatabase } = await import('../api/db/sqlite.js');
   const { db } = await import('../api/db/store.js');
   const { default: app } = await import('../api/app.js');
-  const { attachWebSocket } = await import('../api/websocket/manager.js');
+  const { attachWebSocket, resetWebSocketStateForTest } = await import('../api/websocket/manager.js');
   const server = http.createServer(app);
-  attachWebSocket(new WebSocketServer({ server }));
+  const wss = new WebSocketServer({ server });
+  attachWebSocket(wss);
   server.listen(0);
   await new Promise<void>((resolve) => server.once('listening', resolve));
   const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -96,6 +97,8 @@ test('设备 WebSocket 重连后补发 pending execute_task', async () => {
     assert.equal(dispatched.task_id, task.id);
     assert.equal(dispatched.subtask_id, sub.id);
   } finally {
+    resetWebSocketStateForTest();
+    await new Promise<void>((resolve, reject) => wss.close((error) => error ? reject(error) : resolve()));
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     closeDatabase();
     await rm(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });

@@ -33,6 +33,7 @@ interface WSMessage {
 
 const clients: Set<ClientWS> = new Set();
 const deviceWS = new Map<string, WebSocket>();
+const offlineTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const HEARTBEAT_MS = Number(process.env.DEVFLEET_WS_HEARTBEAT_MS) || 30_000;
 const PONG_TIMEOUT_MS = Number(process.env.DEVFLEET_WS_PONG_TIMEOUT_MS) || 10_000;
 const DEVICE_LINK_HEALTHY_MS = Number(process.env.DEVFLEET_DEVICE_LINK_HEALTHY_MS)
@@ -108,6 +109,14 @@ function markDevicePong(deviceId: string) {
 
 function clearDeviceLink(deviceId: string) {
   deviceLinks.delete(deviceId);
+}
+
+function clearOfflineTimer(deviceId: string) {
+  const timer = offlineTimers.get(deviceId);
+  if (timer) {
+    clearTimeout(timer);
+    offlineTimers.delete(deviceId);
+  }
 }
 
 export function getDeviceLinkHealth(deviceId: string) {
@@ -214,6 +223,7 @@ export function attachWebSocket(wss: WSServer) {
       }
       const previous = deviceWS.get(device.id);
       if (previous && previous !== ws) previous.close(4000, '设备已在新的连接上线');
+      clearOfflineTimer(device.id);
       ws._deviceId = device.id;
       deviceWS.set(device.id, ws);
       markDeviceLinkHealthy(device.id, '连接已建立');
@@ -335,7 +345,9 @@ export function attachWebSocket(wss: WSServer) {
         clearDeviceLink(device.id);
         const hasRunning = db.subTasks.findAllByDeviceId(device.id).some((s) => s.status === 'running');
         const offlineDelayMs = hasRunning ? 120_000 : 8_000;
-        setTimeout(() => {
+        clearOfflineTimer(device.id);
+        const timer = setTimeout(() => {
+          offlineTimers.delete(device.id);
           const current = deviceWS.get(device.id);
           if (current && current !== closedSocket && current.readyState === current.OPEN) return;
           if (current === closedSocket) return;
@@ -347,6 +359,7 @@ export function attachWebSocket(wss: WSServer) {
             status: 'offline',
           });
         }, offlineDelayMs);
+        offlineTimers.set(device.id, timer);
       });
 
       ws.on('error', (err) => {
@@ -427,8 +440,38 @@ export function disconnectDeviceSocket(deviceId: string, reason = '设备已断�
     socket.close(4000, reason);
   }
   clearDeviceLink(deviceId);
+  clearOfflineTimer(deviceId);
 }
 
 export function getOnlineDeviceIds() {
   return Array.from(deviceWS.keys());
+}
+
+export function resetWebSocketStateForTest() {
+  for (const socket of clients) {
+    clearHeartbeat(socket);
+    try {
+      socket.terminate();
+    } catch {
+      // ignore test cleanup errors
+    }
+  }
+  clients.clear();
+
+  for (const [deviceId, socket] of deviceWS) {
+    clearHeartbeat(socket);
+    clearDeviceLink(deviceId);
+    try {
+      socket.terminate();
+    } catch {
+      // ignore test cleanup errors
+    }
+  }
+  deviceWS.clear();
+
+  for (const timer of offlineTimers.values()) {
+    clearTimeout(timer);
+  }
+  offlineTimers.clear();
+  deviceLinks.clear();
 }

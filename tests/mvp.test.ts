@@ -14,9 +14,10 @@ test('账号、设备和任务的 MVP 主流程', async () => {
 
   const { default: app } = await import('../api/app.js');
   const { closeDatabase } = await import('../api/db/sqlite.js');
-  const { attachWebSocket } = await import('../api/websocket/manager.js');
+  const { attachWebSocket, resetWebSocketStateForTest } = await import('../api/websocket/manager.js');
   const server = http.createServer(app);
-  attachWebSocket(new WebSocketServer({ server }));
+  const wss = new WebSocketServer({ server });
+  attachWebSocket(wss);
   server.listen(0);
   await new Promise<void>((resolve) => server.once('listening', resolve));
   const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -167,6 +168,8 @@ test('账号、设备和任务的 MVP 主流程', async () => {
     assert.equal(tasks.tasks.length, 0);
   } finally {
     deviceSocket?.close();
+    resetWebSocketStateForTest();
+    await new Promise<void>((resolve, reject) => wss.close((error) => error ? reject(error) : resolve()));
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     closeDatabase();
     await new Promise((resolve) => setTimeout(resolve, 100));
