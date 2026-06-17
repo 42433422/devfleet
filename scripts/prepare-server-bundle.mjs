@@ -161,7 +161,17 @@ const nativeBuildEnv = (nodeBin) => {
   env.npm_config_runtime = 'node';
   env.npm_config_target = NODE_VERSION;
   env.npm_config_disturl = 'https://nodejs.org/download/release';
-  env.PATH = `${dirname(nodeBin)}${delimiter}${env.PATH || ''}`;
+
+  const pathKey = Object.keys(env).find((key) => key.toLowerCase() === 'path') || 'PATH';
+  env[pathKey] = `${dirname(nodeBin)}${delimiter}${env[pathKey] || ''}`;
+  if (pathKey !== 'PATH') delete env.PATH;
+
+  const pythonHome = env.pythonLocation || env.Python_ROOT_DIR || env.Python3_ROOT_DIR;
+  if (process.platform === 'win32' && pythonHome) {
+    const pythonBin = join(String(pythonHome), 'python.exe');
+    env.PYTHON = pythonBin;
+    env.npm_config_python = pythonBin;
+  }
   return env;
 };
 
