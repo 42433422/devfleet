@@ -63,6 +63,11 @@ root.innerHTML = `
   <div class="card">
     <h1>内嵌后端未能启动</h1>
     <p>排比 Para 无法在本机 3001 端口启动内嵌 API。主界面已阻止打开，避免断连体验。</p>
+    <p id="mac-hint" style="display:none;font-size:13px;color:#93c5fd;line-height:1.6;">
+      macOS：请先从 DMG 将 <strong>PaibiPara</strong> 拖到「应用程序」，在终端执行
+      <code style="color:#e8eaed;">xattr -cr /Applications/PaibiPara.app</code>
+      后再打开（不要从 DMG 或「下载」文件夹直接双击运行）。
+    </p>
     <pre id="error">正在读取错误信息…</pre>
     <p class="log-path">日志：<span id="log-path">—</span></p>
     <div class="actions">
@@ -87,6 +92,10 @@ async function loadErrorDetails() {
     ]);
     errorEl.textContent = error || '未知错误';
     logPathEl.textContent = logPath || '—';
+    const macHint = root.querySelector('#mac-hint') as HTMLParagraphElement | null;
+    if (macHint && /server\/devfleet-server\.cjs|DMG|xattr|应用程序/.test(error || '')) {
+      macHint.style.display = 'block';
+    }
   } catch (loadError) {
     errorEl.textContent = String(loadError);
   }

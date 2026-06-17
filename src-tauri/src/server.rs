@@ -10,7 +10,8 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
 use crate::process_util::{
-    configure_embedded_server_command, resolve_bundled_node, resolve_node_executable,
+    configure_embedded_server_command, resolve_bundled_node, resolve_bundled_resource,
+    resolve_node_executable,
 };
 
 const EMBEDDED_API_PORT: u16 = 3001;
@@ -540,7 +541,7 @@ fn log_last_server_error(app: &AppHandle) {
 }
 
 fn start_embedded_server(app: &AppHandle) -> Result<Child, String> {
-    let script = resolve_server_script(app).ok_or("未找到 server/devfleet-server.cjs")?;
+    let script = resolve_server_script(app).ok_or_else(|| macos_resource_install_hint(app))?;
     let server_dir = script
         .parent()
         .ok_or("无效 server 目录")?
@@ -589,11 +590,15 @@ fn start_embedded_server(app: &AppHandle) -> Result<Child, String> {
 }
 
 fn resolve_server_script(app: &AppHandle) -> Option<PathBuf> {
-    app.path()
-        .resolve(
-            "server/devfleet-server.cjs",
-            tauri::path::BaseDirectory::Resource,
-        )
-        .ok()
-        .filter(|path| path.exists())
+    resolve_bundled_resource(app, "server/devfleet-server.cjs")
+}
+
+#[cfg(target_os = "macos")]
+fn macos_resource_install_hint(_app: &AppHandle) -> String {
+    "未找到 server/devfleet-server.cjs。请先从 DMG 将 PaibiPara 拖到「应用程序」，在终端执行 xattr -cr /Applications/PaibiPara.app 后重新打开（不要从 DMG 或「下载」直接运行）。".into()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_resource_install_hint(_app: &AppHandle) -> String {
+    "未找到 server/devfleet-server.cjs。请重新安装排比 Para 桌面客户端。".into()
 }

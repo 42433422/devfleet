@@ -1,8 +1,60 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use tauri::{AppHandle, Manager};
+
 const MIN_SQLITE_NODE_MODULES: u32 = 127;
+
+/// 解析 Tauri 打包资源；macOS 从 DMG/下载目录直接打开时 PathResolver 可能失败，回退到 exe 旁 Resources。
+pub fn resolve_bundled_resource(app: &AppHandle, relative: &str) -> Option<PathBuf> {
+    if let Ok(path) = app
+        .path()
+        .resolve(relative, tauri::path::BaseDirectory::Resource)
+    {
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+
+    if let Ok(dir) = app.path().resource_dir() {
+        let path = dir.join(relative);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        #[cfg(target_os = "macos")]
+        if let Some(contents) = exe.parent().and_then(|p| p.parent()) {
+            let path = contents.join("Resources").join(relative);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+
+        #[cfg(target_os = "windows")]
+        if let Some(exe_dir) = exe.parent() {
+            let path = exe_dir.join(relative);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        if let Some(exe_dir) = exe.parent() {
+            for candidate in [exe_dir.join(relative), exe_dir.join("../lib").join(relative)] {
+                if let Ok(path) = candidate.canonicalize() {
+                    if path.is_file() {
+                        return Some(path);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
 
 /// App 内嵌 Node 运行时（与 better-sqlite3 编译 ABI 一致），优先于本机 Node。
 pub fn resolve_bundled_node(server_dir: &Path) -> Option<String> {

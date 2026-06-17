@@ -5,6 +5,8 @@ use serde::Serialize;
 use serde_json::{json, Map, Value};
 use tauri::{AppHandle, Manager};
 
+use crate::process_util::resolve_bundled_resource;
+
 const SERVER_NAME: &str = "devfleet";
 
 #[derive(Debug, Serialize)]
@@ -35,13 +37,8 @@ pub fn ensure_mcp_bundle(app: AppHandle) -> Result<String, String> {
     if dest.is_file() {
         return Ok(dest.display().to_string());
     }
-    let src = app
-        .path()
-        .resolve("mcp/devfleet-mcp.mjs", tauri::path::BaseDirectory::Resource)
-        .map_err(|error| error.to_string())?;
-    if !src.is_file() {
-        return Err("内置 MCP 文件缺失，请从 Release 下载 devfleet-mcp.zip".into());
-    }
+    let src = resolve_bundled_resource(&app, "mcp/devfleet-mcp.mjs")
+        .ok_or("内置 MCP 文件缺失，请从 Release 下载 devfleet-mcp.zip")?;
     std::fs::create_dir_all(&dest_dir).map_err(|error| error.to_string())?;
     std::fs::copy(&src, &dest).map_err(|error| error.to_string())?;
     Ok(dest.display().to_string())
@@ -52,7 +49,7 @@ fn resolve_mcp_path(raw: &str) -> Result<String, String> {
     if !trimmed.is_empty() && Path::new(trimmed).is_file() {
         return Ok(trimmed.to_string());
     }
-    Err("MCP 文件不存在。桌面端会自动解压到应用数据目录，请刷新页面或重新打开 DevFleet。".into())
+    Err("MCP 文件不存在。桌面端会自动解压到应用数据目录，请刷新页面或重新打开排比 Para。".into())
 }
 
 #[tauri::command]
