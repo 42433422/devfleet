@@ -13,7 +13,7 @@
     "server": "tsx api/server.ts",
     "server:build": "node scripts/prepare-server-bundle.mjs",
     "dev": "VITE_API_PROXY_TARGET=http://127.0.0.1:3002 concurrently \"npm run client:dev\" \"npm run server:dev\"",
-    "test": "npm run mcp:build && tsx --test tests/*.test.ts",
+    "test": "npm run mcp:build && tsx --test --test-concurrency=1 tests/*.test.ts",
     "test:scope": "npm run mcp:build && node scripts/test-scope.mjs",
     "mcp": "tsx mcp/server.ts",
     "mcp:build": "esbuild mcp/server.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist-mcp/devfleet-mcp.mjs && node scripts/copy-mcp-assets.mjs",

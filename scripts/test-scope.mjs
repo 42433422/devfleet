@@ -23,6 +23,10 @@ if (!files) {
   process.exit(1);
 }
 
-const args = ['--test', ...files.flatMap((f) => (f === 'tests' ? ['tests/*.test.ts'] : [f]))];
+const args = [
+  '--test',
+  '--test-concurrency=1',
+  ...files.flatMap((f) => (f === 'tests' ? ['tests/*.test.ts'] : [f])),
+];
 const result = spawnSync('tsx', args, { cwd: root, stdio: 'inherit', shell: false });
 process.exit(result.status ?? 1);
