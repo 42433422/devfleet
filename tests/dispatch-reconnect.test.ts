@@ -13,6 +13,7 @@ test('设备 WebSocket 重连后补发 pending execute_task', async () => {
   process.env.DEVFLEET_DB_FILE = path.join(tempDir, 'devfleet.db');
   process.env.JWT_SECRET = 'reconnect-dispatch-test';
 
+  const { closeDatabase } = await import('../api/db/sqlite.js');
   const { db } = await import('../api/db/store.js');
   const { default: app } = await import('../api/app.js');
   const { attachWebSocket } = await import('../api/websocket/manager.js');
@@ -96,6 +97,7 @@ test('设备 WebSocket 重连后补发 pending execute_task', async () => {
     assert.equal(dispatched.subtask_id, sub.id);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    closeDatabase();
     await rm(tempDir, { recursive: true, force: true });
   }
 });

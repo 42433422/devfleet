@@ -12,6 +12,7 @@ async function bootServer() {
   process.env.DEVFLEET_DB_FILE = path.join(tempDir, 'devfleet.db');
   process.env.JWT_SECRET = 'dispatch-route-test';
 
+  const { closeDatabase } = await import('../api/db/sqlite.js');
   const { default: app } = await import('../api/app.js');
   const { attachWebSocket } = await import('../api/websocket/manager.js');
   const server = http.createServer(app);
@@ -84,6 +85,7 @@ async function bootServer() {
     close: async () => {
       deviceSocket?.close();
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      closeDatabase();
       await rm(tempDir, { recursive: true, force: true });
     },
   };

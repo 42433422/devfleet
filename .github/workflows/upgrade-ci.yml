@@ -47,6 +47,13 @@ jobs:
       - name: Run scoped tests
         run: npm run test:scope -- ${{ matrix.scope }}
 
+      - name: Prepare Tauri resource placeholders
+        if: matrix.scope == 'task-lock'
+        run: |
+          mkdir -p dist-server/node_modules dist-server/runtime dist-mcp
+          : > dist-server/devfleet-server.cjs
+          : > dist-mcp/devfleet-mcp.mjs
+
       - name: Run Rust agent tests
         if: matrix.scope == 'task-lock'
         working-directory: src-tauri
