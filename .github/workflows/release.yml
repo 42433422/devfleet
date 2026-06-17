@@ -23,7 +23,7 @@ jobs:
             args: '--target x86_64-apple-darwin'
           - platform: 'ubuntu-22.04'
             args: ''
-          - platform: 'windows-latest'
+          - platform: 'windows-2022'
             args: ''
 
     runs-on: ${{ matrix.platform }}
@@ -45,7 +45,7 @@ jobs:
           targets: ${{ matrix.platform == 'macos-latest' && (contains(matrix.args, 'aarch64') && 'aarch64-apple-darwin' || 'x86_64-apple-darwin') || '' }}
 
       - name: Setup Python for native Node builds
-        if: matrix.platform == 'windows-latest'
+        if: startsWith(matrix.platform, 'windows')
         uses: actions/setup-python@v6
         with:
           python-version: '3.x'
@@ -60,7 +60,7 @@ jobs:
         run: npm ci
 
       - name: Build MCP package
-        if: matrix.platform == 'windows-latest'
+        if: startsWith(matrix.platform, 'windows')
         shell: pwsh
         run: |
           npm run mcp:build
@@ -104,7 +104,7 @@ jobs:
           args: ${{ matrix.args }}
 
       - name: Upload MCP package
-        if: matrix.platform == 'windows-latest'
+        if: startsWith(matrix.platform, 'windows')
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
