@@ -1,5 +1,7 @@
-use std::path::PathBuf;
-use std::process::Child;
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::thread;
@@ -190,41 +192,89 @@ fn server_healthy() -> bool {
     })
 }
 
-fn start_embedded_server(app: &AppHandle) -> Option<Child> {
-    let script = resolve_server_script(app)?;
-    let server_dir = script.parent()?.to_path_buf();
-    let data_dir = app.path().app_data_dir().ok()?;
-    let db_file = data_dir.join("devfleet.db");
-    if let Err(error) = std::fs::create_dir_all(&data_dir) {
+fn resolve_embedded_node(server_dir: &Path) -> String {
+    if let Some(bundled) = resolve_bundled_node(server_dir) {
+        return bundled;
+    }
+    log::warn!(
+        "[DevFleet] bundled Node runtime missing under {}; falling back to system node",
+        server_dir.display()
+    );
+    resolve_node_executable().unwrap_or_else(|| "node".into())
+}
+
+fn open_server_log(data_dir: &Path) -> Option<File> {
+    if let Err(error) = std::fs::create_dir_all(data_dir) {
         log::error!(
             "[DevFleet] cannot create data dir {}: {error}",
             data_dir.display()
         );
         return None;
     }
-    log::info!("[DevFleet] embedded server db: {}", db_file.display());
+    let log_path = data_dir.join("devfleet-server.log");
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .ok()
+        .inspect(|_| log::info!("[DevFleet] embedded server log: {}", log_path.display()))
+}
 
-    let node = resolve_bundled_node(&server_dir)
-        .or_else(resolve_node_executable)
-        .unwrap_or_else(|| "node".into());
+fn log_last_server_error(app: &AppHandle) {
+    let Ok(data_dir) = app.path().app_data_dir() else {
+        return;
+    };
+    let log_path = data_dir.join("devfleet-server.log");
+    let Ok(raw) = std::fs::read_to_string(&log_path) else {
+        return;
+    };
+    let tail: String = raw.lines().rev().take(8).collect::<Vec<_>>().into_iter().rev().collect();
+    if !tail.is_empty() {
+        log::warn!("[DevFleet] embedded server log tail:\n{tail}");
+    }
+}
+
+fn start_embedded_server(app: &AppHandle) -> Option<Child> {
+    let script = resolve_server_script(app)?;
+    let server_dir = script.parent()?.to_path_buf();
+    let data_dir = app.path().app_data_dir().ok()?;
+    let db_file = data_dir.join("devfleet.db");
+    let node_modules = server_dir.join("node_modules");
+    let node = resolve_embedded_node(&server_dir);
+    log::info!("[DevFleet] embedded server db: {}", db_file.display());
     log::info!("[DevFleet] embedded server node: {node}");
-    let mut command = std::process::Command::new(node);
+
+    let mut command = std::process::Command::new(&node);
+    if let Some(log_file) = open_server_log(&data_dir) {
+        command.stderr(log_file);
+    } else {
+        command.stderr(Stdio::null());
+    }
     configure_hidden_command(&mut command);
     command
         .current_dir(&server_dir)
         .arg(&script)
+        .env_remove("PORT")
         .env("PORT", "3001")
         .env("DEVFLEET_DESKTOP", "1")
         .env("DEVFLEET_DATA_DIR", data_dir.to_string_lossy().into_owned())
-        .env("DEVFLEET_DB_FILE", db_file.to_string_lossy().into_owned());
+        .env("DEVFLEET_DB_FILE", db_file.to_string_lossy().into_owned())
+        .env("NODE_PATH", node_modules.to_string_lossy().into_owned());
 
     match command.spawn() {
         Ok(child) => {
-            log::info!("[DevFleet] starting embedded API server");
+            log::info!("[DevFleet] starting embedded API server on http://127.0.0.1:3001");
             Some(child)
         }
         Err(error) => {
             log::warn!("[DevFleet] could not start embedded server: {error}");
+            if let Ok(mut file) = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(data_dir.join("devfleet-server.log"))
+            {
+                let _ = writeln!(file, "[DevFleet] spawn failed: {error}");
+            }
             None
         }
     }

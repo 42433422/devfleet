@@ -33,9 +33,17 @@ function Protected({ children }: { children: React.ReactNode }) {
     setError('');
     const connect = async () => {
       if (isDesktopApp()) {
-        const ready = await waitForServerReady({ maxWaitMs: 30_000 });
+        const ready = await waitForServerReady({ maxWaitMs: 60_000, intervalMs: 500 });
         if (!ready) {
-          await autoFixLocalApiUrl();
+          const fixed = await autoFixLocalApiUrl();
+          if (!fixed) {
+            const retry = await waitForServerReady({ maxWaitMs: 15_000, intervalMs: 500 });
+            if (!retry) {
+              throw new Error(
+                `本机 DevFleet 服务未在 ${DEFAULT_API_BASE} 就绪。请完全退出后重新打开应用；若仍失败，查看 ~/Library/Application Support/com.devfleet.desktop/devfleet-server.log`,
+              );
+            }
+          }
         }
       }
       await guestLogin();

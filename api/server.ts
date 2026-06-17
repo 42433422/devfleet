@@ -11,7 +11,9 @@ const PORT = Number(process.env.PORT) || 3001;
 try {
   bootstrapDatabase();
 } catch (error) {
-  console.error('[DevFleet] 数据库启动失败:', error instanceof Error ? error.message : error);
+  const detail = error instanceof Error ? error.message : String(error);
+  console.error('[DevFleet] 数据库启动失败:', detail);
+  console.error('[DevFleet] DB path:', process.env.DEVFLEET_DB_FILE || '(auto)');
   process.exit(1);
 }
 
@@ -22,6 +24,9 @@ attachWebSocket(wss);
 
 server.listen(PORT, () => {
   console.log(`[DevFleet] API server ready on http://localhost:${PORT}`);
+  if (process.env.DEVFLEET_DB_FILE) {
+    console.log(`[DevFleet] database: ${process.env.DEVFLEET_DB_FILE}`);
+  }
   if (process.env.DEVFLEET_TUNNEL === '1' || process.env.DEVFLEET_TUNNEL === 'auto') {
     void startBuiltinTunnel(PORT, 'auto').then((status) => {
       if (status.url) console.log(`[DevFleet] 内置穿透: ${status.url}`);

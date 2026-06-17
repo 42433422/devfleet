@@ -143,21 +143,6 @@ const resolveNpmCli = () => {
 const rebuildBetterSqlite3 = (nodeBin) => {
   const betterSqlite3Dir = join(targetModules, 'better-sqlite3');
   rmSync(join(betterSqlite3Dir, 'build'), { recursive: true, force: true });
-
-  if (process.platform === 'win32') {
-    const prebuildInstall = join(root, 'node_modules', 'prebuild-install', 'bin.js');
-    if (!existsSync(prebuildInstall)) {
-      throw new Error(`缺少 prebuild-install: ${prebuildInstall}`);
-    }
-    console.log(`Installing prebuilt better-sqlite3 for node ${NODE_VERSION} with ${nodeBin}`);
-    execFileSync(
-      nodeBin,
-      [prebuildInstall, '--runtime', 'node', '--target', NODE_VERSION, '--arch', nodeArch()],
-      { cwd: betterSqlite3Dir, stdio: 'inherit' },
-    );
-    return;
-  }
-
   const npmCli = resolveNpmCli();
   if (!npmCli) {
     throw new Error(`缺少 npm-cli（已检查 bundled runtime 内 npm 路径）`);
@@ -194,4 +179,7 @@ copyNativePackages();
 const nodeBin = await ensureNodeRuntime();
 rebuildBetterSqlite3(nodeBin);
 verifyBundle(nodeBin);
+execFileSync(process.execPath, [join(root, 'scripts', 'verify-server-bundle.mjs')], {
+  stdio: 'inherit',
+});
 console.log('Server bundle ready for Tauri resources.');
