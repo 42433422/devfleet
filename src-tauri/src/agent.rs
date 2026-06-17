@@ -1800,6 +1800,9 @@ fn user_local_bin_executable(binary: &str) -> Option<String> {
     let home = std::env::var("USERPROFILE")
         .ok()
         .or_else(|| std::env::var("HOME").ok())?;
+    #[cfg(target_os = "windows")]
+    let mut candidates = vec![PathBuf::from(&home).join(".local").join("bin").join(binary)];
+    #[cfg(not(target_os = "windows"))]
     let candidates = vec![PathBuf::from(&home).join(".local").join("bin").join(binary)];
     #[cfg(target_os = "windows")]
     {
