@@ -28,6 +28,12 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Setup Python for native Node builds
+        if: matrix.platform == 'windows-latest'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
