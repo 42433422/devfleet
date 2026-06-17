@@ -11,6 +11,7 @@ test('tunnel API 默认未开启', async () => {
   process.env.DEVFLEET_DB_FILE = path.join(tempDir, 'db.json');
   process.env.JWT_SECRET = 'tunnel-test-secret';
 
+  const { closeDatabase } = await import('../api/db/sqlite.js');
   const { default: app } = await import('../api/app.js');
   const server = http.createServer(app);
   server.listen(0);
@@ -34,6 +35,7 @@ test('tunnel API 默认未开启', async () => {
     assert.equal(body.url, null);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    closeDatabase();
     await rm(tempDir, { recursive: true, force: true });
   }
 });
