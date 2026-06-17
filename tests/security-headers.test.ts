@@ -32,6 +32,6 @@ test('API 返回 CSP 头并拒绝未知 CORS Origin', async () => {
   } finally {
     server.close();
     closeDatabase();
-    await rm(tempDir, { recursive: true, force: true });
+    await rm(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });

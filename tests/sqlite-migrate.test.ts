@@ -38,5 +38,5 @@ test('JSON 数据库可迁移到 SQLite', async () => {
   assert.ok(fs.existsSync(`${jsonPath}.bak`));
 
   closeDatabase();
-  await rm(tempDir, { recursive: true, force: true });
+  await rm(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });

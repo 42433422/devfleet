@@ -13,6 +13,7 @@ test('账号、设备和任务的 MVP 主流程', async () => {
   process.env.JWT_SECRET = 'mvp-test-secret';
 
   const { default: app } = await import('../api/app.js');
+  const { closeDatabase } = await import('../api/db/sqlite.js');
   const { attachWebSocket } = await import('../api/websocket/manager.js');
   const server = http.createServer(app);
   attachWebSocket(new WebSocketServer({ server }));
@@ -167,7 +168,8 @@ test('账号、设备和任务的 MVP 主流程', async () => {
   } finally {
     deviceSocket?.close();
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    closeDatabase();
     await new Promise((resolve) => setTimeout(resolve, 100));
-    await rm(tempDir, { recursive: true, force: true });
+    await rm(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });

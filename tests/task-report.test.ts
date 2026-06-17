@@ -23,7 +23,7 @@ async function withTaskReportServer(fn: (base: string) => Promise<void>): Promis
   } finally {
     server.close();
     closeDatabase();
-    await rm(tempDir, { recursive: true, force: true });
+    await rm(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 }
 
