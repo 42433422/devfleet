@@ -169,41 +169,49 @@ const rebuildBetterSqlite3 = (nodeBin) => {
   const betterSqlite3Dir = join(targetModules, 'better-sqlite3');
   rmSync(join(betterSqlite3Dir, 'build'), { recursive: true, force: true });
 
+  const rebuildFromSource = () => {
+    const nodeGypCli = resolveNodeGypCli();
+    if (!nodeGypCli) {
+      throw new Error(`缺少 node-gyp（已检查 bundled runtime 内 npm 路径）`);
+    }
+
+    console.log(`Rebuilding better-sqlite3 with ${nodeBin} for node ${NODE_VERSION}`);
+    execFileSync(
+      nodeBin,
+      [
+        nodeGypCli,
+        'rebuild',
+        '--release',
+        `--target=${NODE_VERSION}`,
+        '--dist-url=https://nodejs.org/download/release',
+      ],
+      {
+        cwd: betterSqlite3Dir,
+        stdio: 'inherit',
+        env: nativeBuildEnv(nodeBin),
+      },
+    );
+  };
+
   if (process.platform === 'win32') {
     const prebuildInstall = join(root, 'node_modules', 'prebuild-install', 'bin.js');
     if (!existsSync(prebuildInstall)) {
       throw new Error(`缺少 prebuild-install: ${prebuildInstall}`);
     }
     console.log(`Installing prebuilt better-sqlite3 for node ${NODE_VERSION} with ${nodeBin}`);
-    execFileSync(
+    const result = spawnSync(
       nodeBin,
       [prebuildInstall, '--runtime', 'node', '--target', NODE_VERSION, '--arch', nodeArch()],
       { cwd: betterSqlite3Dir, stdio: 'inherit', env: nativeBuildEnv(nodeBin) },
     );
+    if (result.status === 0) return;
+    const reason = result.error ? `: ${result.error.message}` : '';
+    console.warn(`Prebuilt better-sqlite3 unavailable for node ${NODE_VERSION}${reason}; falling back to source rebuild.`);
+    rebuildFromSource();
     return;
   }
 
-  const nodeGypCli = resolveNodeGypCli();
-  if (!nodeGypCli) {
-    throw new Error(`缺少 node-gyp（已检查 bundled runtime 内 npm 路径）`);
-  }
-
-  console.log(`Rebuilding better-sqlite3 with ${nodeBin} for node ${NODE_VERSION}`);
-  execFileSync(
-    nodeBin,
-    [
-      nodeGypCli,
-      'rebuild',
-      '--release',
-      `--target=${NODE_VERSION}`,
-      '--dist-url=https://nodejs.org/download/release',
-    ],
-    {
-      cwd: betterSqlite3Dir,
-      stdio: 'inherit',
-      env: nativeBuildEnv(nodeBin),
-    },
-  );
+  rebuildFromSource();
 };
 
 const verifyBundle = (nodeBin) => {
