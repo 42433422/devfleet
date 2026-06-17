@@ -44,7 +44,7 @@ function traeAppBundleBin() {
     for (const name of names) {
       const binDir = join(root, name, 'Contents/Resources/app/bin');
       if (!existsSync(binDir)) continue;
-      for (const candidate of ['trae-cn', 'trae', 'code', 'marscode']) {
+      for (const candidate of ['trae-cn', 'trae', 'trae-cli', 'code', 'marscode']) {
         const full = join(binDir, candidate);
         if (existsSync(full)) return full;
       }
@@ -72,6 +72,8 @@ async function resolveCursorAgent() {
   if (agent) return { path: agent, args: [], resolver: 'agent' };
   const cursor = await resolveBinary('cursor');
   if (cursor) return { path: cursor, args: ['agent'], resolver: 'cursor agent' };
+  const bundled = cursorAppBundleBin();
+  if (bundled) return bundled;
   if (platform() === 'darwin') {
     const app = '/Applications/Cursor.app/Contents/MacOS/Cursor';
     if (existsSync(app)) return { path: app, args: ['agent'], resolver: 'Cursor.app' };
@@ -83,8 +85,17 @@ async function resolveCursorApp() {
   const path = await resolveBinary('cursor');
   if (path) return { path, resolver: 'cursor' };
   if (platform() === 'darwin') {
+    const bundled = '/Applications/Cursor.app/Contents/Resources/app/bin/cursor';
+    if (existsSync(bundled)) return { path: bundled, resolver: 'Cursor.app bundled' };
     const app = '/Applications/Cursor.app/Contents/MacOS/Cursor';
     if (existsSync(app)) return { path: app, resolver: 'Cursor.app' };
+  }
+  if (platform() === 'win32') {
+    const local = process.env.LOCALAPPDATA;
+    if (local) {
+      const bundled = join(local, 'Programs', 'cursor', 'resources', 'app', 'bin', 'cursor.cmd');
+      if (existsSync(bundled)) return { path: bundled, resolver: 'cursor bundled' };
+    }
   }
   return { path: null, resolver: null };
 }
@@ -94,9 +105,53 @@ async function resolveClaude() {
   return path ? { path, resolver: 'claude' } : { path: null, resolver: null };
 }
 
+function codexBundledCli() {
+  if (platform() === 'darwin') {
+    const path = '/Applications/Codex.app/Contents/Resources/codex';
+    return existsSync(path) ? path : null;
+  }
+  if (platform() === 'win32') {
+    const local = process.env.LOCALAPPDATA;
+    if (!local) return null;
+    for (const rel of ['Programs\\Codex\\resources\\codex.exe', 'Programs\\Codex\\Codex.exe']) {
+      const full = join(local, rel);
+      if (existsSync(full)) return full;
+    }
+  }
+  return null;
+}
+
+function cursorAppBundleBin() {
+  if (platform() === 'darwin') {
+    const binDir = '/Applications/Cursor.app/Contents/Resources/app/bin';
+    if (!existsSync(binDir)) return null;
+    for (const name of ['agent', 'cursor']) {
+      const full = join(binDir, name);
+      if (existsSync(full)) return { path: full, args: name === 'cursor' ? ['agent'] : [], resolver: `Cursor.app/${name}` };
+    }
+  }
+  if (platform() === 'win32') {
+    const local = process.env.LOCALAPPDATA;
+    if (!local) return null;
+    const binDir = join(local, 'Programs', 'cursor', 'resources', 'app', 'bin');
+    if (!existsSync(binDir)) return null;
+    for (const name of ['agent.cmd', 'agent.exe', 'cursor.cmd', 'cursor.exe']) {
+      const full = join(binDir, name);
+      if (existsSync(full)) {
+        return {
+          path: full,
+          args: name.startsWith('cursor') ? ['agent'] : [],
+          resolver: `cursor bundled/${name}`,
+        };
+      }
+    }
+  }
+  return null;
+}
+
 async function resolveCodex() {
-  const path = await resolveBinary('codex');
-  return path ? { path, resolver: 'codex' } : { path: null, resolver: null };
+  const path = (await resolveBinary('codex')) || codexBundledCli();
+  return path ? { path, resolver: path.includes('Codex.app') ? 'Codex.app bundled' : 'codex' } : { path: null, resolver: null };
 }
 
 function runProbe(program, args) {

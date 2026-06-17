@@ -1163,6 +1163,15 @@ pub fn try_auto_bind_localhost(_app: &AppHandle, state: &AgentState) {
     };
 
     let detected_dev_tool = detect_preferred_dev_tool();
+    for tool in scan_tools(None, None) {
+        if tool.installed {
+            log::info!(
+                "[DevFleet] detected CLI: {} -> {}",
+                tool.tool_name,
+                tool.executable.as_deref().unwrap_or("?")
+            );
+        }
+    }
     let config = AgentConfig {
         api_base_url: LOCAL_API_BASE.to_string(),
         device_token: activation.device_token,
@@ -1404,6 +1413,49 @@ fn user_local_bin_executable(binary: &str) -> Option<String> {
     }
 }
 
+fn first_existing_file(candidates: impl IntoIterator<Item = PathBuf>) -> Option<String> {
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+fn bundled_cursor_app_bin() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        let path = PathBuf::from("/Applications/Cursor.app/Contents/Resources/app/bin");
+        if path.is_dir() {
+            return Some(path);
+        }
+    }
+    #[cfg(target_os = "windows")]
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        let path = PathBuf::from(format!("{local}\\Programs\\cursor\\resources\\app\\bin"));
+        if path.is_dir() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn bundled_codex_cli_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    #[cfg(target_os = "macos")]
+    candidates.push(PathBuf::from(
+        "/Applications/Codex.app/Contents/Resources/codex",
+    ));
+    #[cfg(target_os = "windows")]
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        for rel in [
+            r"Programs\Codex\resources\codex.exe",
+            r"Programs\Codex\Codex.exe",
+        ] {
+            candidates.push(PathBuf::from(format!("{local}\\{rel}")));
+        }
+    }
+    candidates
+}
+
 fn find_executable(tool: &str) -> Option<String> {
     let binary = match tool {
         "claude_code" => "claude",
@@ -1426,7 +1478,14 @@ fn find_executable(tool: &str) -> Option<String> {
                 format!("{local}\\Programs\\trae\\Trae.exe"),
                 format!("{program_files}\\Trae\\Trae.exe"),
             ],
-            "cursor" => vec![format!("{local}\\Programs\\cursor\\Cursor.exe")],
+            "cursor" => vec![
+                format!("{local}\\Programs\\cursor\\resources\\app\\bin\\cursor.cmd"),
+                format!("{local}\\Programs\\cursor\\Cursor.exe"),
+            ],
+            "codex" => bundled_codex_cli_candidates()
+                .into_iter()
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect(),
             _ => vec![],
         };
         return candidates.into_iter().find(|path| Path::new(path).exists());
@@ -1441,12 +1500,17 @@ fn find_executable(tool: &str) -> Option<String> {
                 return Some(String::from_utf8_lossy(&output.stdout).trim().to_string());
             }
         }
+        if tool == "codex" {
+            if let Some(path) = first_existing_file(bundled_codex_cli_candidates()) {
+                return Some(path);
+            }
+        }
         #[cfg(target_os = "macos")]
         {
-            let candidates = match tool {
+            let candidates: Vec<PathBuf> = match tool {
                 "trae" => {
                     if let Some(app) = computer_use::find_trae_app_bundle() {
-                        return app
+                        if let Some(mac_os) = app
                             .join("Contents/MacOS")
                             .read_dir()
                             .ok()
@@ -1454,21 +1518,33 @@ fn find_executable(tool: &str) -> Option<String> {
                                 entries
                                     .flatten()
                                     .find(|entry| entry.path().is_file())
-                                    .map(|entry| entry.path().to_string_lossy().into_owned())
-                            });
+                                    .map(|entry| entry.path())
+                            })
+                        {
+                            return Some(mac_os.to_string_lossy().into_owned());
+                        }
                     }
                     vec![
-                        "/Applications/Trae CN.app/Contents/MacOS/Trae CN",
-                        "/Applications/TRAE SOLO CN.app/Contents/MacOS/TRAE SOLO CN",
-                        "/Applications/Trae.app/Contents/MacOS/Trae",
-                        "/Applications/TRAE SOLO.app/Contents/MacOS/TRAE SOLO",
+                        PathBuf::from("/Applications/Trae CN.app/Contents/MacOS/Trae CN"),
+                        PathBuf::from("/Applications/TRAE SOLO CN.app/Contents/MacOS/TRAE SOLO CN"),
+                        PathBuf::from("/Applications/Trae.app/Contents/MacOS/Trae"),
+                        PathBuf::from("/Applications/TRAE SOLO.app/Contents/MacOS/TRAE SOLO"),
                     ]
                 }
-                "cursor" => vec!["/Applications/Cursor.app/Contents/MacOS/Cursor"],
+                "cursor" => {
+                    let mut paths = Vec::new();
+                    if let Some(bin_dir) = bundled_cursor_app_bin() {
+                        paths.push(bin_dir.join("cursor"));
+                    }
+                    paths.push(PathBuf::from(
+                        "/Applications/Cursor.app/Contents/MacOS/Cursor",
+                    ));
+                    paths
+                }
                 _ => vec![],
             };
-            if let Some(path) = candidates.into_iter().find(|path| Path::new(path).exists()) {
-                return Some(path.to_string());
+            if let Some(path) = first_existing_file(candidates) {
+                return Some(path);
             }
         }
         None
@@ -1718,7 +1794,7 @@ fn bundled_trae_cli_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     #[cfg(target_os = "macos")]
     if let Some(app) = computer_use::find_trae_app_bundle() {
-        for name in ["trae-cn", "trae", "code", "marscode"] {
+        for name in ["trae-cn", "trae", "trae-cli", "code", "marscode"] {
             candidates.push(app.join("Contents/Resources/app/bin").join(name));
         }
     }
@@ -1898,6 +1974,31 @@ fn resolve_cursor_agent() -> Option<(String, Vec<String>)> {
     }
     if let Some(path) = find_binary_in_path("cursor") {
         return Some((path, vec!["agent".to_string()]));
+    }
+    if let Some(bin_dir) = bundled_cursor_app_bin() {
+        #[cfg(target_os = "windows")]
+        for name in ["agent.cmd", "agent.exe", "cursor.cmd", "cursor.exe"] {
+            let candidate = bin_dir.join(name);
+            if candidate.is_file() {
+                let prefix = if name.starts_with("cursor") {
+                    vec!["agent".to_string()]
+                } else {
+                    Vec::new()
+                };
+                return Some((candidate.to_string_lossy().into_owned(), prefix));
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let agent = bin_dir.join("agent");
+            if agent.is_file() {
+                return Some((agent.to_string_lossy().into_owned(), Vec::new()));
+            }
+            let cursor = bin_dir.join("cursor");
+            if cursor.is_file() {
+                return Some((cursor.to_string_lossy().into_owned(), vec!["agent".to_string()]));
+            }
+        }
     }
     None
 }

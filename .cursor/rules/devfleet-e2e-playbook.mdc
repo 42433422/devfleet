@@ -1,0 +1,12 @@
+---
+description: DevFleet E2E 闭环 — 用户提到 DevFleet/派发/Trae 改码时自动遵循
+alwaysApply: false
+---
+
+当用户使用 DevFleet MCP 跑多设备编码闭环时：
+
+1. 按序调用 `devfleet_list_devices` → `devfleet_dispatch_task`（每次一个子任务，AI 指定 device_id 与 prompt）→ `devfleet_wait_for_task` → `devfleet_merge_task`
+2. **不要**在 dispatch 后让用户手动打开 Trae 或复制 prompt；Trae 工作设备 Agent 会在 dispatch 后自动 Computer Use（activate → 新任务 → 粘贴）
+3. 仅当任务日志含 `[pipeline:computer_use] 自动控制失败` 时，才调用 `devfleet_computer_use_start_trae_task` 补救
+4. `wait_for_task` 超时前不要中断；完成后 merge 并汇报各阶段耗时
+5. merge 失败时检查 `workspace_path` 是否为绝对路径且 origin 与任务 `repo_url` 一致
