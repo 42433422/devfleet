@@ -531,7 +531,7 @@ impl AgentState {
                 send_log(
                     tx,
                     task,
-                    "[pipeline:trae_cli] 优先尝试 Trae Agent CLI（trae run）…",
+                    "[pipeline:trae_cli] 优先尝试 TRAE Agent CLI（trae run / trae-cli run）…",
                     "info",
                 );
                 match run_trae_agent_cli(&task_dir, &trae_prompt).await {
@@ -1782,11 +1782,13 @@ async fn push_branch_if_remote(
     }
 }
 
-/// Trae Agent CLI 调用方式（`trae run "..."` / `trae-cli run "..."`）。
+/// Trae Agent CLI 调用方式（真正的 TRAE Agent CLI：`trae run "..."` / `trae-cli run "..."`）。
+/// 注意：Trae IDE 自带的 `trae-cn` / `code` / `marscode` 只是 GUI 启动器，不是 Agent CLI。
 #[derive(Clone, Debug)]
 struct TraeCliInvocation {
     program: String,
     prefix: Vec<String>,
+    subcommand: &'static str,
     label: &'static str,
 }
 
@@ -1794,7 +1796,9 @@ fn bundled_trae_cli_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     #[cfg(target_os = "macos")]
     if let Some(app) = computer_use::find_trae_app_bundle() {
-        for name in ["trae-cn", "trae", "trae-cli", "code", "marscode"] {
+        // 注意：trae-cn / marscode / code 是 Trae IDE 的 GUI 启动器，不是 Agent CLI。
+        // 这里只探测真正的 TRAE Agent CLI 二进制（如果用户把它放进 .app 的 bin 目录）。
+        for name in ["trae", "trae-cli"] {
             candidates.push(app.join("Contents/Resources/app/bin").join(name));
         }
     }
@@ -1803,7 +1807,6 @@ fn bundled_trae_cli_candidates() -> Vec<PathBuf> {
         for rel in [
             r"Programs\Trae\resources\app\bin\trae.cmd",
             r"Programs\Trae\resources\app\bin\trae.exe",
-            r"Programs\Trae\resources\app\bin\trae-cn.cmd",
             r"Programs\trae\resources\app\bin\trae.cmd",
         ] {
             candidates.push(PathBuf::from(format!("{local}\\{rel}")));
@@ -1819,16 +1822,24 @@ fn resolve_trae_agent_cli() -> Option<TraeCliInvocation> {
             return Some(TraeCliInvocation {
                 program,
                 prefix: Vec::new(),
+                // 环境变量指定的 CLI 类型未知，默认 run（兼容 pip trae-cli）
+                subcommand: "run",
                 label: "DEVFLEET_TRAE_CLI",
             });
         }
     }
 
-    for (binary, label) in [("trae", "trae run"), ("trae-cli", "trae-cli run")] {
+    // PATH 探测：只认真正的 TRAE Agent CLI。
+    // Trae IDE 的启动器（trae-cn / marscode / code）只是打开 GUI 窗口，不是 Agent CLI。
+    for (binary, subcommand, label) in [
+        ("trae", "run", "trae run"),
+        ("trae-cli", "run", "trae-cli run"),
+    ] {
         if let Some(program) = find_binary_in_path(binary) {
             return Some(TraeCliInvocation {
                 program,
                 prefix: Vec::new(),
+                subcommand,
                 label,
             });
         }
@@ -1839,6 +1850,7 @@ fn resolve_trae_agent_cli() -> Option<TraeCliInvocation> {
             return Some(TraeCliInvocation {
                 program: candidate.to_string_lossy().into_owned(),
                 prefix: Vec::new(),
+                subcommand: "run",
                 label: "Trae bundled CLI",
             });
         }
@@ -1849,10 +1861,10 @@ fn resolve_trae_agent_cli() -> Option<TraeCliInvocation> {
 
 async fn run_trae_agent_cli(cwd: &Path, prompt: &str) -> Result<(String, String), String> {
     let invocation = resolve_trae_agent_cli().ok_or_else(|| {
-        "未找到 Trae Agent CLI。请安装：pip install trae-cli，或运行 trae.cn 官方 TRAE CLI 安装脚本（trae / trae-cli 需在 PATH 中）".to_string()
+        "未找到 TRAE Agent CLI。请安装 github.com/bytedance/trae-agent（命令：trae run 或 trae-cli run），或让 Trae IDE 设备走 Computer Use 兜底。".to_string()
     })?;
     let mut args: Vec<String> = invocation.prefix.clone();
-    args.push("run".to_string());
+    args.push(invocation.subcommand.to_string());
     args.push(prompt.to_string());
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let output = run_command(Some(cwd), &invocation.program, &arg_refs).await?;

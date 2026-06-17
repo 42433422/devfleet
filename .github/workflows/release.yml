@@ -27,6 +27,8 @@ jobs:
             args: ''
 
     runs-on: ${{ matrix.platform }}
+    env:
+      CARGO_NET_RETRY: 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
