@@ -1,5 +1,11 @@
-import { DEFAULT_API_BASE, getApiBaseUrl, isLocalApiUrl, LOCAL_API_CANDIDATES } from './apiBase';
+import { DEFAULT_API_BASE, getApiBaseUrl, isLocalApiUrl, LOCAL_API_CANDIDATES, shouldUseViteDevProxy } from './apiBase';
 import { PRODUCT_NAME } from './brand';
+
+function isDevBuild(): boolean {
+  return typeof import.meta !== 'undefined'
+    ? Boolean((import.meta as { env?: Record<string, unknown> }).env?.DEV)
+    : false;
+}
 
 export const PUBLIC_API_STORAGE_KEY = 'devfleet_public_api_url';
 
@@ -31,7 +37,7 @@ export function getLocalApiUrl(): string {
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(current)) {
     return normalizeApiBaseUrl(current);
   }
-  return DEFAULT_API_BASE;
+  return LOCAL_API_CANDIDATES[1] || DEFAULT_API_BASE;
 }
 
 export function getApiPort(apiBase = getApiBaseUrl()): number {
@@ -128,7 +134,7 @@ export async function parseHealthResponse(
   try {
     const body = (await res.json()) as HealthBody;
     if (body.success !== true) return false;
-    if (requireEmbedded && body.embedded !== true) return false;
+    if (requireEmbedded && body.embedded !== true && !isDevBuild()) return false;
     return true;
   } catch {
     return false;
@@ -137,23 +143,26 @@ export async function parseHealthResponse(
 
 /** 单次 HTTP health 探测 */
 export async function probeApiHealth(apiBase: string, timeoutMs = 3000): Promise<boolean> {
-  const base = normalizeApiBaseUrl(apiBase);
-  if (!isValidApiBaseUrl(base)) return false;
-  const requireEmbedded = isLocalApiUrl(base);
+  const base = apiBase ? normalizeApiBaseUrl(apiBase) : '';
+  if (apiBase && !isValidApiBaseUrl(base)) return false;
+  const requireEmbedded = base ? isLocalApiUrl(base) : false;
 
   const tunnelHeaders: Record<string, string> = {};
-  try {
-    if (/\.loca\.lt$/i.test(new URL(base).hostname)) {
-      tunnelHeaders['Bypass-Tunnel-Reminder'] = 'true';
+  if (base) {
+    try {
+      if (/\.loca\.lt$/i.test(new URL(base).hostname)) {
+        tunnelHeaders['Bypass-Tunnel-Reminder'] = 'true';
+      }
+    } catch {
+      return false;
     }
-  } catch {
-    return false;
   }
 
   try {
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), timeoutMs);
-    const res = await fetch(`${base}/api/health`, { signal: controller.signal, headers: tunnelHeaders });
+    const healthUrl = base ? `${base}/api/health` : '/api/health';
+    const res = await fetch(healthUrl, { signal: controller.signal, headers: tunnelHeaders });
     window.clearTimeout(timer);
     return parseHealthResponse(res, requireEmbedded);
   } catch {
@@ -195,6 +204,10 @@ export async function resolveReachableLocalApiUrl(): Promise<string | null> {
 
 /** 桌面端自动修复：localStorage 存了错误本机地址时切回可用 localhost */
 export async function autoFixLocalApiUrl(): Promise<string | null> {
+  if (shouldUseViteDevProxy()) {
+    return (await probeApiHealth('', 2500)) ? '' : null;
+  }
+
   const current = normalizeApiBaseUrl(getApiBaseUrl());
   if (await probeApiHealth(current, 2500)) {
     return current;

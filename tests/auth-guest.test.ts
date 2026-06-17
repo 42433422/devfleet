@@ -73,6 +73,24 @@ test('guest 登录后可访问设备与任务 API', async () => {
   });
 });
 
+test('历史 guest token 对应用户缺失时仍可访问 API', async () => {
+  await withGuestServer(async (base) => {
+    const { signToken } = await import('../api/middleware/auth.js');
+    const staleToken = signToken({
+      id: 'missing-guest-user',
+      email: 'guest@devfleet.local',
+    });
+
+    const devices = await fetch(`${base}/api/devices`, {
+      headers: { Authorization: `Bearer ${staleToken}` },
+    });
+    const body = await devices.json() as { devices: Array<{ id: string; name: string }> };
+
+    assert.equal(devices.ok, true);
+    assert.ok(body.devices.length >= 1);
+  });
+});
+
 test('guest 登录合并遗留 guest_* 账号数据', async () => {
   const tempDir = await mkdtemp(path.join(tmpdir(), 'devfleet-guest-merge-'));
   process.env.DEVFLEET_DB_FILE = path.join(tempDir, 'guest.db');

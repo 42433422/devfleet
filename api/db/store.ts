@@ -2,8 +2,6 @@ import 'dotenv/config';
 import { createHash } from 'node:crypto';
 import { genId } from '../lib/utils.js';
 import { getDatabase, flushDB as sqliteFlush, withTransaction } from './sqlite.js';
-import { importJsonIfPending } from './migrate.js';
-import { getDbPath } from './sqlite.js';
 
 interface User {
   id: string;
@@ -59,6 +57,7 @@ interface SubTask {
   branch_name: string;
   progress: number;
   created_at: string;
+  updated_at: string;
   completed_at?: string;
   title?: string;
   description?: string;
@@ -82,9 +81,7 @@ interface LogEntry {
 type UserRow = User & { is_guest: number };
 
 function sql() {
-  const database = getDatabase();
-  importJsonIfPending(database, getDbPath());
-  return database;
+  return getDatabase();
 }
 
 function rowToUser(row: UserRow): User {
@@ -163,6 +160,7 @@ function rowToSubTask(row: Record<string, unknown>): SubTask {
     branch_name: String(row.branch_name),
     progress: Number(row.progress),
     created_at: String(row.created_at),
+    updated_at: String(row.updated_at),
     completed_at: row.completed_at ? String(row.completed_at) : undefined,
     title: row.title ? String(row.title) : undefined,
     description: row.description ? String(row.description) : undefined,
@@ -445,6 +443,10 @@ export const db = {
   },
 
   subTasks: {
+    findAllByStatus(status: SubTask['status']): SubTask[] {
+      const rows = sql().prepare('SELECT * FROM sub_tasks WHERE status = ?').all(status) as Record<string, unknown>[];
+      return rows.map(rowToSubTask);
+    },
     findAllByTaskId(taskId: string): SubTask[] {
       const rows = sql().prepare('SELECT * FROM sub_tasks WHERE task_id = ?').all(taskId) as Record<string, unknown>[];
       return rows.map(rowToSubTask);
@@ -462,6 +464,7 @@ export const db = {
         id: genId(),
         progress: data.progress ?? 0,
         created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
         task_id: data.task_id,
         device_id: data.device_id,
         tool_name: data.tool_name,
@@ -477,9 +480,9 @@ export const db = {
       };
       sql().prepare(
         `INSERT INTO sub_tasks (
-          id, task_id, device_id, tool_name, status, branch_name, progress, created_at,
-          title, description, depends_on, sort_order, attempt_count, max_attempts, last_error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          id, task_id, device_id, tool_name, status, branch_name, progress, created_at, updated_at,
+          title, description, depends_on, sort_order, attempt_count, max_attempts, last_error, completed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         sub.id,
         sub.task_id,
@@ -489,6 +492,7 @@ export const db = {
         sub.branch_name,
         sub.progress,
         sub.created_at,
+        sub.updated_at,
         sub.title ?? '',
         sub.description ?? '',
         JSON.stringify(sub.depends_on ?? []),
@@ -496,6 +500,7 @@ export const db = {
         sub.attempt_count ?? 0,
         sub.max_attempts ?? 2,
         sub.last_error ?? null,
+        null,
       );
       return sub;
     },
@@ -507,7 +512,7 @@ export const db = {
         `UPDATE sub_tasks SET
           status = ?, branch_name = ?, progress = ?, completed_at = ?, device_id = ?,
           tool_name = ?, title = ?, description = ?, depends_on = ?, sort_order = ?,
-          attempt_count = ?, max_attempts = ?, last_error = ?
+          attempt_count = ?, max_attempts = ?, last_error = ?, updated_at = ?
          WHERE id = ?`,
       ).run(
         next.status,
@@ -523,6 +528,7 @@ export const db = {
         next.attempt_count ?? 0,
         next.max_attempts ?? 2,
         next.last_error ?? null,
+        new Date().toISOString(),
         id,
       );
       return next;

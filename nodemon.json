@@ -4,7 +4,8 @@
   "ignore": ["api/dist/*", "api/data/*"],
   "exec": "tsx api/server.ts",
   "env": {
-    "NODE_ENV": "development"
+    "NODE_ENV": "development",
+    "PORT": "3002"
   },
   "delay": 1000
 }

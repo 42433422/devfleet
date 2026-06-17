@@ -133,7 +133,7 @@ export default function Agent() {
           <Laptop size={36} className="text-brand mx-auto mb-4" />
           <h1 className="text-xl font-semibold text-white mb-2">需要桌面客户端</h1>
           <p className="text-sm text-zinc-500 mb-6">设备代理需要访问本机进程、Git 和编程软件，浏览器页面无法提供这些权限。</p>
-          <Link to="/login" className="inline-flex items-center gap-2 text-sm text-brand"><ArrowLeft size={14} />返回</Link>
+          <Link to="/devices" className="inline-flex items-center gap-2 text-sm text-brand"><ArrowLeft size={14} />返回</Link>
         </div>
       </div>
     );
@@ -147,7 +147,7 @@ export default function Agent() {
             <h1 className="text-xl font-semibold text-white flex items-center gap-2"><Laptop className="text-brand" size={20} />本机设备代理</h1>
             <p className="text-sm text-zinc-500 mt-1">让这台设备接受主设备派发的真实代码任务</p>
           </div>
-          <Link to="/login" className="flex items-center gap-2 text-sm text-zinc-500 hover:text-white"><ArrowLeft size={14} />返回控制台</Link>
+          <Link to="/devices" className="flex items-center gap-2 text-sm text-zinc-500 hover:text-white"><ArrowLeft size={14} />返回控制台</Link>
         </div>
 
         {(error || status?.lastError) && (

@@ -1,12 +1,16 @@
 import { Router, type Request, type Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { db } from '../db/store.js';
-import { ensureGuestSession } from '../lib/guestBootstrap.js';
+import { getGuestUser } from '../lib/guestBootstrap.js';
 import { signToken, authMiddleware } from '../middleware/auth.js';
+import { getDbPath } from '../db/sqlite.js';
 
 const router = Router();
 
 router.post('/register', async (req: Request, res: Response): Promise<void> => {
+  if (process.env.DEVFLEET_AUTH_DEBUG === '1') {
+    console.error(`[auth-debug] register db=${getDbPath()} users=${db.users.findAll().length}`);
+  }
   const body = (req.body || {}) as { email?: string; password?: string };
   const email = (body.email || '').trim().toLowerCase();
   const password = body.password || '';
@@ -55,14 +59,23 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
   res.status(200).json({ token, user: { id: user.id, email: user.email } });
 });
 
-router.post('/guest', async (_req: Request, res: Response): Promise<void> => {
-  const user = ensureGuestSession();
+router.post('/guest', (_req: Request, res: Response): void => {
+  const user = getGuestUser();
   const token = signToken(user);
   res.status(200).json({ token, user: { id: user.id, email: user.email } });
 });
 
 router.post('/logout', authMiddleware, async (_req: Request, res: Response): Promise<void> => {
   res.status(200).json({ success: true });
+});
+
+router.get('/me', authMiddleware, async (_req: Request, res: Response): Promise<void> => {
+  const user = _req.user;
+  if (!user) {
+    res.status(401).json({ error: '未授权' });
+    return;
+  }
+  res.status(200).json({ user });
 });
 
 export default router;

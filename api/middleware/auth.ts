@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import jwt from 'jsonwebtoken';
 import type { Request, Response, NextFunction } from 'express';
+import { db } from '../db/store.js';
+import { getGuestUser, isGuestSessionEmail } from '../lib/guestBootstrap.js';
 
 const configuredSecret = process.env.JWT_SECRET;
 if (process.env.NODE_ENV === 'production' && !configuredSecret) {
@@ -27,6 +29,21 @@ export function verifyToken(token: string): { id: string; email: string } | null
   }
 }
 
+function authDebug(req: Request, token: string, dbUserExists: boolean): void {
+  if (process.env.DEVFLEET_AUTH_DEBUG !== '1') return;
+  const path = `${req.method} ${req.originalUrl || req.url || req.path}`;
+  const decoded = (() => {
+    try {
+      const payload = JSON.parse(Buffer.from(token.split('.')[1] || '', 'base64url').toString('utf8')) as { id?: string; email?: string };
+      return ` jwt=${payload.id || 'n/a'}|${payload.email || 'n/a'}`;
+    } catch {
+      return ' jwt=decode-failed';
+    }
+  })();
+  const preview = token.slice(0, 20).replace(/\n/g, '');
+  console.error(`[auth-debug] pid=${process.pid} ${path} token=${preview}... ${decoded} dbUserExists=${dbUserExists}`);
+}
+
 export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
   const authHeader = req.headers['authorization'];
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -39,7 +56,19 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
     res.status(401).json({ error: 'token 无效或已过期' });
     return;
   }
-  req.user = user;
+  const dbUser = db.users.findById(user.id);
+  authDebug(req, token, Boolean(dbUser));
+  if (!dbUser) {
+    if (isGuestSessionEmail(user.email)) {
+      const guest = getGuestUser();
+      req.user = { id: guest.id, email: guest.email };
+      next();
+      return;
+    }
+    res.status(401).json({ error: '用户不存在，请重新登录' });
+    return;
+  }
+  req.user = { id: dbUser.id, email: dbUser.email };
   next();
 }
 

@@ -4,7 +4,7 @@ import { useDevicesStore, type Device, type ToolName } from '@/store/devices';
 import { DEV_TOOL_LABELS, DEV_TOOLS } from '@/lib/devTools';
 import ToolBadge from '@/components/ToolBadge';
 import ServerAddressPanel from '@/components/ServerAddressPanel';
-import { buildDeviceBindInstructions, resolveShareableApiUrl } from '@/lib/serverAddress';
+import { buildDeviceBindInstructions, resolveShareableApiUrl, autoFixLocalApiUrl } from '@/lib/serverAddress';
 import { isDesktopApp } from '@/lib/agent';
 import { PRODUCT_NAME } from '@/lib/brand';
 
@@ -58,6 +58,8 @@ export default function Devices() {
   const [lanIp, setLanIp] = useState<string | null>(null);
   const [actionError, setActionError] = useState('');
   const [devToolSaving, setDevToolSaving] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -80,6 +82,13 @@ export default function Devices() {
   const shareableServerUrl = useMemo(() => resolveShareableApiUrl(lanIp).url, [lanIp]);
 
   useEffect(() => {
+    if (!showAdd) {
+      setLoading(false);
+      setActionError('');
+    }
+  }, [showAdd]);
+
+  useEffect(() => {
     fetchDevices();
     const timer = setInterval(fetchDevices, 15000);
     return () => clearInterval(timer);
@@ -90,6 +99,12 @@ export default function Devices() {
     clearError();
     setLoading(true);
     try {
+      if (isDesktopApp() && !import.meta.env.DEV) {
+        const fixed = await autoFixLocalApiUrl();
+        if (!fixed) {
+          throw new Error(`本机服务未就绪，请确认 ${PRODUCT_NAME} 内嵌 API 已在 http://localhost:3001 启动`);
+        }
+      }
       const res = await bindDevice(deviceName.trim() || '未命名设备');
       setBindCode(res.bindCode);
       setBindExpiresAt(res.expiresAt || '');
@@ -120,10 +135,23 @@ export default function Devices() {
 
   const runDeviceAction = async (action: () => Promise<void>) => {
     setActionError('');
+    clearError();
     try {
       await action();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : '设备操作失败');
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!pendingDelete) return;
+    const { id } = pendingDelete;
+    setPendingDelete(null);
+    setDeletingId(id);
+    try {
+      await runDeviceAction(() => deleteDevice(id));
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -404,12 +432,9 @@ export default function Devices() {
                     <Star size={12} strokeWidth={1.5} />
                   </button>
                   <button
-                    onClick={() => {
-                      if (window.confirm(`确定删除设备“${d.name}”吗？`)) {
-                        runDeviceAction(() => deleteDevice(d.id));
-                      }
-                    }}
-                    className="flex items-center justify-center gap-1.5 px-3 py-2 bg-zinc-800/60 hover:bg-red-500/10 hover:text-red-400 text-zinc-400 rounded-lg text-xs transition-all duration-200"
+                    onClick={() => setPendingDelete({ id: d.id, name: d.name })}
+                    disabled={deletingId === d.id}
+                    className="flex items-center justify-center gap-1.5 px-3 py-2 bg-zinc-800/60 hover:bg-red-500/10 hover:text-red-400 disabled:opacity-50 text-zinc-400 rounded-lg text-xs transition-all duration-200"
                     title="删除设备"
                   >
                     <Trash2 size={12} strokeWidth={1.5} />
@@ -418,6 +443,33 @@ export default function Devices() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {pendingDelete && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-sm bg-zinc-900 border border-zinc-800 rounded-xl p-5 shadow-xl">
+            <h3 className="text-sm font-semibold text-white mb-2">删除设备</h3>
+            <p className="text-sm text-zinc-400 mb-5">
+              确定删除设备「{pendingDelete.name}」吗？此操作不可撤销。
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setPendingDelete(null)}
+                className="flex-1 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-sm"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleConfirmDelete()}
+                className="flex-1 py-2.5 bg-red-500/90 hover:bg-red-500 text-white rounded-lg text-sm font-medium"
+              >
+                删除
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

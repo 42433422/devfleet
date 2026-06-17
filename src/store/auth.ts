@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { api } from '@/lib/api';
+import { resolveFetch } from '@/lib/api';
 import {
   applyAuthSession,
   clearAuthSession,
@@ -13,7 +13,6 @@ interface AuthState {
   user: AuthUser | null;
   token: string | null;
   login: (email: string, password: string) => Promise<void>;
-  logout: () => void;
   register: (email: string, password: string) => Promise<void>;
   guestLogin: () => Promise<void>;
   syncSession: (token: string | null, user: AuthUser | null) => void;
@@ -27,43 +26,60 @@ export const useAuthStore = create<AuthState>((set) => ({
   user: initialUser,
   token: initialToken,
 
+  login: async (email, password) => {
+    clearAuthSession();
+    const res = await resolveFetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email.trim(), password }),
+    });
+    const data = await res.json() as { token?: string; access_token?: string; user?: AuthUser; error?: string };
+    if (!res.ok) {
+      throw new Error(data.error || '登录失败，请检查邮箱和密码');
+    }
+    const token = data.token || data.access_token;
+    if (!token) {
+      throw new Error('服务响应异常');
+    }
+    const user = data.user || parseUserFromToken(token) || { id: '1', email: email.trim() };
+    applyAuthSession(token, user);
+    set({ token, user });
+  },
+
+  register: async (email, password) => {
+    clearAuthSession();
+    const res = await resolveFetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email.trim(), password }),
+    });
+    const data = await res.json() as { token?: string; access_token?: string; user?: AuthUser; error?: string };
+    if (!res.ok) {
+      throw new Error(data.error || '注册失败');
+    }
+    const token = data.token || data.access_token;
+    if (!token) {
+      throw new Error('服务响应异常');
+    }
+    const user = data.user || parseUserFromToken(token) || { id: '1', email: email.trim() };
+    applyAuthSession(token, user);
+    set({ token, user });
+  },
+
   syncSession: (token, user) => set({ token, user }),
 
-  login: async (email: string, password: string) => {
-    const data = await api<{ token?: string; access_token?: string; user?: AuthUser }>('/api/auth/login', {
-      method: 'POST',
-      body: { email, password },
-    });
-    const token = data.token || data.access_token;
-    if (!token) throw new Error('登录响应缺少 token');
-    const user = data.user || parseUserFromToken(token) || { id: '1', email };
-    applyAuthSession(token, user);
-    set({ token, user });
-  },
-
-  logout: () => {
-    clearAuthSession();
-    set({ user: null, token: null });
-  },
-
-  register: async (email: string, password: string) => {
-    const data = await api<{ token?: string; access_token?: string; user?: AuthUser }>('/api/auth/register', {
-      method: 'POST',
-      body: { email, password },
-    });
-    const token = data.token || data.access_token;
-    if (!token) throw new Error('注册响应缺少 token');
-    const user = data.user || parseUserFromToken(token) || { id: '1', email };
-    applyAuthSession(token, user);
-    set({ token, user });
-  },
-
   guestLogin: async () => {
-    const data = await api<{ token?: string; access_token?: string; user?: AuthUser }>('/api/auth/guest', {
+    clearAuthSession();
+    const res = await resolveFetch('/api/auth/guest', {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
     });
+    const data = await res.json() as { token?: string; access_token?: string; user?: AuthUser; error?: string };
+    if (!res.ok) {
+      throw new Error(data.error || '无法连接服务');
+    }
     const token = data.token || data.access_token;
-    if (!token) throw new Error('访客登录响应缺少 token');
+    if (!token) throw new Error('服务响应异常');
     const user = data.user || parseUserFromToken(token) || { id: '1', email: 'guest@devfleet.local' };
     applyAuthSession(token, user);
     set({ token, user });

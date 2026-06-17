@@ -9,6 +9,7 @@ const COLUMN_UPGRADES: Array<{ table: string; column: string; ddl: string }> = [
   { table: 'sub_tasks', column: 'attempt_count', ddl: 'ALTER TABLE sub_tasks ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0' },
   { table: 'sub_tasks', column: 'max_attempts', ddl: 'ALTER TABLE sub_tasks ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 2' },
   { table: 'sub_tasks', column: 'last_error', ddl: 'ALTER TABLE sub_tasks ADD COLUMN last_error TEXT' },
+  { table: 'sub_tasks', column: 'updated_at', ddl: 'ALTER TABLE sub_tasks ADD COLUMN updated_at TEXT NOT NULL DEFAULT (datetime(\'now\'))' },
   { table: 'log_entries', column: 'device_id', ddl: 'ALTER TABLE log_entries ADD COLUMN device_id TEXT' },
   { table: 'log_entries', column: 'task_id', ddl: 'ALTER TABLE log_entries ADD COLUMN task_id TEXT' },
 ];
