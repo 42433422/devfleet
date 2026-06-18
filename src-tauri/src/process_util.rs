@@ -350,6 +350,51 @@ pub fn configure_hidden_command(command: &mut Command) {
     }
 }
 
+pub fn ensure_current_user_startup(app_name: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+        let exe = std::env::current_exe().map_err(|error| error.to_string())?;
+        if !exe.is_file() {
+            return Err(format!("当前程序不存在: {}", exe.display()));
+        }
+
+        let startup_value = format!("\"{}\"", exe.display());
+        let output = Command::new("reg")
+            .args([
+                "add",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                app_name,
+                "/t",
+                "REG_SZ",
+                "/d",
+                &startup_value,
+                "/f",
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map_err(|error| error.to_string())?;
+
+        if output.status.success() {
+            return Ok(());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        return Err(format!("写入 Windows 自启动失败\nstdout: {stdout}\nstderr: {stderr}"));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app_name;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

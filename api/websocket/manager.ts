@@ -281,10 +281,12 @@ export function reconcileRemoteCommandTimeoutsForDevice(deviceId: string) {
 }
 
 export function sendRemoteCommandToDevice(command: RemoteCommand): RemoteCommand | undefined {
-  const startedAt = command.started_at || new Date().toISOString();
+  const newAttempt = command.status !== 'running' || !command.started_at;
+  const startedAt = newAttempt ? new Date().toISOString() : command.started_at;
   const running = db.remoteCommands.update(command.id, {
     status: 'running',
     started_at: startedAt,
+    completed_at: newAttempt ? undefined : command.completed_at,
     error: undefined,
   });
   if (!running) return undefined;
@@ -300,9 +302,19 @@ export function sendRemoteCommandToDevice(command: RemoteCommand): RemoteCommand
   });
   if (!sent) {
     clearRemoteCommandTimer(running.id);
+    const queuedAt = new Date().toISOString();
     return db.remoteCommands.update(running.id, {
       status: 'pending',
+      started_at: undefined,
       error: '设备连接已断开，等待重连后补发',
+      logs: [
+        ...running.logs,
+        {
+          timestamp: queuedAt,
+          level: 'warn',
+          content: '设备连接已断开，命令保持排队，等待重连后自动补发',
+        },
+      ].slice(-500),
     });
   }
   broadcast(running.user_id, {

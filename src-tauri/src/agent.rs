@@ -15,7 +15,7 @@ use std::{
 };
 use tauri::{AppHandle, Manager, State};
 use tokio::{
-    io::{AsyncBufReadExt, BufReader},
+    io::{AsyncRead, AsyncReadExt},
     net::TcpStream,
     process::{ChildStderr, ChildStdout, Command},
     sync::mpsc,
@@ -2979,52 +2979,44 @@ async fn collect_stream_output(
     stream: ChildStdout,
     observer: Option<CommandOutputObserver>,
 ) -> String {
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    let mut output = String::new();
-    loop {
-        line.clear();
-        match reader.read_line(&mut line).await {
-            Ok(0) => break,
-            Ok(_) => {
-                if let Some(observer) = &observer {
-                    observer.emit("stdout", &line);
-                }
-                output.push_str(&line);
-            }
-            Err(error) => {
-                output.push_str(&format!("\n[devfleet:stdout-read-error] {error}"));
-                break;
-            }
-        }
-    }
-    output
+    collect_stream_output_lossy(stream, "stdout", observer).await
 }
 
 async fn collect_stream_output_err(
     stream: ChildStderr,
     observer: Option<CommandOutputObserver>,
 ) -> String {
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    let mut output = String::new();
+    collect_stream_output_lossy(stream, "stderr", observer).await
+}
+
+async fn collect_stream_output_lossy<R>(
+    mut stream: R,
+    stream_name: &'static str,
+    observer: Option<CommandOutputObserver>,
+) -> String
+where
+    R: AsyncRead + Unpin,
+{
+    let mut bytes = Vec::new();
+    let mut buffer = [0u8; 8192];
     loop {
-        line.clear();
-        match reader.read_line(&mut line).await {
+        match stream.read(&mut buffer).await {
             Ok(0) => break,
-            Ok(_) => {
+            Ok(read) => {
+                let chunk = String::from_utf8_lossy(&buffer[..read]);
                 if let Some(observer) = &observer {
-                    observer.emit("stderr", &line);
+                    observer.emit(stream_name, &chunk);
                 }
-                output.push_str(&line);
+                bytes.extend_from_slice(&buffer[..read]);
             }
             Err(error) => {
-                output.push_str(&format!("\n[devfleet:stderr-read-error] {error}"));
-                break;
+                let mut output = String::from_utf8_lossy(&bytes).into_owned();
+                output.push_str(&format!("\n[devfleet:{stream_name}-read-error] {error}"));
+                return output;
             }
         }
     }
-    output
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 async fn run_cursor_agent(cwd: &Path, prompt: &str) -> Result<String, String> {

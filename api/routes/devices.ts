@@ -465,11 +465,6 @@ router.post('/:id/commands', async (req: Request, res: Response): Promise<void> 
     res.status(404).json({ error: '设备不存在' });
     return;
   }
-  if (!hasDevice(id)) {
-    res.status(409).json({ error: '设备未在线，远程命令未下发' });
-    return;
-  }
-
   const body = (req.body || {}) as {
     title?: string;
     shell?: RemoteCommand['shell'];
@@ -505,7 +500,9 @@ router.post('/:id/commands', async (req: Request, res: Response): Promise<void> 
   });
   db.remoteCommands.appendLog(command.id, {
     level: 'info',
-    content: `已下发远程命令：${command.title}`,
+    content: hasDevice(id)
+      ? `已下发远程命令：${command.title}`
+      : `设备离线，远程命令已排队：${command.title}`,
   });
   const dispatched = sendRemoteCommandToDevice(db.remoteCommands.findById(command.id) || command);
   if (!dispatched) {

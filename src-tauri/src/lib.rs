@@ -24,6 +24,9 @@ pub fn run() {
                 }
             }
             server::ensure_server_running(app.handle());
+            if let Err(error) = process_util::ensure_current_user_startup("PaibiPara") {
+                log::warn!("[DevFleet] Windows startup registration skipped: {error}");
+            }
 
             let win = &app.config().app.windows[0];
             let min_width = win.min_width.unwrap_or(800.0);
