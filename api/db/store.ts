@@ -105,6 +105,33 @@ interface CollabMessage {
   updated_at: string;
 }
 
+interface RemoteCommandLog {
+  timestamp: string;
+  level: 'info' | 'warn' | 'error' | 'debug';
+  content: string;
+}
+
+interface RemoteCommand {
+  id: string;
+  user_id: string;
+  device_id: string;
+  title: string;
+  shell: 'powershell' | 'cmd' | 'sh' | 'bash';
+  script: string;
+  cwd?: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  timeout_seconds: number;
+  exit_code?: number;
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+  logs: RemoteCommandLog[];
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+  updated_at: string;
+}
+
 interface ModPackInstallation {
   id: string;
   user_id: string;
@@ -277,6 +304,40 @@ function rowToCollabMessage(row: Record<string, unknown>): CollabMessage {
     sub_task_id: row.sub_task_id ? String(row.sub_task_id) : undefined,
     status: String(row.status) as CollabMessage['status'],
     created_at: String(row.created_at),
+    updated_at: String(row.updated_at),
+  };
+}
+
+function parseRemoteCommandLogs(value: unknown): RemoteCommandLog[] {
+  if (Array.isArray(value)) return value as RemoteCommandLog[];
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed as RemoteCommandLog[] : [];
+  } catch {
+    return [];
+  }
+}
+
+function rowToRemoteCommand(row: Record<string, unknown>): RemoteCommand {
+  return {
+    id: String(row.id),
+    user_id: String(row.user_id),
+    device_id: String(row.device_id),
+    title: String(row.title),
+    shell: String(row.shell) as RemoteCommand['shell'],
+    script: String(row.script),
+    cwd: row.cwd ? String(row.cwd) : undefined,
+    status: String(row.status) as RemoteCommand['status'],
+    timeout_seconds: Number(row.timeout_seconds),
+    exit_code: row.exit_code === null || row.exit_code === undefined ? undefined : Number(row.exit_code),
+    stdout: row.stdout ? String(row.stdout) : undefined,
+    stderr: row.stderr ? String(row.stderr) : undefined,
+    error: row.error ? String(row.error) : undefined,
+    logs: parseRemoteCommandLogs(row.logs),
+    created_at: String(row.created_at),
+    started_at: row.started_at ? String(row.started_at) : undefined,
+    completed_at: row.completed_at ? String(row.completed_at) : undefined,
     updated_at: String(row.updated_at),
   };
 }
@@ -820,6 +881,135 @@ export const db = {
     },
   },
 
+  remoteCommands: {
+    findAllByUserId(userId: string, limit = 100): RemoteCommand[] {
+      const rows = sql().prepare(
+        `SELECT * FROM remote_commands
+         WHERE user_id = ?
+         ORDER BY created_at DESC
+         LIMIT ?`,
+      ).all(userId, limit) as Record<string, unknown>[];
+      return rows.map(rowToRemoteCommand);
+    },
+    findAllByDeviceId(deviceId: string, limit = 100): RemoteCommand[] {
+      const rows = sql().prepare(
+        `SELECT * FROM remote_commands
+         WHERE device_id = ?
+         ORDER BY created_at DESC
+         LIMIT ?`,
+      ).all(deviceId, limit) as Record<string, unknown>[];
+      return rows.map(rowToRemoteCommand);
+    },
+    findPendingByDeviceId(deviceId: string): RemoteCommand[] {
+      const rows = sql().prepare(
+        `SELECT * FROM remote_commands
+         WHERE device_id = ? AND status = 'pending'
+         ORDER BY created_at ASC`,
+      ).all(deviceId) as Record<string, unknown>[];
+      return rows.map(rowToRemoteCommand);
+    },
+    findById(id: string): RemoteCommand | undefined {
+      const row = sql().prepare('SELECT * FROM remote_commands WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+      return row ? rowToRemoteCommand(row) : undefined;
+    },
+    create(data: Omit<RemoteCommand, 'id' | 'created_at' | 'updated_at' | 'logs' | 'status'> & {
+      id?: string;
+      status?: RemoteCommand['status'];
+      logs?: RemoteCommandLog[];
+    }): RemoteCommand {
+      const now = new Date().toISOString();
+      const command: RemoteCommand = {
+        id: data.id || genId(),
+        status: data.status || 'pending',
+        created_at: now,
+        updated_at: now,
+        user_id: data.user_id,
+        device_id: data.device_id,
+        title: data.title,
+        shell: data.shell,
+        script: data.script,
+        cwd: data.cwd,
+        timeout_seconds: data.timeout_seconds,
+        exit_code: data.exit_code,
+        stdout: data.stdout,
+        stderr: data.stderr,
+        error: data.error,
+        logs: data.logs || [],
+        started_at: data.started_at,
+        completed_at: data.completed_at,
+      };
+      sql().prepare(
+        `INSERT INTO remote_commands (
+          id, user_id, device_id, title, shell, script, cwd, status,
+          timeout_seconds, exit_code, stdout, stderr, error, logs,
+          created_at, started_at, completed_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        command.id,
+        command.user_id,
+        command.device_id,
+        command.title,
+        command.shell,
+        command.script,
+        command.cwd ?? null,
+        command.status,
+        command.timeout_seconds,
+        command.exit_code ?? null,
+        command.stdout ?? null,
+        command.stderr ?? null,
+        command.error ?? null,
+        JSON.stringify(command.logs),
+        command.created_at,
+        command.started_at ?? null,
+        command.completed_at ?? null,
+        command.updated_at,
+      );
+      return command;
+    },
+    update(id: string, patch: Partial<RemoteCommand>): RemoteCommand | undefined {
+      const current = this.findById(id);
+      if (!current) return undefined;
+      const next = { ...current, ...patch, updated_at: new Date().toISOString() };
+      sql().prepare(
+        `UPDATE remote_commands SET
+          title = ?, shell = ?, script = ?, cwd = ?, status = ?,
+          timeout_seconds = ?, exit_code = ?, stdout = ?, stderr = ?, error = ?,
+          logs = ?, started_at = ?, completed_at = ?, updated_at = ?
+         WHERE id = ?`,
+      ).run(
+        next.title,
+        next.shell,
+        next.script,
+        next.cwd ?? null,
+        next.status,
+        next.timeout_seconds,
+        next.exit_code ?? null,
+        next.stdout ?? null,
+        next.stderr ?? null,
+        next.error ?? null,
+        JSON.stringify(next.logs),
+        next.started_at ?? null,
+        next.completed_at ?? null,
+        next.updated_at,
+        id,
+      );
+      return next;
+    },
+    appendLog(id: string, log: Omit<RemoteCommandLog, 'timestamp'> & { timestamp?: string }): RemoteCommand | undefined {
+      const current = this.findById(id);
+      if (!current) return undefined;
+      const nextLogs = [
+        ...current.logs,
+        {
+          timestamp: log.timestamp || new Date().toISOString(),
+          level: log.level,
+          content: log.content,
+        },
+      ].slice(-500);
+      return this.update(id, { logs: nextLogs });
+    },
+  },
+
   modInstallations: {
     findAllByUserId(userId: string): ModPackInstallation[] {
       const rows = sql().prepare(
@@ -1026,6 +1216,8 @@ export type {
   LogEntry,
   CollabSession,
   CollabMessage,
+  RemoteCommand,
+  RemoteCommandLog,
   ModPackInstallation,
   ModPermissionGrant,
   ModAcceptanceCheckResult,

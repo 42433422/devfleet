@@ -1,5 +1,5 @@
 import type { WebSocket, Server as WSServer } from 'ws';
-import { db } from '../db/store.js';
+import { db, type RemoteCommand } from '../db/store.js';
 import { verifyToken } from '../middleware/auth.js';
 import { normalizeDevTool } from '../lib/utils.js';
 import { parseCapabilities } from '../lib/capabilities.js';
@@ -30,6 +30,13 @@ interface WSMessage {
   status?: 'pending' | 'running' | 'completed' | 'failed';
   content?: string;
   level?: 'info' | 'warn' | 'error' | 'debug';
+  command_id?: string;
+  exit_code?: number;
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+  started_at?: string;
+  completed_at?: string;
 }
 
 const clients: Set<ClientWS> = new Set();
@@ -179,6 +186,66 @@ function handleAppMessage(ws: WebSocket, raw: Buffer | ArrayBuffer | Buffer[]) {
   }
 }
 
+function serializeRemoteCommand(command: RemoteCommand) {
+  return {
+    id: command.id,
+    user_id: command.user_id,
+    device_id: command.device_id,
+    title: command.title,
+    shell: command.shell,
+    script: command.script,
+    cwd: command.cwd,
+    status: command.status,
+    timeout_seconds: command.timeout_seconds,
+    exit_code: command.exit_code,
+    stdout: command.stdout,
+    stderr: command.stderr,
+    error: command.error,
+    logs: command.logs,
+    created_at: command.created_at,
+    started_at: command.started_at,
+    completed_at: command.completed_at,
+    updated_at: command.updated_at,
+  };
+}
+
+function sendRemoteCommandToDevice(command: RemoteCommand): RemoteCommand | undefined {
+  const startedAt = command.started_at || new Date().toISOString();
+  const running = db.remoteCommands.update(command.id, {
+    status: 'running',
+    started_at: startedAt,
+    error: undefined,
+  });
+  if (!running) return undefined;
+  const sent = sendToDevice(running.device_id, {
+    type: 'execute_command',
+    command_id: running.id,
+    title: running.title,
+    shell: running.shell,
+    script: running.script,
+    cwd: running.cwd,
+    timeout_seconds: running.timeout_seconds,
+  });
+  if (!sent) {
+    return db.remoteCommands.update(running.id, {
+      status: 'pending',
+      error: '设备连接已断开，等待重连后补发',
+    });
+  }
+  broadcast(running.user_id, {
+    type: 'remote_command',
+    device_id: running.device_id,
+    command: serializeRemoteCommand(running),
+  });
+  return running;
+}
+
+function dispatchPendingRemoteCommandsForDevice(deviceId: string) {
+  for (const command of db.remoteCommands.findPendingByDeviceId(deviceId)) {
+    sendRemoteCommandToDevice(command);
+  }
+}
+
 export function attachWebSocket(wss: WSServer) {
   wss.on('connection', (ws: ClientWS, req) => {
     const url = new URL(req.url || '/', 'http://localhost');
@@ -236,6 +303,7 @@ export function attachWebSocket(wss: WSServer) {
         device_id: device.id,
         status: 'online',
       });
+      dispatchPendingRemoteCommandsForDevice(device.id);
       for (const taskId of dispatchPendingForDevice(device.user_id, device.id)) {
         reconcileTask(device.user_id, taskId);
       }
@@ -332,6 +400,51 @@ export function attachWebSocket(wss: WSServer) {
             return;
           }
 
+          if (msg.type === 'command_log' && msg.command_id && msg.content?.trim()) {
+            markDeviceLinkHealthy(device.id, '远程命令日志上报');
+            const command = db.remoteCommands.findById(msg.command_id);
+            if (!command || command.user_id !== device.user_id || command.device_id !== device.id) return;
+            const updated = db.remoteCommands.appendLog(command.id, {
+              content: msg.content.trim(),
+              level: msg.level || 'info',
+            });
+            if (!updated) return;
+            broadcast(device.user_id, {
+              type: 'remote_command_log',
+              device_id: device.id,
+              command_id: command.id,
+              command: serializeRemoteCommand(updated),
+            });
+            return;
+          }
+
+          if (msg.type === 'command_result' && msg.command_id) {
+            markDeviceLinkHealthy(device.id, '远程命令结果上报');
+            const command = db.remoteCommands.findById(msg.command_id);
+            if (!command || command.user_id !== device.user_id || command.device_id !== device.id) return;
+            const exitCode = typeof msg.exit_code === 'number' ? msg.exit_code : undefined;
+            const status = msg.status === 'completed' || (msg.status !== 'failed' && exitCode === 0)
+              ? 'completed'
+              : 'failed';
+            const updated = db.remoteCommands.update(command.id, {
+              status,
+              exit_code: exitCode,
+              stdout: msg.stdout,
+              stderr: msg.stderr,
+              error: msg.error,
+              started_at: msg.started_at || command.started_at,
+              completed_at: msg.completed_at || new Date().toISOString(),
+            });
+            if (!updated) return;
+            broadcast(device.user_id, {
+              type: 'remote_command_result',
+              device_id: device.id,
+              command_id: command.id,
+              command: serializeRemoteCommand(updated),
+            });
+            return;
+          }
+
           if (msg.type === 'task_log' && msg.task_id && msg.subtask_id && msg.content?.trim()) {
             markDeviceLinkHealthy(device.id, '任务日志上报');
             const task = db.tasks.findById(msg.task_id);
@@ -419,15 +532,17 @@ export function broadcast(userId: string, msg: BroadcastMessage) {
   });
 }
 
-export function sendToDevice(deviceId: string, msg: Record<string, unknown>) {
+export function sendToDevice(deviceId: string, msg: Record<string, unknown>): boolean {
   const ws = deviceWS.get(deviceId);
   if (ws && ws.readyState === ws.OPEN) {
     try {
       ws.send(typeof msg === 'string' ? msg : JSON.stringify(msg));
+      return true;
     } catch (err) {
       console.error('Send to device error:', err);
     }
   }
+  return false;
 }
 
 export function sendBindingIdentity(deviceId: string) {

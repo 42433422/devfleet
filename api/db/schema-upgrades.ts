@@ -63,6 +63,31 @@ function ensureCollabTables(database: DevFleetDatabase): void {
   `);
 }
 
+function ensureRemoteCommandTables(database: DevFleetDatabase): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS remote_commands (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      shell TEXT NOT NULL DEFAULT 'powershell',
+      script TEXT NOT NULL,
+      cwd TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      timeout_seconds INTEGER NOT NULL DEFAULT 300,
+      exit_code INTEGER,
+      stdout TEXT,
+      stderr TEXT,
+      error TEXT,
+      logs TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL,
+      started_at TEXT,
+      completed_at TEXT,
+      updated_at TEXT NOT NULL
+    );
+  `);
+}
+
 export function applySchemaUpgrades(database: DevFleetDatabase): void {
   for (const upgrade of COLUMN_UPGRADES) {
     if (!hasColumn(database, upgrade.table, upgrade.column)) {
@@ -70,6 +95,7 @@ export function applySchemaUpgrades(database: DevFleetDatabase): void {
     }
   }
   ensureCollabTables(database);
+  ensureRemoteCommandTables(database);
   database.prepare(
     `UPDATE sub_tasks
      SET updated_at = COALESCE(NULLIF(updated_at, ''), created_at, datetime('now'))
@@ -83,4 +109,7 @@ export function applySchemaUpgrades(database: DevFleetDatabase): void {
   database.exec('CREATE INDEX IF NOT EXISTS idx_collab_sessions_task_id ON collab_sessions(task_id)');
   database.exec('CREATE INDEX IF NOT EXISTS idx_collab_messages_session_id ON collab_messages(session_id)');
   database.exec('CREATE INDEX IF NOT EXISTS idx_collab_messages_sub_task_id ON collab_messages(sub_task_id)');
+  database.exec('CREATE INDEX IF NOT EXISTS idx_remote_commands_user_id ON remote_commands(user_id, created_at DESC)');
+  database.exec('CREATE INDEX IF NOT EXISTS idx_remote_commands_device_id ON remote_commands(device_id, created_at DESC)');
+  database.exec('CREATE INDEX IF NOT EXISTS idx_remote_commands_status ON remote_commands(status)');
 }

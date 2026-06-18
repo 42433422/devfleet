@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from 'express';
-import { db, type SubTask } from '../db/store.js';
+import { db, type RemoteCommand, type SubTask } from '../db/store.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { genBindCode, genDeviceToken, normalizeDevTool, type DevTool } from '../lib/utils.js';
 import {
@@ -9,6 +9,7 @@ import {
   hasDevice,
   sendBindingIdentity,
   sendBindingIdentityToUser,
+  sendToDevice,
 } from '../websocket/manager.js';
 import { parseCapabilities } from '../lib/capabilities.js';
 import { reconcileTask, dispatchReadySubs, handleSubTaskFailure } from '../lib/dispatch.js';
@@ -16,6 +17,10 @@ import { syncCollabMessageForSubtask } from '../lib/collab.js';
 import { createHash } from 'node:crypto';
 
 const router = Router();
+const REMOTE_COMMAND_SHELLS: RemoteCommand['shell'][] = ['powershell', 'cmd', 'sh', 'bash'];
+const MAX_REMOTE_SCRIPT_CHARS = 20_000;
+const MIN_REMOTE_TIMEOUT_SECONDS = 5;
+const MAX_REMOTE_TIMEOUT_SECONDS = 1_800;
 
 interface ToolItem {
   tool_name: 'codex' | 'trae' | 'cursor' | 'claude_code';
@@ -49,6 +54,72 @@ function serializeDevice(deviceId: string) {
     activated: dev.activated !== false,
     isPrimary: Boolean(dev.is_primary),
   };
+}
+
+function serializeRemoteCommand(command: RemoteCommand) {
+  return {
+    id: command.id,
+    user_id: command.user_id,
+    device_id: command.device_id,
+    title: command.title,
+    shell: command.shell,
+    script: command.script,
+    cwd: command.cwd,
+    status: command.status,
+    timeout_seconds: command.timeout_seconds,
+    exit_code: command.exit_code,
+    stdout: command.stdout,
+    stderr: command.stderr,
+    error: command.error,
+    logs: command.logs,
+    created_at: command.created_at,
+    started_at: command.started_at,
+    completed_at: command.completed_at,
+    updated_at: command.updated_at,
+  };
+}
+
+function defaultRemoteShell(deviceId: string): RemoteCommand['shell'] {
+  const device = db.devices.findById(deviceId);
+  const caps = parseCapabilities(device?.capabilities);
+  return caps?.platform === 'windows' ? 'powershell' : 'sh';
+}
+
+function clampRemoteTimeout(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 300;
+  return Math.max(MIN_REMOTE_TIMEOUT_SECONDS, Math.min(MAX_REMOTE_TIMEOUT_SECONDS, Math.floor(parsed)));
+}
+
+function dispatchRemoteCommand(command: RemoteCommand): RemoteCommand | undefined {
+  const startedAt = command.started_at || new Date().toISOString();
+  const running = db.remoteCommands.update(command.id, {
+    status: 'running',
+    started_at: startedAt,
+    error: undefined,
+  });
+  if (!running) return undefined;
+  const sent = sendToDevice(command.device_id, {
+    type: 'execute_command',
+    command_id: running.id,
+    title: running.title,
+    shell: running.shell,
+    script: running.script,
+    cwd: running.cwd,
+    timeout_seconds: running.timeout_seconds,
+  });
+  if (!sent) {
+    return db.remoteCommands.update(running.id, {
+      status: 'pending',
+      error: '设备连接已断开，等待重连后补发',
+    });
+  }
+  broadcast(running.user_id, {
+    type: 'remote_command',
+    device_id: running.device_id,
+    command: serializeRemoteCommand(running),
+  });
+  return running;
 }
 
 router.post('/activate', async (req: Request, res: Response): Promise<void> => {
@@ -381,6 +452,95 @@ router.put('/:id/tools', async (req: Request, res: Response): Promise<void> => {
     tools: tools.map((t) => ({ toolName: t.tool_name, status: t.status, currentTask: t.current_task })),
   });
   res.status(200).json({ success: true, device: serializeDevice(id) });
+});
+
+router.get('/:id/commands', async (req: Request, res: Response): Promise<void> => {
+  const userId = req.user!.id;
+  const { id } = req.params;
+  const dev = db.devices.findById(id);
+  if (!dev || dev.user_id !== userId) {
+    res.status(404).json({ error: '设备不存在' });
+    return;
+  }
+  const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 100));
+  const commands = db.remoteCommands.findAllByDeviceId(id, limit)
+    .filter((command) => command.user_id === userId)
+    .map(serializeRemoteCommand);
+  res.status(200).json({ commands });
+});
+
+router.get('/:id/commands/:commandId', async (req: Request, res: Response): Promise<void> => {
+  const userId = req.user!.id;
+  const { id, commandId } = req.params;
+  const dev = db.devices.findById(id);
+  if (!dev || dev.user_id !== userId) {
+    res.status(404).json({ error: '设备不存在' });
+    return;
+  }
+  const command = db.remoteCommands.findById(commandId);
+  if (!command || command.user_id !== userId || command.device_id !== id) {
+    res.status(404).json({ error: '远程命令不存在' });
+    return;
+  }
+  res.status(200).json({ command: serializeRemoteCommand(command) });
+});
+
+router.post('/:id/commands', async (req: Request, res: Response): Promise<void> => {
+  const userId = req.user!.id;
+  const { id } = req.params;
+  const dev = db.devices.findById(id);
+  if (!dev || dev.user_id !== userId) {
+    res.status(404).json({ error: '设备不存在' });
+    return;
+  }
+  if (!hasDevice(id)) {
+    res.status(409).json({ error: '设备未在线，远程命令未下发' });
+    return;
+  }
+
+  const body = (req.body || {}) as {
+    title?: string;
+    shell?: RemoteCommand['shell'];
+    script?: string;
+    cwd?: string;
+    timeout_seconds?: number;
+    dangerous?: boolean;
+  };
+  if (body.dangerous !== true) {
+    res.status(400).json({ error: '远程命令需要 dangerous=true 显式确认' });
+    return;
+  }
+  const script = typeof body.script === 'string' ? body.script.trim() : '';
+  if (!script) {
+    res.status(400).json({ error: 'script 不能为空' });
+    return;
+  }
+  if (script.length > MAX_REMOTE_SCRIPT_CHARS) {
+    res.status(400).json({ error: `script 不能超过 ${MAX_REMOTE_SCRIPT_CHARS} 字符` });
+    return;
+  }
+  const shell = body.shell && REMOTE_COMMAND_SHELLS.includes(body.shell)
+    ? body.shell
+    : defaultRemoteShell(id);
+  const command = db.remoteCommands.create({
+    user_id: userId,
+    device_id: id,
+    title: (body.title || '远程命令').trim().slice(0, 120) || '远程命令',
+    shell,
+    script,
+    cwd: body.cwd?.trim() || undefined,
+    timeout_seconds: clampRemoteTimeout(body.timeout_seconds),
+  });
+  db.remoteCommands.appendLog(command.id, {
+    level: 'info',
+    content: `已下发远程命令：${command.title}`,
+  });
+  const dispatched = dispatchRemoteCommand(db.remoteCommands.findById(command.id) || command);
+  if (!dispatched) {
+    res.status(500).json({ error: '远程命令创建后下发失败' });
+    return;
+  }
+  res.status(202).json({ success: true, command: serializeRemoteCommand(dispatched) });
 });
 
 router.post('/:id/primary', async (req: Request, res: Response): Promise<void> => {

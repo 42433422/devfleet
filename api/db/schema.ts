@@ -122,6 +122,34 @@ CREATE TABLE IF NOT EXISTS collab_messages (
 CREATE INDEX IF NOT EXISTS idx_collab_messages_session_id ON collab_messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_collab_messages_sub_task_id ON collab_messages(sub_task_id);
 
+CREATE TABLE IF NOT EXISTS remote_commands (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  shell TEXT NOT NULL DEFAULT 'powershell',
+  script TEXT NOT NULL,
+  cwd TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  timeout_seconds INTEGER NOT NULL DEFAULT 300,
+  exit_code INTEGER,
+  stdout TEXT,
+  stderr TEXT,
+  error TEXT,
+  logs TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  started_at TEXT,
+  completed_at TEXT,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_remote_commands_user_id
+  ON remote_commands(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_remote_commands_device_id
+  ON remote_commands(device_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_remote_commands_status
+  ON remote_commands(status);
+
 CREATE TABLE IF NOT EXISTS mod_pack_installations (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

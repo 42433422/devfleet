@@ -84,6 +84,20 @@ struct ExecuteTask {
     tool: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct ExecuteCommand {
+    command_id: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    shell: String,
+    script: String,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    timeout_seconds: Option<u64>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ActivationResponse {
@@ -573,6 +587,15 @@ impl AgentState {
                       tauri::async_runtime::spawn(async move {
                         state.execute_task(task_config, task, task_tx).await;
                       });
+                      continue;
+                    }
+                    if value.get("type").and_then(Value::as_str) == Some("execute_command") {
+                      let command: ExecuteCommand = serde_json::from_value(value).map_err(|error| error.to_string())?;
+                      let state = self.clone();
+                      let command_tx = outbound_tx.clone();
+                      tauri::async_runtime::spawn(async move {
+                        state.execute_command(command, command_tx).await;
+                      });
                     }
                   }
                   Some(Ok(Message::Ping(data))) => writer.send(Message::Pong(data)).await.map_err(|error| error.to_string())?,
@@ -636,6 +659,137 @@ impl AgentState {
             }
         }
         set_mutex(&self.inner.running_dev_tool, None);
+    }
+
+    async fn execute_command(
+        &self,
+        command: ExecuteCommand,
+        tx: mpsc::UnboundedSender<Value>,
+    ) {
+        let command_id = command.command_id.clone();
+        let claimed = {
+            let mut guard = match self.inner.running_task.lock() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    send_command_result(
+                        &tx,
+                        &command,
+                        "failed",
+                        None,
+                        "",
+                        "",
+                        "设备状态锁不可用",
+                    );
+                    return;
+                }
+            };
+            if guard.is_some() {
+                false
+            } else {
+                *guard = Some(format!("remote-command:{command_id}"));
+                true
+            }
+        };
+        if !claimed {
+            send_command_result(
+                &tx,
+                &command,
+                "failed",
+                None,
+                "",
+                "",
+                "设备已有任务或命令运行中",
+            );
+            return;
+        }
+
+        let result = self.execute_command_inner(&command, &tx).await;
+        match result {
+            Ok(output) => {
+                send_command_result(&tx, &command, "completed", Some(0), &output, "", "");
+            }
+            Err(error) => {
+                set_mutex(&self.inner.last_error, Some(error.clone()));
+                send_command_result(&tx, &command, "failed", None, "", "", &error);
+            }
+        }
+
+        if let Ok(mut guard) = self.inner.running_task.lock() {
+            let expected = format!("remote-command:{command_id}");
+            if guard.as_deref() == Some(expected.as_str()) {
+                *guard = None;
+            }
+        }
+    }
+
+    async fn execute_command_inner(
+        &self,
+        command: &ExecuteCommand,
+        tx: &mpsc::UnboundedSender<Value>,
+    ) -> Result<String, String> {
+        let script = command.script.trim();
+        if script.is_empty() {
+            return Err("远程命令脚本为空".to_string());
+        }
+        let title = if command.title.trim().is_empty() {
+            "远程命令"
+        } else {
+            command.title.trim()
+        };
+        send_command_log(
+            tx,
+            &command.command_id,
+            &format!("开始执行：{title}"),
+            "info",
+        );
+        let shell = normalize_remote_shell(&command.shell);
+        let (program, args) = remote_shell_invocation(&shell, script);
+        let timeout = Duration::from_secs(
+            command
+                .timeout_seconds
+                .unwrap_or(300)
+                .clamp(5, 1_800),
+        );
+        let cwd_path = command
+            .cwd
+            .as_ref()
+            .map(|value| PathBuf::from(value.trim()))
+            .filter(|path| !path.as_os_str().is_empty());
+        if let Some(path) = cwd_path.as_ref() {
+            if !path.exists() {
+                return Err(format!("远程命令 cwd 不存在: {}", path.display()));
+            }
+        }
+        send_command_log(
+            tx,
+            &command.command_id,
+            &format!(
+                "执行器: {} {}",
+                program,
+                args.iter()
+                    .map(|arg| truncate(arg, 160))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+            "info",
+        );
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let output = run_command_timed(
+            cwd_path.as_deref(),
+            &program,
+            &arg_refs,
+            Some(timeout),
+        )
+        .await?;
+        if !output.trim().is_empty() {
+            send_command_log(
+                tx,
+                &command.command_id,
+                &format!("命令输出: {}", truncate(output.trim(), 4000)),
+                "info",
+            );
+        }
+        Ok(output)
     }
 
     async fn execute_task_inner(
@@ -3328,6 +3482,84 @@ fn send_progress(tx: &TaskEventSink, task: &ExecuteTask, progress: u8, status: &
             level: if status == "failed" { "error" } else { "info" }.to_string(),
         },
     );
+}
+
+fn normalize_remote_shell(shell: &str) -> String {
+    match shell {
+        "powershell" | "cmd" | "sh" | "bash" => shell.to_string(),
+        _ if cfg!(target_os = "windows") => "powershell".to_string(),
+        _ => "sh".to_string(),
+    }
+}
+
+fn remote_shell_invocation(shell: &str, script: &str) -> (String, Vec<String>) {
+    match shell {
+        "powershell" => (
+            if cfg!(target_os = "windows") {
+                "powershell.exe".to_string()
+            } else {
+                "pwsh".to_string()
+            },
+            vec![
+                "-NoProfile".to_string(),
+                "-NonInteractive".to_string(),
+                "-ExecutionPolicy".to_string(),
+                "Bypass".to_string(),
+                "-Command".to_string(),
+                script.to_string(),
+            ],
+        ),
+        "cmd" => (
+            if cfg!(target_os = "windows") {
+                "cmd.exe".to_string()
+            } else {
+                "cmd".to_string()
+            },
+            vec!["/C".to_string(), script.to_string()],
+        ),
+        "bash" => (
+            "bash".to_string(),
+            vec!["-lc".to_string(), script.to_string()],
+        ),
+        _ => (
+            "sh".to_string(),
+            vec!["-lc".to_string(), script.to_string()],
+        ),
+    }
+}
+
+fn send_command_log(
+    tx: &mpsc::UnboundedSender<Value>,
+    command_id: &str,
+    content: &str,
+    level: &str,
+) {
+    let _ = tx.send(json!({
+        "type": "command_log",
+        "command_id": command_id,
+        "content": content,
+        "level": level,
+    }));
+}
+
+fn send_command_result(
+    tx: &mpsc::UnboundedSender<Value>,
+    command: &ExecuteCommand,
+    status: &str,
+    exit_code: Option<i32>,
+    stdout: &str,
+    stderr: &str,
+    error: &str,
+) {
+    let _ = tx.send(json!({
+        "type": "command_result",
+        "command_id": command.command_id,
+        "status": status,
+        "exit_code": exit_code,
+        "stdout": truncate(stdout, 200_000),
+        "stderr": truncate(stderr, 200_000),
+        "error": if error.is_empty() { Value::Null } else { json!(truncate(error, 4000)) },
+    }));
 }
 
 #[cfg(test)]
