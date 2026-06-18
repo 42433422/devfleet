@@ -15,6 +15,7 @@ import { getMcpApiBaseUrl } from '@/lib/apiBase';
 import { openDeeplink, openTraeInstall } from '@/lib/openExternal';
 import { mcpClientApi, type McpClientStatus, type McpClientTool } from '@/lib/mcpClient';
 import { buildAiCommanderPlaybook } from '@/lib/aiPlaybook';
+import { buildAiQuickStartPrompt } from '@/lib/aiQuickStartPrompt';
 import { buildMcpAutoSetupPrompt } from '@/lib/mcpSetupPrompt';
 import { PRODUCT_NAME } from '@/lib/brand';
 import { copyToClipboard } from '@/lib/clipboard';
@@ -32,6 +33,7 @@ export default function Integration() {
   const [statusBusy, setStatusBusy] = useState(false);
   const [clientStatuses, setClientStatuses] = useState<Partial<Record<McpClientTool, McpClientStatus>>>({});
   const [traeVariant, setTraeVariant] = useState<TraeVariant>('cn');
+  const [quickStartCopied, setQuickStartCopied] = useState(false);
   const [playbookCopied, setPlaybookCopied] = useState(false);
   const [mcpSetupCopied, setMcpSetupCopied] = useState(false);
   const [mcpSetupCopyError, setMcpSetupCopyError] = useState('');
@@ -62,6 +64,18 @@ export default function Integration() {
       }),
     [traeDevice?.id],
   );
+  const quickStartPrompt = useMemo(
+    () =>
+      buildAiQuickStartPrompt({
+        mcpPath,
+        apiUrl,
+        token: token || '',
+        platform: processPlatform(),
+        traeVariant,
+        mergeWorkspace: defaultMergeWorkspace(),
+      }),
+    [apiUrl, mcpPath, token, traeVariant],
+  );
   const mcpSetupPrompt = useMemo(
     () =>
       buildMcpAutoSetupPrompt({
@@ -83,6 +97,16 @@ export default function Integration() {
     } catch (error) {
       setMcpSetupCopied(false);
       setMcpSetupCopyError(error instanceof Error ? error.message : '复制失败，请手动选中下方文本');
+    }
+  };
+
+  const copyQuickStartPrompt = async () => {
+    try {
+      await copyToClipboard(quickStartPrompt);
+      setQuickStartCopied(true);
+      window.setTimeout(() => setQuickStartCopied(false), 1500);
+    } catch (error) {
+      setInstallHint(error instanceof Error ? error.message : '复制失败，请手动选中下方文本');
     }
   };
 
@@ -214,12 +238,50 @@ export default function Integration() {
         <p className="text-[11px] text-zinc-600 mt-2">工作设备接入地址请在「设备管理」配置；下方 MCP 使用本机地址 {apiUrl} 即可。</p>
       </div>
 
+      <div className="mb-6 bg-gradient-to-br from-brand/15 via-zinc-900/80 to-zinc-950 border border-brand/35 rounded-xl overflow-hidden">
+        <div className="px-5 py-4 border-b border-brand/15">
+          <div className="flex flex-col gap-4 min-[880px]:flex-row min-[880px]:items-start min-[880px]:justify-between">
+            <div className="min-w-0">
+              <h2 className="text-base font-semibold text-white flex items-center gap-2">
+                <Bot size={17} className="text-brand shrink-0" />
+                最简使用：复制一句话给 AI
+              </h2>
+              <p className="text-xs text-zinc-400 mt-1.5 max-w-3xl">
+                安装 {PRODUCT_NAME}、绑定好主设备和工作设备后，把这段话粘贴给 Cursor / Trae / Codex / Claude。AI 会先接入 MCP，再列设备、拆任务、派发、等待、合并。
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void copyQuickStartPrompt()}
+              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-brand hover:bg-brand/90 active:scale-[0.98] rounded-lg text-sm text-black font-semibold cursor-pointer transition-transform whitespace-nowrap"
+            >
+              {quickStartCopied ? <Check size={16} /> : <Clipboard size={16} />}
+              {quickStartCopied ? '已复制，去粘贴给 AI' : '复制一句话'}
+            </button>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3 mt-4">
+            {['安装软件', '绑定设备', '复制给 AI'].map((step, index) => (
+              <div key={step} className="rounded-lg border border-brand/20 bg-zinc-950/45 px-3 py-2">
+                <span className="text-[10px] font-mono text-brand">0{index + 1}</span>
+                <span className="ml-2 text-xs text-zinc-200">{step}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <pre className="p-5 text-[11px] font-mono text-zinc-400 leading-relaxed overflow-x-auto max-h-64 overflow-y-auto whitespace-pre-wrap break-words">
+          {preview(quickStartPrompt)}
+        </pre>
+        {!token && (
+          <p className="px-5 pb-4 text-[11px] text-amber-400/90">未检测到登录令牌，话术中 token 为占位符；登录后重新复制可获得完整配置。</p>
+        )}
+      </div>
+
       <div className="mb-6 bg-gradient-to-br from-brand/10 via-zinc-900/80 to-zinc-900/60 border border-brand/25 rounded-xl">
         <div className="flex flex-col gap-4 px-5 py-4 border-b border-brand/15">
           <div className="w-full min-w-0">
             <h2 className="text-sm font-semibold text-white flex items-center gap-2 flex-wrap">
               <Bot size={16} className="text-brand shrink-0" />
-              复制给 AI 助手 · 自动完成 MCP 接入
+              高级：只自动完成 MCP 接入
             </h2>
             <p className="text-xs text-zinc-400 mt-1.5">
               复制一段话粘贴到 Cursor、Trae、Claude、ChatGPT 等任意 AI，让它直接写入配置并调用
