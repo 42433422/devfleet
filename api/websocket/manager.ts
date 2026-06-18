@@ -75,6 +75,10 @@ function clearHeartbeat(ws: ClientWS | WebSocket) {
 function schedulePongTimeout(ws: ClientWS) {
   if (ws._pongTimer) clearTimeout(ws._pongTimer);
   ws._pongTimer = setTimeout(() => {
+    const deviceId = ws._deviceId;
+    console.warn(
+      `WebSocket pong timeout${deviceId ? ` for device ${deviceId}` : ''}; terminating stale connection`,
+    );
     try {
       ws.terminate();
     } catch {
@@ -155,15 +159,14 @@ export function getDeviceLinkHealth(deviceId: string) {
 
 function startHeartbeat(ws: ClientWS) {
   clearHeartbeat(ws);
-  schedulePongTimeout(ws);
   ws._heartbeatTimer = setInterval(() => {
     if (ws.readyState !== ws.OPEN) {
       clearHeartbeat(ws);
       return;
     }
-    schedulePongTimeout(ws);
     try {
       ws.ping();
+      schedulePongTimeout(ws);
     } catch {
       clearHeartbeat(ws);
       ws.terminate();
@@ -329,6 +332,15 @@ export function attachWebSocket(wss: WSServer) {
       }
       if (ws._deviceId) {
         markDevicePong(ws._deviceId);
+      }
+    });
+    ws.on('ping', () => {
+      if (ws._pongTimer) {
+        clearTimeout(ws._pongTimer);
+        ws._pongTimer = undefined;
+      }
+      if (ws._deviceId) {
+        markDeviceLinkHealthy(ws._deviceId, '收到设备 ping');
       }
     });
 
