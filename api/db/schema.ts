@@ -28,8 +28,6 @@ CREATE TABLE IF NOT EXISTS devices (
 );
 
 CREATE INDEX IF NOT EXISTS idx_devices_user_id ON devices(user_id);
-CREATE INDEX IF NOT EXISTS idx_devices_bind_code ON devices(bind_code);
-CREATE INDEX IF NOT EXISTS idx_devices_token_hash ON devices(device_token_hash);
 
 CREATE TABLE IF NOT EXISTS tool_statuses (
   id TEXT PRIMARY KEY,
@@ -77,7 +75,6 @@ CREATE TABLE IF NOT EXISTS sub_tasks (
 
 CREATE INDEX IF NOT EXISTS idx_sub_tasks_task_id ON sub_tasks(task_id);
 CREATE INDEX IF NOT EXISTS idx_sub_tasks_device_id ON sub_tasks(device_id);
-CREATE INDEX IF NOT EXISTS idx_sub_tasks_updated_at ON sub_tasks(updated_at);
 
 CREATE TABLE IF NOT EXISTS log_entries (
   id TEXT PRIMARY KEY,
