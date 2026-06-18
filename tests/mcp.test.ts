@@ -31,6 +31,7 @@ test('MCP 服务公开真实多设备调度工具', async () => {
       'devfleet_merge_task',
       'devfleet_next_task',
       'devfleet_report_task_progress',
+      'devfleet_run_remote_command',
       'devfleet_send_collab_message',
       'devfleet_start_collab_session',
       'devfleet_wait_collab_message',

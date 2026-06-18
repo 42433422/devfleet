@@ -71,6 +71,20 @@ interface CollabSession {
   messages: CollabMessage[];
 }
 
+interface RemoteCommand {
+  id: string;
+  device_id: string;
+  title: string;
+  shell: 'powershell' | 'cmd' | 'sh' | 'bash';
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  timeout_seconds: number;
+  exit_code?: number;
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+  logs?: Array<{ timestamp: string; level: string; content: string }>;
+}
+
 const server = new McpServer({ name: 'devfleet', version: '1.0.0' });
 
 const result = (value: unknown) => ({
@@ -222,6 +236,50 @@ server.registerTool('devfleet_call_remote_codex', {
   });
 });
 
+server.registerTool('devfleet_run_remote_command', {
+  title: '在远端设备执行受控命令',
+  description: '高级控制入口：主设备 AI 直接让在线工作设备的本机 Agent 执行 PowerShell/cmd/sh/bash 脚本，并返回日志、退出码、stdout/stderr。适合安装新版软件、检查端口、读取日志、启动 CLI；不经过 Codex 改码任务队列。',
+  inputSchema: {
+    device_id: z.string().min(1).describe('目标工作设备 ID（来自 devfleet_list_devices）'),
+    script: z.string().min(1).describe('要在目标设备执行的脚本内容'),
+    title: z.string().default('远程命令').describe('命令标题，显示在排比 Para 日志中'),
+    shell: z.enum(['powershell', 'cmd', 'sh', 'bash']).optional().describe('执行 shell；Windows 默认 powershell，Unix 默认 sh'),
+    cwd: z.string().optional().describe('目标设备上的工作目录绝对路径；省略则使用 Agent 默认工作目录'),
+    timeout_seconds: z.number().int().min(5).max(1800).default(300).describe('设备本地执行超时；Agent 会软/硬超时杀进程'),
+    wait: z.boolean().default(true).describe('是否等待命令完成并返回最终 stdout/stderr'),
+    wait_timeout_seconds: z.number().int().min(5).max(3600).default(900).describe('wait=true 时 MCP 侧等待结果的最长时间'),
+  },
+}, async (input) => {
+  const command = (await api<{ command: RemoteCommand }>(
+    `/api/devices/${encodeURIComponent(input.device_id)}/commands`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        title: input.title || '远程命令',
+        shell: input.shell,
+        script: input.script,
+        cwd: input.cwd,
+        timeout_seconds: input.timeout_seconds || 300,
+        dangerous: true,
+      }),
+    },
+  )).command;
+
+  if (!input.wait) {
+    return result({ success: true, command });
+  }
+
+  const finalCommand = await waitForRemoteCommand(
+    input.device_id,
+    command.id,
+    input.wait_timeout_seconds || Math.max((input.timeout_seconds || 300) + 30, 60),
+  );
+  return result({
+    success: finalCommand.status === 'completed',
+    command: finalCommand,
+  });
+});
+
 server.registerTool('devfleet_start_collab_session', {
   title: '创建远端 Codex 持续协作会话',
   description: '在指定工作设备上创建一个持续协作会话。后续 devfleet_send_collab_message 会带会话历史派发给同一台设备 Codex。',
@@ -323,6 +381,23 @@ async function waitForTask(taskId: string, timeoutSeconds: number): Promise<Task
     await new Promise((resolve) => setTimeout(resolve, 3000));
   }
   throw new Error(`等待任务超时。最后状态: ${task?.status || 'unknown'}`);
+}
+
+async function waitForRemoteCommand(
+  deviceId: string,
+  commandId: string,
+  timeoutSeconds: number,
+): Promise<RemoteCommand> {
+  const deadline = Date.now() + timeoutSeconds * 1000;
+  let command: RemoteCommand | null = null;
+  while (Date.now() < deadline) {
+    command = (await api<{ command: RemoteCommand }>(
+      `/api/devices/${encodeURIComponent(deviceId)}/commands/${encodeURIComponent(commandId)}`,
+    )).command;
+    if (['completed', 'failed'].includes(command.status)) return command;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  throw new Error(`等待远程命令超时。最后状态: ${command?.status || 'unknown'}`);
 }
 
 async function waitForCollabMessage(sessionId: string, messageId: string, timeoutSeconds: number): Promise<CollabSession> {
