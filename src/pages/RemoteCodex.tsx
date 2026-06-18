@@ -11,12 +11,25 @@ import {
   RefreshCw,
   Send,
   Square,
+  Terminal,
   UserRound,
   WifiOff,
   XCircle,
 } from 'lucide-react';
+import { api } from '@/lib/api';
 import { useCollabStore, type CollabMessage, type CollabSession } from '@/store/collab';
 import { useDevicesStore, type Device } from '@/store/devices';
+
+type RemoteCommandStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+interface RemoteCommand {
+  id: string;
+  status: RemoteCommandStatus;
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+  logs?: Array<{ content: string; level: string; timestamp: string }>;
+}
 
 const sessionStatusText: Record<CollabSession['status'], string> = {
   open: '打开',
@@ -64,6 +77,20 @@ function deviceMeta(device?: Device) {
     ? link?.healthy === false ? link.reason : '在线'
     : link?.reason || '离线';
   return `${device.name} · ${status}`;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function waitForRemoteCommand(deviceId: string, commandId: string, timeoutMs: number): Promise<RemoteCommand> {
+  const deadline = Date.now() + timeoutMs;
+  let command: RemoteCommand | null = null;
+  while (Date.now() < deadline) {
+    const result = await api<{ command: RemoteCommand }>(`/api/devices/${deviceId}/commands/${commandId}`);
+    command = result.command;
+    if (['completed', 'failed', 'cancelled'].includes(command.status)) return command;
+    await sleep(1000);
+  }
+  throw new Error(`预检等待超时，最后状态：${command?.status || 'unknown'}`);
 }
 
 function MessageBubble({ message }: { message: CollabMessage }) {
@@ -121,6 +148,8 @@ export default function RemoteCodex() {
   const [form, setForm] = useState({ title: '远端 Codex 协作', repo_url: '', branch: 'main' });
   const [content, setContent] = useState('');
   const [creating, setCreating] = useState(false);
+  const [preflightBusy, setPreflightBusy] = useState(false);
+  const [preflightResult, setPreflightResult] = useState('');
 
   useEffect(() => {
     fetchSessions();
@@ -166,6 +195,31 @@ export default function RemoteCodex() {
       await sendMessage(currentSession.id, nextContent);
     } catch {
       setContent(nextContent);
+    }
+  };
+
+  const runCodexPreflight = async () => {
+    if (!selectedDevice || preflightBusy) return;
+    clearError();
+    setPreflightBusy(true);
+    setPreflightResult('');
+    try {
+      const started = await api<{ command: RemoteCommand }>(`/api/devices/${selectedDevice.id}/codex-preflight`, {
+        method: 'POST',
+        body: { timeout_seconds: 120 },
+      });
+      const finalCommand = await waitForRemoteCommand(selectedDevice.id, started.command.id, 180_000);
+      const tail = (finalCommand.stdout || finalCommand.stderr || finalCommand.error || finalCommand.logs?.at(-1)?.content || '')
+        .trim()
+        .slice(0, 220);
+      setPreflightResult(finalCommand.status === 'completed'
+        ? `预检通过：${tail || 'Codex 工作端可执行'}`
+        : `预检失败：${tail || finalCommand.status}`);
+      await fetchDevices();
+    } catch (error) {
+      setPreflightResult(error instanceof Error ? error.message : '预检失败');
+    } finally {
+      setPreflightBusy(false);
     }
   };
 
@@ -227,14 +281,31 @@ export default function RemoteCodex() {
                 placeholder="main"
               />
             </div>
-            <button
-              type="submit"
-              disabled={!canCreate || creating}
-              className="w-full h-10 rounded-lg bg-brand text-black text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-            >
-              {creating ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
-              新建会话
-            </button>
+            <div className="grid grid-cols-[1fr_112px] gap-2">
+              <button
+                type="submit"
+                disabled={!canCreate || creating}
+                className="h-10 rounded-lg bg-brand text-black text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {creating ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
+                新建会话
+              </button>
+              <button
+                type="button"
+                onClick={runCodexPreflight}
+                disabled={!selectedDevice || preflightBusy}
+                className="h-10 rounded-lg border border-zinc-800 bg-zinc-900 text-zinc-200 text-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                title="预检 Codex"
+              >
+                {preflightBusy ? <Loader2 size={15} className="animate-spin" /> : <Terminal size={15} />}
+                预检
+              </button>
+            </div>
+            {preflightResult && (
+              <div className="rounded-lg border border-zinc-800 bg-zinc-950/70 px-3 py-2 text-xs text-zinc-400 leading-5 break-words">
+                {preflightResult}
+              </div>
+            )}
           </form>
         </div>
 

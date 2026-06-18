@@ -119,7 +119,7 @@ interface RemoteCommand {
   shell: 'powershell' | 'cmd' | 'sh' | 'bash';
   script: string;
   cwd?: string;
-  status: 'pending' | 'running' | 'completed' | 'failed';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
   timeout_seconds: number;
   exit_code?: number;
   stdout?: string;

@@ -27,7 +27,7 @@ interface WSMessage {
   task_id?: string;
   subtask_id?: string;
   progress?: number;
-  status?: 'pending' | 'running' | 'completed' | 'failed';
+  status?: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
   content?: string;
   level?: 'info' | 'warn' | 'error' | 'debug';
   command_id?: string;
@@ -43,6 +43,11 @@ const clients: Set<ClientWS> = new Set();
 const deviceWS = new Map<string, WebSocket>();
 const offlineTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const remoteCommandTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const TERMINAL_REMOTE_COMMAND_STATUSES = new Set<RemoteCommand['status']>([
+  'completed',
+  'failed',
+  'cancelled',
+]);
 const HEARTBEAT_MS = Number(process.env.DEVFLEET_WS_HEARTBEAT_MS) || 30_000;
 const PONG_TIMEOUT_MS = Number(process.env.DEVFLEET_WS_PONG_TIMEOUT_MS) || 10_000;
 const REMOTE_COMMAND_TIMEOUT_GRACE_MS = Number(process.env.DEVFLEET_REMOTE_COMMAND_TIMEOUT_GRACE_MS) || 5_000;
@@ -228,6 +233,10 @@ function clearRemoteCommandTimer(commandId: string) {
   }
 }
 
+function isTerminalRemoteCommand(command: RemoteCommand) {
+  return TERMINAL_REMOTE_COMMAND_STATUSES.has(command.status);
+}
+
 function remoteCommandTimeoutError(command: RemoteCommand) {
   return `Remote command timed out after ${command.timeout_seconds}s without device result`;
 }
@@ -261,6 +270,60 @@ export function reconcileRemoteCommandTimeout(command: RemoteCommand): RemoteCom
     return updated;
   }
   return command;
+}
+
+export function cancelRemoteCommand(command: RemoteCommand, reason = '用户取消远程命令'): RemoteCommand | undefined {
+  if (isTerminalRemoteCommand(command)) return command;
+
+  const now = new Date().toISOString();
+  if (command.status === 'pending') {
+    clearRemoteCommandTimer(command.id);
+    const updated = db.remoteCommands.update(command.id, {
+      status: 'cancelled',
+      error: reason,
+      completed_at: now,
+      logs: [
+        ...command.logs,
+        { timestamp: now, level: 'warn', content: reason },
+      ].slice(-500),
+    });
+    if (updated) {
+      broadcast(updated.user_id, {
+        type: 'remote_command_result',
+        device_id: updated.device_id,
+        command_id: updated.id,
+        command: serializeRemoteCommand(updated),
+      });
+    }
+    return updated;
+  }
+
+  const sent = sendToDevice(command.device_id, {
+    type: 'cancel_command',
+    command_id: command.id,
+    reason,
+  });
+  const log = sent
+    ? '已向设备发送远程命令取消请求'
+    : '设备连接已断开，无法发送远程命令取消请求';
+  const updated = db.remoteCommands.update(command.id, {
+    status: sent ? 'running' : 'failed',
+    error: sent ? '取消请求已发送，等待设备确认' : log,
+    completed_at: sent ? command.completed_at : now,
+    logs: [
+      ...command.logs,
+      { timestamp: now, level: sent ? 'warn' : 'error', content: log },
+    ].slice(-500),
+  });
+  if (updated) {
+    broadcast(updated.user_id, {
+      type: sent ? 'remote_command' : 'remote_command_result',
+      device_id: updated.device_id,
+      command_id: updated.id,
+      command: serializeRemoteCommand(updated),
+    });
+  }
+  return updated;
 }
 
 function scheduleRemoteCommandTimeout(command: RemoteCommand) {
@@ -517,9 +580,26 @@ export function attachWebSocket(wss: WSServer) {
             markDeviceLinkHealthy(device.id, '远程命令结果上报');
             const command = db.remoteCommands.findById(msg.command_id);
             if (!command || command.user_id !== device.user_id || command.device_id !== device.id) return;
+            if (isTerminalRemoteCommand(command)) {
+              const ignored = db.remoteCommands.appendLog(command.id, {
+                level: 'debug',
+                content: `已忽略迟到的远程命令结果：${msg.status || 'unknown'}`,
+              });
+              if (ignored) {
+                broadcast(device.user_id, {
+                  type: 'remote_command_log',
+                  device_id: device.id,
+                  command_id: command.id,
+                  command: serializeRemoteCommand(ignored),
+                });
+              }
+              return;
+            }
             clearRemoteCommandTimer(command.id);
             const exitCode = typeof msg.exit_code === 'number' ? msg.exit_code : undefined;
-            const status = msg.status === 'completed' || (msg.status !== 'failed' && exitCode === 0)
+            const status: RemoteCommand['status'] = msg.status === 'cancelled'
+              ? 'cancelled'
+              : msg.status === 'completed' || (msg.status !== 'failed' && exitCode === 0)
               ? 'completed'
               : 'failed';
             const updated = db.remoteCommands.update(command.id, {

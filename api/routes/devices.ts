@@ -4,6 +4,7 @@ import { authMiddleware } from '../middleware/auth.js';
 import { genBindCode, genDeviceToken, normalizeDevTool, type DevTool } from '../lib/utils.js';
 import {
   broadcast,
+  cancelRemoteCommand,
   disconnectDeviceSocket,
   getDeviceLinkHealth,
   hasDevice,
@@ -91,6 +92,41 @@ function clampRemoteTimeout(value: unknown): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 300;
   return Math.max(MIN_REMOTE_TIMEOUT_SECONDS, Math.min(MAX_REMOTE_TIMEOUT_SECONDS, Math.floor(parsed)));
+}
+
+function codexPreflightScript(deviceId: string): string {
+  const device = db.devices.findById(deviceId);
+  const platform = parseCapabilities(device?.capabilities)?.platform;
+  if (platform === 'windows') {
+    return [
+      '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
+      "$ErrorActionPreference = 'Continue'",
+      "Write-Output '[preflight] resolve codex'",
+      '$cmd = Get-Command codex -ErrorAction SilentlyContinue',
+      "if (-not $cmd) { Write-Output 'codex_path=<missing>'; exit 127 }",
+      'Write-Output "codex_path=$($cmd.Source)"',
+      "Write-Output '[preflight] codex version'",
+      '& $cmd.Source --version',
+      'if ($LASTEXITCODE -ne 0) { Write-Output "codex_version_failed=$LASTEXITCODE"; exit $LASTEXITCODE }',
+      "Write-Output '[preflight] windows sandbox smoke'",
+      '& $cmd.Source -c \'windows.sandbox="unelevated"\' sandbox windows -- powershell -NoProfile -Command "Write-Output sandbox-smoke"',
+      'if ($LASTEXITCODE -ne 0) { Write-Output "sandbox_smoke_failed=$LASTEXITCODE"; exit $LASTEXITCODE }',
+      "Write-Output 'sandbox_smoke=ok'",
+      "Write-Output 'codex_preflight=ok'",
+    ].join('\n');
+  }
+  return [
+    'set -eu',
+    "echo '[preflight] resolve codex'",
+    "CODEX_BIN=\"$(command -v codex || true)\"",
+    'if [ -z "$CODEX_BIN" ]; then echo "codex_path=<missing>"; exit 127; fi',
+    'echo "codex_path=$CODEX_BIN"',
+    "echo '[preflight] codex version'",
+    'codex --version',
+    "echo '[preflight] codex help smoke'",
+    'codex exec --help >/dev/null',
+    "echo 'codex_preflight=ok'",
+  ].join('\n');
 }
 
 router.post('/activate', async (req: Request, res: Response): Promise<void> => {
@@ -455,6 +491,65 @@ router.get('/:id/commands/:commandId', async (req: Request, res: Response): Prom
     return;
   }
   res.status(200).json({ command: serializeRemoteCommand(reconcileRemoteCommandTimeout(command)) });
+});
+
+router.post('/:id/commands/:commandId/cancel', async (req: Request, res: Response): Promise<void> => {
+  const userId = req.user!.id;
+  const { id, commandId } = req.params;
+  const dev = db.devices.findById(id);
+  if (!dev || dev.user_id !== userId) {
+    res.status(404).json({ error: '设备不存在' });
+    return;
+  }
+  const command = db.remoteCommands.findById(commandId);
+  if (!command || command.user_id !== userId || command.device_id !== id) {
+    res.status(404).json({ error: '远程命令不存在' });
+    return;
+  }
+  const reason = String((req.body || {}).reason || '用户取消远程命令').trim().slice(0, 300) || '用户取消远程命令';
+  const updated = cancelRemoteCommand(reconcileRemoteCommandTimeout(command), reason);
+  if (!updated) {
+    res.status(500).json({ error: '取消远程命令失败' });
+    return;
+  }
+  res.status(200).json({ success: true, command: serializeRemoteCommand(updated) });
+});
+
+router.post('/:id/codex-preflight', async (req: Request, res: Response): Promise<void> => {
+  const userId = req.user!.id;
+  const { id } = req.params;
+  const dev = db.devices.findById(id);
+  if (!dev || dev.user_id !== userId) {
+    res.status(404).json({ error: '设备不存在' });
+    return;
+  }
+  if (normalizeDevTool(dev.dev_tool) !== 'codex') {
+    db.devices.update(id, { dev_tool: 'codex' });
+    sendBindingIdentity(id);
+    broadcast(userId, { type: 'device_dev_tool', device_id: id, devTool: 'codex' });
+  }
+
+  const timeoutSeconds = clampRemoteTimeout((req.body || {}).timeout_seconds || 120);
+  const command = db.remoteCommands.create({
+    user_id: userId,
+    device_id: id,
+    title: 'Codex 工作端预检',
+    shell: defaultRemoteShell(id),
+    script: codexPreflightScript(id),
+    timeout_seconds: timeoutSeconds,
+  });
+  db.remoteCommands.appendLog(command.id, {
+    level: hasDevice(id) ? 'info' : 'warn',
+    content: hasDevice(id)
+      ? 'Codex 工作端预检已下发：path/version/sandbox smoke'
+      : '设备离线，Codex 工作端预检已排队；设备重连后自动执行',
+  });
+  const dispatched = sendRemoteCommandToDevice(db.remoteCommands.findById(command.id) || command);
+  if (!dispatched) {
+    res.status(500).json({ error: 'Codex 预检创建后下发失败' });
+    return;
+  }
+  res.status(202).json({ success: true, command: serializeRemoteCommand(dispatched) });
 });
 
 router.post('/:id/commands', async (req: Request, res: Response): Promise<void> => {

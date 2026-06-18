@@ -4,7 +4,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, HashSet, VecDeque},
     net::IpAddr,
     path::{Path, PathBuf},
     process::{Command as StdCommand, Stdio},
@@ -136,6 +136,8 @@ struct AgentInner {
     tools: Mutex<Vec<LocalToolStatus>>,
     running_task: Mutex<Option<String>>,
     running_dev_tool: Mutex<Option<String>>,
+    running_command_pids: Mutex<HashMap<String, u32>>,
+    cancelled_commands: Mutex<HashSet<String>>,
     last_error: Mutex<Option<String>>,
     pending_task_reports: Mutex<VecDeque<PendingTaskReport>>,
     generation: AtomicU64,
@@ -197,6 +199,8 @@ impl AgentState {
                 tools: Mutex::new(scan_tools(None, None)),
                 running_task: Mutex::new(None),
                 running_dev_tool: Mutex::new(None),
+                running_command_pids: Mutex::new(HashMap::new()),
+                cancelled_commands: Mutex::new(HashSet::new()),
                 last_error: Mutex::new(None),
                 pending_task_reports: Mutex::new(VecDeque::new()),
                 generation: AtomicU64::new(0),
@@ -596,6 +600,17 @@ impl AgentState {
                       tauri::async_runtime::spawn(async move {
                         state.execute_command(command, command_tx).await;
                       });
+                      continue;
+                    }
+                    if value.get("type").and_then(Value::as_str) == Some("cancel_command") {
+                      if let Some(command_id) = value.get("command_id").and_then(Value::as_str) {
+                        let state = self.clone();
+                        let command_tx = outbound_tx.clone();
+                        let command_id = command_id.to_string();
+                        tauri::async_runtime::spawn(async move {
+                          state.cancel_command(command_id, command_tx).await;
+                        });
+                      }
                     }
                   }
                   Some(Ok(Message::Ping(data))) => writer.send(Message::Pong(data)).await.map_err(|error| error.to_string())?,
@@ -704,13 +719,22 @@ impl AgentState {
         }
 
         let result = self.execute_command_inner(&command, &tx).await;
+        let cancelled = self.take_cancelled_command(&command_id);
         match result {
             Ok(output) => {
-                send_command_result(&tx, &command, "completed", Some(0), &output, "", "");
+                if cancelled {
+                    send_command_result(&tx, &command, "cancelled", None, &output, "", "命令已取消");
+                } else {
+                    send_command_result(&tx, &command, "completed", Some(0), &output, "", "");
+                }
             }
             Err(error) => {
-                set_mutex(&self.inner.last_error, Some(error.clone()));
-                send_command_result(&tx, &command, "failed", None, "", "", &error);
+                if cancelled {
+                    send_command_result(&tx, &command, "cancelled", None, "", "", "命令已取消");
+                } else {
+                    set_mutex(&self.inner.last_error, Some(error.clone()));
+                    send_command_result(&tx, &command, "failed", None, "", "", &error);
+                }
             }
         }
 
@@ -718,6 +742,45 @@ impl AgentState {
             let expected = format!("remote-command:{command_id}");
             if guard.as_deref() == Some(expected.as_str()) {
                 *guard = None;
+            }
+        }
+    }
+
+    fn take_cancelled_command(&self, command_id: &str) -> bool {
+        self.inner
+            .cancelled_commands
+            .lock()
+            .map(|mut values| values.remove(command_id))
+            .unwrap_or(false)
+    }
+
+    async fn cancel_command(&self, command_id: String, tx: mpsc::UnboundedSender<Value>) {
+        if let Ok(mut cancelled) = self.inner.cancelled_commands.lock() {
+            cancelled.insert(command_id.clone());
+        }
+        let pid = self
+            .inner
+            .running_command_pids
+            .lock()
+            .ok()
+            .and_then(|values| values.get(&command_id).copied());
+        match pid {
+            Some(pid) => {
+                let killed = kill_process_tree(pid, true);
+                send_command_log(
+                    &tx,
+                    &command_id,
+                    &format!("收到取消请求，已终止远程命令进程树 pid={pid} killed={killed}"),
+                    "warn",
+                );
+            }
+            None => {
+                send_command_log(
+                    &tx,
+                    &command_id,
+                    "收到取消请求，但未找到仍在运行的远程命令进程；可能已经结束",
+                    "warn",
+                );
             }
         }
     }
@@ -773,14 +836,45 @@ impl AgentState {
             ),
             "info",
         );
+        let heartbeat_stop = Arc::new(AtomicBool::new(false));
+        let heartbeat_tx = tx.clone();
+        let heartbeat_command_id = command.command_id.clone();
+        let heartbeat_title = title.to_string();
+        let heartbeat_stop_for_task = heartbeat_stop.clone();
+        let heartbeat = tokio::spawn(async move {
+            let started_at = std::time::Instant::now();
+            loop {
+                time::sleep(Duration::from_secs(15)).await;
+                if heartbeat_stop_for_task.load(Ordering::Relaxed) {
+                    break;
+                }
+                send_command_log(
+                    &heartbeat_tx,
+                    &heartbeat_command_id,
+                    &format!(
+                        "命令仍在执行：{heartbeat_title}，已运行 {}s",
+                        started_at.elapsed().as_secs()
+                    ),
+                    "debug",
+                );
+            }
+        });
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let output = run_command_timed(
+        let output = run_command_timed_observed(
             cwd_path.as_deref(),
             &program,
             &arg_refs,
             Some(timeout),
+            Some(CommandOutputObserver::remote(
+                command.command_id.clone(),
+                tx.clone(),
+                self.inner.clone(),
+            )),
         )
-        .await?;
+        .await;
+        heartbeat_stop.store(true, Ordering::Relaxed);
+        heartbeat.abort();
+        let output = output?;
         if !output.trim().is_empty() {
             send_command_log(
                 tx,
@@ -2828,7 +2922,7 @@ async fn run_logged_command(
         program,
         args,
         timeout,
-        Some(CommandOutputObserver::new(
+        Some(CommandOutputObserver::task(
             task.clone(),
             tx.clone(),
             stage.to_string(),
@@ -2874,7 +2968,42 @@ async fn run_logged_command(
 }
 
 #[derive(Clone)]
-struct CommandOutputObserver {
+enum CommandOutputObserver {
+    Task(TaskCommandOutputObserver),
+    Remote(RemoteCommandOutputObserver),
+}
+
+impl CommandOutputObserver {
+    fn task(task: ExecuteTask, tx: TaskEventSink, stage: String) -> Self {
+        Self::Task(TaskCommandOutputObserver::new(task, tx, stage))
+    }
+
+    fn remote(command_id: String, tx: mpsc::UnboundedSender<Value>, inner: Arc<AgentInner>) -> Self {
+        Self::Remote(RemoteCommandOutputObserver::new(command_id, tx, inner))
+    }
+
+    fn register_pid(&self, pid: u32) {
+        if let Self::Remote(observer) = self {
+            observer.register_pid(pid);
+        }
+    }
+
+    fn clear_pid(&self) {
+        if let Self::Remote(observer) = self {
+            observer.clear_pid();
+        }
+    }
+
+    fn emit(&self, stream: &str, line: &str) {
+        match self {
+            Self::Task(observer) => observer.emit(stream, line),
+            Self::Remote(observer) => observer.emit(stream, line),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct TaskCommandOutputObserver {
     task: ExecuteTask,
     tx: TaskEventSink,
     stage: String,
@@ -2882,7 +3011,7 @@ struct CommandOutputObserver {
     truncated_notified: Arc<AtomicBool>,
 }
 
-impl CommandOutputObserver {
+impl TaskCommandOutputObserver {
     fn new(task: ExecuteTask, tx: TaskEventSink, stage: String) -> Self {
         Self {
             task,
@@ -2930,6 +3059,74 @@ impl CommandOutputObserver {
                     "[pipeline:{}] 实时输出过多，后续输出仅保留在最终摘要中",
                     self.stage
                 ),
+                "warn",
+            );
+        }
+    }
+}
+
+#[derive(Clone)]
+struct RemoteCommandOutputObserver {
+    command_id: String,
+    tx: mpsc::UnboundedSender<Value>,
+    inner: Arc<AgentInner>,
+    remaining_lines: Arc<AtomicU64>,
+    truncated_notified: Arc<AtomicBool>,
+}
+
+impl RemoteCommandOutputObserver {
+    fn new(command_id: String, tx: mpsc::UnboundedSender<Value>, inner: Arc<AgentInner>) -> Self {
+        Self {
+            command_id,
+            tx,
+            inner,
+            remaining_lines: Arc::new(AtomicU64::new(command_live_log_line_limit())),
+            truncated_notified: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn register_pid(&self, pid: u32) {
+        if let Ok(mut values) = self.inner.running_command_pids.lock() {
+            values.insert(self.command_id.clone(), pid);
+        }
+    }
+
+    fn clear_pid(&self) {
+        if let Ok(mut values) = self.inner.running_command_pids.lock() {
+            values.remove(&self.command_id);
+        }
+    }
+
+    fn emit(&self, stream: &str, line: &str) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        let can_emit = self
+            .remaining_lines
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_sub(1)
+            })
+            .is_ok();
+        if can_emit {
+            let label = if stream == "stderr" {
+                "stderr"
+            } else {
+                "stdout"
+            };
+            send_command_log(
+                &self.tx,
+                &self.command_id,
+                &format!("[live:{label}] {}", truncate(trimmed, 1200)),
+                if stream == "stderr" { "warn" } else { "info" },
+            );
+            return;
+        }
+        if !self.truncated_notified.swap(true, Ordering::Relaxed) {
+            send_command_log(
+                &self.tx,
+                &self.command_id,
+                "实时输出过多，后续输出仅保留在最终摘要中",
                 "warn",
             );
         }
@@ -3181,6 +3378,9 @@ async fn run_command_timed_observed(
         let _ = child.kill().await;
         return Err(format!("执行 {command_line} 失败: 获取进程 ID 失败"));
     }
+    if let Some(observer) = &observer {
+        observer.register_pid(command_pid);
+    }
 
     let stdout_handle = child.stdout.take().map(|stream| {
         let observer = observer.clone();
@@ -3230,6 +3430,9 @@ async fn run_command_timed_observed(
             } else {
                 String::new()
             };
+            if let Some(observer) = &observer {
+                observer.clear_pid();
+            }
             return Err(format!(
                 "{reason}终止进程 (pid={pid})：{command_line} (软超时 {}s / 硬超时 {}s，已尝试杀死={killed})\nstdout:{}\nstderr:{}",
                 soft_timeout.as_secs(),
@@ -3239,6 +3442,9 @@ async fn run_command_timed_observed(
             ));
         }
     };
+    if let Some(observer) = &observer {
+        observer.clear_pid();
+    }
 
     let stdout = if let Some(handle) = stdout_handle {
         handle.await.unwrap_or_default()
@@ -3579,6 +3785,8 @@ mod tests {
             tools: Mutex::new(Vec::new()),
             running_task: Mutex::new(None),
             running_dev_tool: Mutex::new(None),
+            running_command_pids: Mutex::new(HashMap::new()),
+            cancelled_commands: Mutex::new(HashSet::new()),
             last_error: Mutex::new(None),
             pending_task_reports: Mutex::new(VecDeque::new()),
             generation: AtomicU64::new(0),
@@ -3703,7 +3911,7 @@ mod tests {
         let inner = test_inner();
         let (tx, mut rx) = mpsc::unbounded_channel::<Value>();
         let sink = TaskEventSink::new(tx, inner);
-        let observer = CommandOutputObserver::new(
+        let observer = CommandOutputObserver::task(
             task("https://example.com/repo.git", "main"),
             sink,
             "codex".to_string(),

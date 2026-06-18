@@ -76,7 +76,7 @@ interface RemoteCommand {
   device_id: string;
   title: string;
   shell: 'powershell' | 'cmd' | 'sh' | 'bash';
-  status: 'pending' | 'running' | 'completed' | 'failed';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
   timeout_seconds: number;
   exit_code?: number;
   stdout?: string;
@@ -280,6 +280,51 @@ server.registerTool('devfleet_run_remote_command', {
   });
 });
 
+server.registerTool('devfleet_preflight_codex', {
+  title: '预检远端 Codex 工作端',
+  description: '在目标工作设备执行内置 Codex 预检：解析 codex 路径、读取版本，并在 Windows 上用 unelevated sandbox 跑最小 smoke。用于派发协作任务前确认工作端真的可执行。',
+  inputSchema: {
+    device_id: z.string().min(1).describe('目标工作设备 ID（通常是 Win32，来自 devfleet_list_devices）'),
+    timeout_seconds: z.number().int().min(5).max(1800).default(120).describe('设备本地预检超时'),
+    wait: z.boolean().default(true).describe('是否等待预检完成'),
+    wait_timeout_seconds: z.number().int().min(5).max(3600).default(180).describe('wait=true 时 MCP 侧等待结果的最长时间'),
+  },
+}, async (input) => {
+  const command = (await api<{ command: RemoteCommand }>(
+    `/api/devices/${encodeURIComponent(input.device_id)}/codex-preflight`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ timeout_seconds: input.timeout_seconds || 120 }),
+    },
+  )).command;
+  if (!input.wait) return result({ success: true, command });
+  const finalCommand = await waitForRemoteCommand(
+    input.device_id,
+    command.id,
+    input.wait_timeout_seconds || Math.max((input.timeout_seconds || 120) + 30, 180),
+  );
+  return result({
+    success: finalCommand.status === 'completed',
+    command: finalCommand,
+  });
+});
+
+server.registerTool('devfleet_cancel_remote_command', {
+  title: '取消远端设备命令',
+  description: '取消 devfleet_run_remote_command 或 devfleet_preflight_codex 创建的远程命令。pending 命令直接终止，running 命令会通知工作设备 Agent 杀掉本地进程树。',
+  inputSchema: {
+    device_id: z.string().min(1).describe('目标工作设备 ID'),
+    command_id: z.string().min(1).describe('远程命令 ID'),
+    reason: z.string().default('MCP 请求取消远程命令').describe('取消原因，写入命令日志'),
+  },
+}, async ({ device_id, command_id, reason }) => result(await api(
+  `/api/devices/${encodeURIComponent(device_id)}/commands/${encodeURIComponent(command_id)}/cancel`,
+  {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  },
+)));
+
 server.registerTool('devfleet_start_collab_session', {
   title: '创建远端 Codex 持续协作会话',
   description: '在指定工作设备上创建一个持续协作会话。后续 devfleet_send_collab_message 会带会话历史派发给同一台设备 Codex。',
@@ -394,7 +439,7 @@ async function waitForRemoteCommand(
     command = (await api<{ command: RemoteCommand }>(
       `/api/devices/${encodeURIComponent(deviceId)}/commands/${encodeURIComponent(commandId)}`,
     )).command;
-    if (['completed', 'failed'].includes(command.status)) return command;
+    if (['completed', 'failed', 'cancelled'].includes(command.status)) return command;
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   throw new Error(`等待远程命令超时。最后状态: ${command?.status || 'unknown'}`);

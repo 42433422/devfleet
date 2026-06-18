@@ -240,6 +240,109 @@ test('远程命令无设备结果时会按超时回收', async () => {
   }
 });
 
+test('Codex 预检会下发受控脚本并可收敛结果', async () => {
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'devfleet-codex-preflight-'));
+  process.env.DEVFLEET_DB_FILE = path.join(tempDir, 'codex-preflight.db');
+  process.env.JWT_SECRET = 'codex-preflight-test-secret';
+
+  const { default: app } = await import('../api/app.js');
+  const { closeDatabase } = await import('../api/db/sqlite.js');
+  const { attachWebSocket, resetWebSocketStateForTest } = await import('../api/websocket/manager.js');
+  const server = http.createServer(app);
+  const wss = new WebSocketServer({ server });
+  attachWebSocket(wss);
+  server.listen(0);
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+  let token = '';
+  let deviceSocket: WebSocket | null = null;
+  const request = async <T>(url: string, options: RequestInit = {}) => {
+    const response = await fetch(`${baseUrl}${url}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...options.headers,
+      },
+    });
+    const body = await response.json() as T & { error?: string };
+    assert.equal(response.ok, true, body.error || `${response.status} ${url}`);
+    return body;
+  };
+
+  try {
+    const auth = await request<{ token: string }>('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'codex-preflight@example.com', password: 'secret123' }),
+    });
+    token = auth.token;
+
+    const binding = await request<{ bindCode: string }>('/api/devices/bind', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Codex Preflight Device' }),
+    });
+    const activation = await request<{ device: { id: string }; deviceToken: string }>('/api/devices/activate', {
+      method: 'POST',
+      body: JSON.stringify({ bindCode: binding.bindCode, deviceName: 'Codex Preflight Device' }),
+    });
+
+    deviceSocket = new WebSocket(`${baseUrl.replace('http', 'ws')}/ws/device?token=${activation.deviceToken}`);
+    const identityMessage = nextJsonMessage(deviceSocket, (message) => message.type === 'binding_identity');
+    await new Promise<void>((resolve, reject) => {
+      deviceSocket!.once('open', resolve);
+      deviceSocket!.once('error', reject);
+    });
+    await identityMessage;
+
+    const executeMessage = nextJsonMessage(deviceSocket, (message) => message.type === 'execute_command');
+    const created = await request<{ command: { id: string; status: string; shell: string; logs: Array<{ content: string }> } }>(
+      `/api/devices/${activation.device.id}/codex-preflight`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ timeout_seconds: 45 }),
+      },
+    );
+    assert.equal(created.command.status, 'running');
+    assert.ok(created.command.logs.some((log) => /Codex 工作端预检/.test(log.content)));
+
+    const execute = await executeMessage;
+    assert.equal(execute.command_id, created.command.id);
+    assert.match(String(execute.script), /codex --version/);
+    assert.equal(execute.timeout_seconds, 45);
+
+    deviceSocket.send(JSON.stringify({
+      type: 'command_result',
+      command_id: created.command.id,
+      status: 'completed',
+      exit_code: 0,
+      stdout: 'codex_preflight=ok\n',
+      stderr: '',
+    }));
+
+    const started = Date.now();
+    let command: { status: string; stdout?: string } | undefined;
+    while (Date.now() - started < 2_000) {
+      const response = await request<{ command: { status: string; stdout?: string } }>(
+        `/api/devices/${activation.device.id}/commands/${created.command.id}`,
+      );
+      command = response.command;
+      if (command.status === 'completed') break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(command?.status, 'completed');
+    assert.equal(command?.stdout, 'codex_preflight=ok\n');
+  } finally {
+    deviceSocket?.close();
+    resetWebSocketStateForTest();
+    await new Promise<void>((resolve, reject) => wss.close((error) => error ? reject(error) : resolve()));
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    closeDatabase();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await rm(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+});
+
 test('离线设备远程命令会排队并在重连后下发', async () => {
   const tempDir = await mkdtemp(path.join(tmpdir(), 'devfleet-remote-command-offline-'));
   process.env.DEVFLEET_DB_FILE = path.join(tempDir, 'remote-command-offline.db');
@@ -338,6 +441,147 @@ test('离线设备远程命令会排队并在重连后下发', async () => {
     }
     assert.equal(command?.status, 'completed');
     assert.equal(command?.stdout, 'queued\n');
+  } finally {
+    deviceSocket?.close();
+    resetWebSocketStateForTest();
+    await new Promise<void>((resolve, reject) => wss.close((error) => error ? reject(error) : resolve()));
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    closeDatabase();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await rm(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+});
+
+test('远程命令支持取消 pending 和 running 状态', async () => {
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'devfleet-remote-command-cancel-'));
+  process.env.DEVFLEET_DB_FILE = path.join(tempDir, 'remote-command-cancel.db');
+  process.env.JWT_SECRET = 'remote-command-cancel-test-secret';
+
+  const { default: app } = await import('../api/app.js');
+  const { closeDatabase } = await import('../api/db/sqlite.js');
+  const { attachWebSocket, resetWebSocketStateForTest } = await import('../api/websocket/manager.js');
+  const server = http.createServer(app);
+  const wss = new WebSocketServer({ server });
+  attachWebSocket(wss);
+  server.listen(0);
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+  let token = '';
+  let deviceSocket: WebSocket | null = null;
+  const request = async <T>(url: string, options: RequestInit = {}) => {
+    const response = await fetch(`${baseUrl}${url}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...options.headers,
+      },
+    });
+    const body = await response.json() as T & { error?: string };
+    assert.equal(response.ok, true, body.error || `${response.status} ${url}`);
+    return body;
+  };
+
+  try {
+    const auth = await request<{ token: string }>('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'remote-command-cancel@example.com', password: 'secret123' }),
+    });
+    token = auth.token;
+
+    const binding = await request<{ bindCode: string }>('/api/devices/bind', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Cancel Command Device' }),
+    });
+    const activation = await request<{ device: { id: string }; deviceToken: string }>('/api/devices/activate', {
+      method: 'POST',
+      body: JSON.stringify({ bindCode: binding.bindCode, deviceName: 'Cancel Command Device' }),
+    });
+
+    const pending = await request<{ command: { id: string; status: string } }>(
+      `/api/devices/${activation.device.id}/commands`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          title: 'cancel before reconnect',
+          shell: 'sh',
+          script: 'sleep 30',
+          timeout_seconds: 30,
+          dangerous: true,
+        }),
+      },
+    );
+    assert.equal(pending.command.status, 'pending');
+
+    const cancelledPending = await request<{ command: { status: string; error?: string } }>(
+      `/api/devices/${activation.device.id}/commands/${pending.command.id}/cancel`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ reason: '不再需要执行' }),
+      },
+    );
+    assert.equal(cancelledPending.command.status, 'cancelled');
+    assert.match(cancelledPending.command.error || '', /不再需要执行/);
+
+    deviceSocket = new WebSocket(`${baseUrl.replace('http', 'ws')}/ws/device?token=${activation.deviceToken}`);
+    const identityMessage = nextJsonMessage(deviceSocket, (message) => message.type === 'binding_identity');
+    await new Promise<void>((resolve, reject) => {
+      deviceSocket!.once('open', resolve);
+      deviceSocket!.once('error', reject);
+    });
+    await identityMessage;
+
+    const executeMessage = nextJsonMessage(deviceSocket, (message) => message.type === 'execute_command');
+    const running = await request<{ command: { id: string; status: string } }>(
+      `/api/devices/${activation.device.id}/commands`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          title: 'cancel while running',
+          shell: 'sh',
+          script: 'sleep 30',
+          timeout_seconds: 30,
+          dangerous: true,
+        }),
+      },
+    );
+    assert.equal(running.command.status, 'running');
+    const execute = await executeMessage;
+    assert.equal(execute.command_id, running.command.id);
+
+    const cancelMessage = nextJsonMessage(deviceSocket, (message) => message.type === 'cancel_command');
+    const cancelResponse = await request<{ command: { status: string; error?: string; logs: Array<{ content: string }> } }>(
+      `/api/devices/${activation.device.id}/commands/${running.command.id}/cancel`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ reason: '测试取消 running 命令' }),
+      },
+    );
+    assert.equal(cancelResponse.command.status, 'running');
+    assert.match(cancelResponse.command.error || '', /取消请求已发送/);
+    const cancel = await cancelMessage;
+    assert.equal(cancel.command_id, running.command.id);
+
+    deviceSocket.send(JSON.stringify({
+      type: 'command_result',
+      command_id: running.command.id,
+      status: 'cancelled',
+      error: '命令已取消',
+    }));
+
+    const started = Date.now();
+    let command: { status: string; error?: string } | undefined;
+    while (Date.now() - started < 2_000) {
+      const response = await request<{ command: { status: string; error?: string } }>(
+        `/api/devices/${activation.device.id}/commands/${running.command.id}`,
+      );
+      command = response.command;
+      if (command.status === 'cancelled') break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(command?.status, 'cancelled');
+    assert.match(command?.error || '', /命令已取消/);
   } finally {
     deviceSocket?.close();
     resetWebSocketStateForTest();

@@ -20,6 +20,7 @@ test('MCP 服务公开真实多设备调度工具', async () => {
     const tools = await client.listTools();
     assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [
       'devfleet_call_remote_codex',
+      'devfleet_cancel_remote_command',
       'devfleet_computer_use_open_trae_workspace',
       'devfleet_computer_use_start_trae_task',
       'devfleet_computer_use_submit_trae_task',
@@ -30,6 +31,7 @@ test('MCP 服务公开真实多设备调度工具', async () => {
       'devfleet_list_devices',
       'devfleet_merge_task',
       'devfleet_next_task',
+      'devfleet_preflight_codex',
       'devfleet_report_task_progress',
       'devfleet_run_remote_command',
       'devfleet_send_collab_message',
