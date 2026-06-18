@@ -1,7 +1,7 @@
 {
   "name": "devfleet",
   "private": true,
-  "version": "1.4.10",
+  "version": "1.4.11",
   "type": "module",
   "scripts": {
     "client:dev": "vite",

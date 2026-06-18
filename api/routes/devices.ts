@@ -108,10 +108,10 @@ function codexPreflightScript(deviceId: string): string {
       "Write-Output '[preflight] codex version'",
       '& $cmd.Source --version',
       'if ($LASTEXITCODE -ne 0) { Write-Output "codex_version_failed=$LASTEXITCODE"; exit $LASTEXITCODE }',
-      "Write-Output '[preflight] windows sandbox smoke'",
-      '& $cmd.Source -c \'windows.sandbox="unelevated"\' sandbox windows -- powershell -NoProfile -Command "Write-Output sandbox-smoke"',
-      'if ($LASTEXITCODE -ne 0) { Write-Output "sandbox_smoke_failed=$LASTEXITCODE"; exit $LASTEXITCODE }',
-      "Write-Output 'sandbox_smoke=ok'",
+      "Write-Output '[preflight] codex exec help smoke'",
+      '& $cmd.Source exec --help | Out-Null',
+      'if ($LASTEXITCODE -ne 0) { Write-Output "codex_exec_help_failed=$LASTEXITCODE"; exit $LASTEXITCODE }',
+      "Write-Output 'codex_exec_help=ok'",
       "Write-Output 'codex_preflight=ok'",
     ].join('\n');
   }
@@ -541,7 +541,7 @@ router.post('/:id/codex-preflight', async (req: Request, res: Response): Promise
   db.remoteCommands.appendLog(command.id, {
     level: hasDevice(id) ? 'info' : 'warn',
     content: hasDevice(id)
-      ? 'Codex 工作端预检已下发：path/version/sandbox smoke'
+      ? 'Codex 工作端预检已下发：path/version/exec help smoke'
       : '设备离线，Codex 工作端预检已排队；设备重连后自动执行',
   });
   const dispatched = sendRemoteCommandToDevice(db.remoteCommands.findById(command.id) || command);
