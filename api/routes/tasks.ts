@@ -11,11 +11,57 @@ import {
   executorMissing,
   parseDependsOn,
 } from '../lib/dispatch.js';
+import { syncCollabMessageForSubtask } from '../lib/collab.js';
 import { hasDevice } from '../websocket/manager.js';
 
 const PRODUCT_NAME = '排比 Para';
 
 const router = Router();
+
+type MergeConflictRecord = {
+  status: 'open';
+  detected_at: string;
+  subtask_id?: string;
+  branch_name?: string;
+  conflict_files: string[];
+  detail: string;
+  source?: string;
+  workspace_path?: string;
+};
+
+function parseMergeConflict(value?: string): MergeConflictRecord | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as MergeConflictRecord;
+    if (!parsed || typeof parsed !== 'object') return null;
+    return {
+      ...parsed,
+      conflict_files: Array.isArray(parsed.conflict_files) ? parsed.conflict_files.map(String) : [],
+      detail: typeof parsed.detail === 'string' ? parsed.detail : '',
+    };
+  } catch {
+    return {
+      status: 'open',
+      detected_at: new Date().toISOString(),
+      conflict_files: [],
+      detail: value,
+    };
+  }
+}
+
+function normalizeConflictFiles(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  return value
+    .map((item) => String(item || '').trim())
+    .filter((item) => item && !item.includes('\0'))
+    .filter((item) => {
+      if (seen.has(item)) return false;
+      seen.add(item);
+      return true;
+    })
+    .slice(0, 50);
+}
 
 function serializeSubTask(sub: SubTask) {
   const subs = db.subTasks.findAllByTaskId(sub.task_id);
@@ -60,6 +106,7 @@ function serializeTask(taskId: string) {
     created_at: task.created_at,
     completed_at: task.completed_at,
     merge_commit_sha: task.merge_commit_sha,
+    merge_conflict: parseMergeConflict(task.merge_conflict),
     repo_url: task.repo_url,
     branch: task.branch,
   };
@@ -415,6 +462,14 @@ router.post('/:id/subtasks/:subtaskId/progress', async (req: Request, res: Respo
 
   if (status === 'failed') {
     const updated = handleSubTaskFailure(userId, id, subtaskId, '手动标记失败');
+    const collab = syncCollabMessageForSubtask(subtaskId, updated?.status || 'failed', '手动标记失败');
+    if (collab) {
+      broadcast(userId, {
+        type: 'collab_message',
+        session_id: collab.session.id,
+        message: collab.assistantMessage || collab.userMessage,
+      });
+    }
     const serializedTask = reconcileTask(userId, id);
     res.status(200).json({ success: true, subTask: updated ? serializeSubTask(updated) : null, task: serializeTask(id) ?? serializedTask });
     return;
@@ -434,6 +489,18 @@ router.post('/:id/subtasks/:subtaskId/progress', async (req: Request, res: Respo
       progress: updated.progress,
       status: updated.status,
     });
+    const collab = syncCollabMessageForSubtask(
+      subtaskId,
+      updated.status,
+      updated.status === 'completed' ? '主控端已确认远端协作步骤完成' : undefined,
+    );
+    if (collab) {
+      broadcast(userId, {
+        type: 'collab_message',
+        session_id: collab.session.id,
+        message: collab.assistantMessage || collab.userMessage,
+      });
+    }
     if (updated.status === 'completed') {
       dispatchReadySubs(userId, id);
     }
@@ -496,6 +563,68 @@ router.post('/:id/subtasks/:subtaskId/logs', async (req: Request, res: Response)
   res.status(200).json({ log });
 });
 
+router.post('/:id/merge-conflict', async (req: Request, res: Response): Promise<void> => {
+  const userId = req.user!.id;
+  const task = db.tasks.findById(req.params.id);
+  if (!task || task.user_id !== userId) {
+    res.status(404).json({ error: '任务不存在' });
+    return;
+  }
+
+  const body = (req.body || {}) as {
+    subtask_id?: string;
+    branch_name?: string;
+    conflict_files?: unknown;
+    detail?: string;
+    source?: string;
+    workspace_path?: string;
+  };
+  const subtaskId = (body.subtask_id || '').trim();
+  const branchName = (body.branch_name || '').trim();
+  const detail = (body.detail || '').trim() || '主设备 Git 合并失败，等待人工解决冲突';
+  const conflictFiles = normalizeConflictFiles(body.conflict_files);
+  const source = (body.source || '').trim() || 'main-device';
+  const workspacePath = (body.workspace_path || '').trim();
+
+  const subs = db.subTasks.findAllByTaskId(task.id);
+  const sub = subtaskId
+    ? subs.find((item) => item.id === subtaskId)
+    : branchName
+      ? subs.find((item) => item.branch_name === branchName || `origin/${item.branch_name}` === branchName)
+      : undefined;
+  if (subtaskId && !sub) {
+    res.status(404).json({ error: '子任务不存在' });
+    return;
+  }
+
+  const conflict: MergeConflictRecord = {
+    status: 'open',
+    detected_at: new Date().toISOString(),
+    subtask_id: sub?.id,
+    branch_name: branchName || sub?.branch_name,
+    conflict_files: conflictFiles,
+    detail,
+    source,
+    ...(workspacePath ? { workspace_path: workspacePath } : {}),
+  };
+  const conflictText = conflictFiles.length > 0 ? conflictFiles.join(', ') : '未解析到具体文件';
+  const message = `主设备合并失败，任务进入冲突处理状态。分支: ${conflict.branch_name || '未知'}；冲突文件: ${conflictText}。${detail}`;
+
+  if (sub) {
+    db.subTasks.update(sub.id, { last_error: message });
+    appendLog(userId, task.id, sub.id, message, 'error', sub.device_id);
+  } else if (subs[0]) {
+    appendLog(userId, task.id, subs[0].id, message, 'error', subs[0].device_id);
+  }
+
+  const updated = db.tasks.update(task.id, {
+    status: 'merge_conflict',
+    merge_conflict: JSON.stringify(conflict),
+  });
+  broadcast(userId, { type: 'task_status', task_id: task.id, status: 'merge_conflict' });
+  res.status(200).json({ success: true, task: updated ? serializeTask(updated.id) : serializeTask(task.id), mergeConflict: conflict });
+});
+
 router.post('/:id/merge', async (req: Request, res: Response): Promise<void> => {
   const userId = req.user!.id;
   const task = db.tasks.findById(req.params.id);
@@ -514,7 +643,12 @@ router.post('/:id/merge', async (req: Request, res: Response): Promise<void> => 
     res.status(400).json({ error: '请提供主设备真实合并后的 Git commit SHA' });
     return;
   }
-  db.tasks.update(task.id, { status: 'merged', completed_at: new Date().toISOString(), merge_commit_sha: sha });
+  db.tasks.update(task.id, {
+    status: 'merged',
+    completed_at: new Date().toISOString(),
+    merge_commit_sha: sha,
+    merge_conflict: undefined,
+  });
   broadcast(userId, { type: 'task_merged', task_id: task.id, commit_sha: sha });
   broadcast(userId, { type: 'task_status', task_id: task.id, status: 'merged' });
   res.status(200).json({ success: true, mergeCommitSha: sha, task: serializeTask(task.id) });

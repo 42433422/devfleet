@@ -2,9 +2,17 @@ import { Router, type Request, type Response } from 'express';
 import { db, type SubTask } from '../db/store.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { genBindCode, genDeviceToken, normalizeDevTool, type DevTool } from '../lib/utils.js';
-import { broadcast, disconnectDeviceSocket, hasDevice, sendBindingIdentity, sendBindingIdentityToUser } from '../websocket/manager.js';
+import {
+  broadcast,
+  disconnectDeviceSocket,
+  getDeviceLinkHealth,
+  hasDevice,
+  sendBindingIdentity,
+  sendBindingIdentityToUser,
+} from '../websocket/manager.js';
 import { parseCapabilities } from '../lib/capabilities.js';
 import { reconcileTask, dispatchReadySubs, handleSubTaskFailure } from '../lib/dispatch.js';
+import { syncCollabMessageForSubtask } from '../lib/collab.js';
 import { createHash } from 'node:crypto';
 
 const router = Router();
@@ -27,10 +35,12 @@ function serializeDevice(deviceId: string) {
   const toolMap = new Map(tools.map((t) => [t.toolName, t]));
   const finalTools = all.map((name) => toolMap.get(name) || { toolName: name, status: 'not_installed' });
   const capabilities = parseCapabilities(dev.capabilities);
+  const linkHealth = getDeviceLinkHealth(dev.id);
   return {
     id: dev.id,
     name: dev.name,
     status: hasDevice(dev.id) ? 'online' : dev.status === 'connecting' ? 'connecting' : 'offline',
+    linkHealth,
     devTool: normalizeDevTool(dev.dev_tool),
     tools: finalTools,
     capabilities,
@@ -223,10 +233,22 @@ router.post('/me/task-report', async (req: Request, res: Response): Promise<void
     status: updated.status,
   });
 
+  let finalSubTask = updated;
+  if (body.status === 'completed' || body.status === 'failed') {
+    db.tools.upsert(device.id, updated.tool_name, { status: 'idle', current_task: undefined });
+  }
   if (body.status === 'failed') {
-    handleSubTaskFailure(device.user_id, taskId, subtaskId, content);
+    finalSubTask = handleSubTaskFailure(device.user_id, taskId, subtaskId, content) || updated;
   } else if (body.status === 'completed') {
     dispatchReadySubs(device.user_id, taskId);
+  }
+  const collab = syncCollabMessageForSubtask(subtaskId, finalSubTask.status, content);
+  if (collab) {
+    broadcast(device.user_id, {
+      type: 'collab_message',
+      session_id: collab.session.id,
+      message: collab.assistantMessage || collab.userMessage,
+    });
   }
 
   reconcileTask(device.user_id, taskId);

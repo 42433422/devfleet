@@ -5,6 +5,15 @@ export type BuiltinTunnelStatus = {
   url: string | null;
   provider: 'localtunnel' | 'cloudflared' | null;
   error: string | null;
+  desired: boolean;
+  restarting: boolean;
+  restartCount: number;
+  failureCount: number;
+  lastStartedAt: string | null;
+  lastCheckedAt: string | null;
+  lastHealthyAt: string | null;
+  lastStoppedAt: string | null;
+  nextRetryAt: string | null;
 };
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> {

@@ -25,6 +25,7 @@ const timeoutSeconds = Number.parseInt(
     || '900',
   10,
 );
+applyNoProxyDefaults([apiBaseUrl, repoUrl]);
 
 interface PhaseTiming {
   name: string;
@@ -50,6 +51,72 @@ interface Task {
 
 const timings: PhaseTiming[] = [];
 let flowStartedAt = Date.now();
+
+function applyNoProxyDefaults(values: string[] = []) {
+  const defaults = [
+    'localhost',
+    '127.0.0.1',
+    '::1',
+    '.local',
+    '*.local',
+    '10.0.0.0/8',
+    '172.16.0.0/12',
+    '192.168.0.0/16',
+    '169.254.0.0/16',
+    'fc00::/7',
+    'fe80::/10',
+  ];
+  const entries = `${process.env.NO_PROXY || ''},${process.env.no_proxy || ''}`
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  for (const entry of defaults) appendUniqueNoProxy(entries, entry);
+  for (const value of values) {
+    const host = lanHostFromConnectionValue(value);
+    if (host) appendUniqueNoProxy(entries, host);
+  }
+  const merged = entries.join(',');
+  process.env.NO_PROXY = merged;
+  process.env.no_proxy = merged;
+}
+
+function appendUniqueNoProxy(entries: string[], entry: string) {
+  if (!entries.some((existing) => existing.toLowerCase() === entry.toLowerCase())) {
+    entries.push(entry);
+  }
+}
+
+function lanHostFromConnectionValue(value: string) {
+  const token = String(value || '').trim();
+  if (!token) return null;
+  if (token.startsWith('git@')) {
+    const host = token.slice(4).split(':')[0];
+    return isLanHost(host) ? host : null;
+  }
+  try {
+    const host = new URL(token).hostname;
+    return isLanHost(host) ? host : null;
+  } catch {
+    return null;
+  }
+}
+
+function isLanHost(host: string) {
+  const normalized = String(host || '').replace(/^\[/, '').replace(/\]$/, '').toLowerCase();
+  if (!normalized || normalized === 'localhost' || normalized.endsWith('.local')) return true;
+  const parts = normalized.split('.').map((part) => Number.parseInt(part, 10));
+  if (parts.length === 4 && parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)) {
+    return parts[0] === 10
+      || parts[0] === 127
+      || (parts[0] === 169 && parts[1] === 254)
+      || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31)
+      || (parts[0] === 192 && parts[1] === 168);
+  }
+  return normalized === '::1'
+    || normalized.startsWith('fc')
+    || normalized.startsWith('fd')
+    || normalized.startsWith('fe80:');
+}
 
 const startPhase = (name: string) => {
   const phase: PhaseTiming = { name, startedAt: Date.now() };

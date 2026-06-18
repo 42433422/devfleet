@@ -13,6 +13,15 @@ MERGE="$E2E_ROOT/merge-workspace"
 APP_SUPPORT="$HOME/Library/Application Support/com.devfleet.desktop"
 API="http://localhost:3001"
 
+DEVFLEET_DEFAULT_NO_PROXY="localhost,127.0.0.1,::1,.local,*.local,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,fc00::/7,fe80::/10"
+DEVFLEET_COMBINED_NO_PROXY="${NO_PROXY:-${no_proxy:-}}"
+case ",$DEVFLEET_COMBINED_NO_PROXY," in
+  *",192.168.0.0/16,"*) ;;
+  *) DEVFLEET_COMBINED_NO_PROXY="${DEVFLEET_COMBINED_NO_PROXY:+$DEVFLEET_COMBINED_NO_PROXY,}$DEVFLEET_DEFAULT_NO_PROXY" ;;
+esac
+export NO_PROXY="$DEVFLEET_COMBINED_NO_PROXY"
+export no_proxy="$DEVFLEET_COMBINED_NO_PROXY"
+
 log() { echo "[simulate] $*"; }
 
 clean_install() {

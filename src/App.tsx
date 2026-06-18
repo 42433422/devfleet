@@ -12,6 +12,8 @@ import Tasks from '@/pages/Tasks';
 import TaskDetail from '@/pages/TaskDetail';
 import Agent from '@/pages/Agent';
 import Integration from '@/pages/Integration';
+import IndustryMods from '@/pages/IndustryMods';
+import RemoteCodex from '@/pages/RemoteCodex';
 import SupportedToolsCorner from '@/components/SupportedToolsCorner';
 import { resetDevApiBasePick } from '@/lib/api';
 import { PRODUCT_NAME } from '@/lib/brand';
@@ -20,7 +22,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen bg-bg-primary text-zinc-200">
       <Sidebar />
-      <main className="flex-1 flex flex-col min-h-screen min-w-0 ml-56">{children}</main>
+      <main className="flex-1 flex flex-col min-h-screen min-w-0 ml-16 sm:ml-56">{children}</main>
     </div>
   );
 }
@@ -148,7 +150,9 @@ export default function App() {
         <Route path="/devices" element={<Protected><Devices /></Protected>} />
         <Route path="/tasks" element={<Protected><Tasks /></Protected>} />
         <Route path="/tasks/:id" element={<Protected><TaskDetail /></Protected>} />
+        <Route path="/remote-codex" element={<Protected><RemoteCodex /></Protected>} />
         <Route path="/integration" element={<Protected><Integration /></Protected>} />
+        <Route path="/mods" element={<Protected><IndustryMods /></Protected>} />
         <Route path="*" element={<AuthRedirect />} />
       </Routes>
     </Router>

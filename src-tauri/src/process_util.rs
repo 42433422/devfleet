@@ -1,10 +1,25 @@
 use std::fs;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use tauri::{AppHandle, Manager};
+use url::Url;
 
 const MIN_SQLITE_NODE_MODULES: u32 = 127;
+const DEFAULT_NO_PROXY_ENTRIES: &[&str] = &[
+    "localhost",
+    "127.0.0.1",
+    "::1",
+    ".local",
+    "*.local",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "169.254.0.0/16",
+    "fc00::/7",
+    "fe80::/10",
+];
 
 /// 解析 Tauri 打包资源；macOS 从 DMG/下载目录直接打开时 PathResolver 可能失败，回退到 exe 旁 Resources。
 pub fn resolve_bundled_resource(app: &AppHandle, relative: &str) -> Option<PathBuf> {
@@ -230,6 +245,88 @@ pub fn configure_embedded_server_command(command: &mut Command) {
     }
 }
 
+pub fn merge_no_proxy_entries<'a>(extra_entries: impl IntoIterator<Item = &'a str>) -> String {
+    let mut entries: Vec<String> = ["NO_PROXY", "no_proxy"]
+        .into_iter()
+        .filter_map(|key| std::env::var(key).ok())
+        .flat_map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|entry| !entry.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+
+    for entry in DEFAULT_NO_PROXY_ENTRIES
+        .iter()
+        .copied()
+        .chain(extra_entries)
+    {
+        append_unique_no_proxy(&mut entries, entry);
+    }
+
+    entries.join(",")
+}
+
+fn append_unique_no_proxy(entries: &mut Vec<String>, entry: &str) {
+    let entry = entry.trim();
+    if entry.is_empty() {
+        return;
+    }
+    if !entries
+        .iter()
+        .any(|existing| existing.eq_ignore_ascii_case(entry))
+    {
+        entries.push(entry.to_string());
+    }
+}
+
+pub fn lan_no_proxy_hosts_from_values(values: &[&str]) -> Vec<String> {
+    let mut hosts = Vec::new();
+    for raw in values {
+        let Some(host) = host_from_connection_value(raw) else {
+            continue;
+        };
+        if is_lan_no_proxy_host(&host) && !hosts.iter().any(|item| item == &host) {
+            hosts.push(host);
+        }
+    }
+    hosts
+}
+
+fn host_from_connection_value(raw: &str) -> Option<String> {
+    let token = raw.trim().trim_matches(|ch: char| {
+        ch == '"' || ch == '\'' || ch == '<' || ch == '>' || ch == '(' || ch == ')'
+    });
+    if token.starts_with("git@") {
+        return token
+            .strip_prefix("git@")
+            .and_then(|value| value.split(':').next())
+            .map(str::to_string);
+    }
+    Url::parse(token)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_string))
+}
+
+fn is_lan_no_proxy_host(host: &str) -> bool {
+    let host = host
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_lowercase();
+    if host == "localhost" || host.ends_with(".local") {
+        return true;
+    }
+    match host.parse::<IpAddr>() {
+        Ok(IpAddr::V4(ip)) => ip.is_private() || ip.is_loopback() || ip.is_link_local(),
+        Ok(IpAddr::V6(ip)) => ip.is_loopback() || ip.is_unique_local(),
+        Err(_) => false,
+    }
+}
+
 /// 其他后台子进程（仍隐藏窗口；Unix 下 setsid 与主进程分离）。
 pub fn configure_hidden_command(command: &mut Command) {
     command.stdin(Stdio::null()).stdout(Stdio::null());
@@ -264,5 +361,23 @@ mod tests {
             let modules = node_module_version(&path).unwrap_or(0);
             assert!(modules > 0, "node at {path} should report modules version");
         }
+    }
+
+    #[test]
+    fn no_proxy_defaults_include_private_networks() {
+        let value = merge_no_proxy_entries(std::iter::empty::<&str>());
+        assert!(value.contains("192.168.0.0/16"));
+        assert!(value.contains("10.0.0.0/8"));
+        assert!(value.contains("localhost"));
+    }
+
+    #[test]
+    fn extracts_lan_hosts_from_urls() {
+        let hosts = lan_no_proxy_hosts_from_values(&[
+            "http://192.168.0.38:3001/api/health",
+            "https://example.com",
+            "git@10.0.0.5:org/repo.git",
+        ]);
+        assert_eq!(hosts, vec!["192.168.0.38", "10.0.0.5"]);
     }
 }

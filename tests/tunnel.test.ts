@@ -29,10 +29,21 @@ test('tunnel API 默认未开启', async () => {
     const res = await fetch(`${baseUrl}/api/tunnel/status`, {
       headers: { Authorization: `Bearer ${token}` },
     });
-    const body = await res.json() as { active: boolean; url: string | null };
+    const body = await res.json() as {
+      active: boolean;
+      url: string | null;
+      desired: boolean;
+      restarting: boolean;
+      restartCount: number;
+      nextRetryAt: string | null;
+    };
     assert.equal(res.ok, true);
     assert.equal(body.active, false);
     assert.equal(body.url, null);
+    assert.equal(body.desired, false);
+    assert.equal(body.restarting, false);
+    assert.equal(body.restartCount, 0);
+    assert.equal(body.nextRetryAt, null);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     closeDatabase();
@@ -45,4 +56,9 @@ test('getTunnelStatus 初始状态', async () => {
   const status = getTunnelStatus();
   assert.equal(status.active, false);
   assert.equal(status.url, null);
+  assert.equal(status.desired, false);
+  assert.equal(status.restarting, false);
+  assert.equal(status.restartCount, 0);
+  assert.equal(status.failureCount, 0);
+  assert.equal(status.nextRetryAt, null);
 });

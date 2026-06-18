@@ -1,6 +1,7 @@
 import { db, type SubTask, type Task } from '../db/store.js';
 import { normalizeDevTool, selectExecutionDevices, type DevTool } from './utils.js';
 import { broadcast, getDeviceLinkHealth, hasDevice, sendToDevice } from '../websocket/manager.js';
+import { syncCollabMessageForSubtask } from './collab.js';
 
 const MAX_ATTEMPTS_DEFAULT = 2;
 const MAX_SUBTASK_RUNNING_SECONDS = Number(process.env.DEVFLEET_SUBTASK_MAX_RUNNING_SECONDS || 3600);
@@ -131,6 +132,7 @@ export function dispatchSubTask(userId: string, task: Task, sub: SubTask): boole
   if (sub.status === 'pending') {
     db.subTasks.update(sub.id, { status: 'running' });
   }
+  syncCollabMessageForSubtask(sub.id, 'running');
 
   sendToDevice(sub.device_id, {
     type: 'execute_task',
@@ -248,6 +250,7 @@ export function handleSubTaskFailure(
 export function reconcileTask(userId: string, taskId: string) {
   const task = db.tasks.findById(taskId);
   if (!task) return null;
+  if (task.status === 'merged' || task.status === 'merge_conflict') return task;
   const subs = db.subTasks.findAllByTaskId(taskId);
 
   dispatchReadySubs(userId, taskId);

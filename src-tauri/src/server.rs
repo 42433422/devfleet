@@ -10,8 +10,8 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
 use crate::process_util::{
-    configure_embedded_server_command, resolve_bundled_node, resolve_bundled_resource,
-    resolve_node_executable,
+    configure_embedded_server_command, merge_no_proxy_entries, resolve_bundled_node,
+    resolve_bundled_resource, resolve_node_executable,
 };
 
 const EMBEDDED_API_PORT: u16 = 3001;
@@ -765,6 +765,7 @@ fn start_embedded_server(app: &AppHandle) -> Result<Child, String> {
         command.stdout(Stdio::null()).stderr(Stdio::null());
     }
     configure_embedded_server_command(&mut command);
+    let no_proxy = merge_no_proxy_entries(std::iter::empty::<&str>());
     command
         .current_dir(&server_dir)
         .arg(&script)
@@ -774,7 +775,9 @@ fn start_embedded_server(app: &AppHandle) -> Result<Child, String> {
         .env("DEVFLEET_DESKTOP", "1")
         .env("DEVFLEET_DATA_DIR", data_dir.to_string_lossy().into_owned())
         .env("DEVFLEET_DB_FILE", db_file.to_string_lossy().into_owned())
-        .env("NODE_PATH", node_modules.to_string_lossy().into_owned());
+        .env("NODE_PATH", node_modules.to_string_lossy().into_owned())
+        .env("NO_PROXY", &no_proxy)
+        .env("no_proxy", no_proxy);
 
     command
         .spawn()

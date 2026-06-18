@@ -5,6 +5,15 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+DEVFLEET_DEFAULT_NO_PROXY="localhost,127.0.0.1,::1,.local,*.local,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,fc00::/7,fe80::/10"
+DEVFLEET_COMBINED_NO_PROXY="${NO_PROXY:-${no_proxy:-}}"
+case ",$DEVFLEET_COMBINED_NO_PROXY," in
+  *",192.168.0.0/16,"*) ;;
+  *) DEVFLEET_COMBINED_NO_PROXY="${DEVFLEET_COMBINED_NO_PROXY:+$DEVFLEET_COMBINED_NO_PROXY,}$DEVFLEET_DEFAULT_NO_PROXY" ;;
+esac
+export NO_PROXY="$DEVFLEET_COMBINED_NO_PROXY"
+export no_proxy="$DEVFLEET_COMBINED_NO_PROXY"
+
 APP_PATH="$ROOT/src-tauri/target/release/bundle/macos/DevFleet.app"
 HEALTH_URL="${DEVFLEET_HEALTH_URL:-http://127.0.0.1:3001/api/health}"
 OPEN_APP="${DEVFLEET_OPEN_APP:-1}"

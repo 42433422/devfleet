@@ -15,6 +15,7 @@ const COLUMN_UPGRADES: Array<{ table: string; column: string; ddl: string }> = [
   { table: 'tasks', column: 'branch', ddl: "ALTER TABLE tasks ADD COLUMN branch TEXT NOT NULL DEFAULT 'main'" },
   { table: 'tasks', column: 'completed_at', ddl: 'ALTER TABLE tasks ADD COLUMN completed_at TEXT' },
   { table: 'tasks', column: 'merge_commit_sha', ddl: 'ALTER TABLE tasks ADD COLUMN merge_commit_sha TEXT' },
+  { table: 'tasks', column: 'merge_conflict', ddl: 'ALTER TABLE tasks ADD COLUMN merge_conflict TEXT' },
   { table: 'sub_tasks', column: 'title', ddl: "ALTER TABLE sub_tasks ADD COLUMN title TEXT NOT NULL DEFAULT ''" },
   { table: 'sub_tasks', column: 'description', ddl: "ALTER TABLE sub_tasks ADD COLUMN description TEXT NOT NULL DEFAULT ''" },
   { table: 'sub_tasks', column: 'depends_on', ddl: "ALTER TABLE sub_tasks ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]'" },
@@ -32,12 +33,43 @@ function hasColumn(database: DevFleetDatabase, table: string, column: string): b
   return rows.some((row) => row.name === column);
 }
 
+function ensureCollabTables(database: DevFleetDatabase): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS collab_sessions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      repo_url TEXT NOT NULL DEFAULT '',
+      branch TEXT NOT NULL DEFAULT 'main',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      closed_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS collab_messages (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES collab_sessions(id) ON DELETE CASCADE,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      task_id TEXT,
+      sub_task_id TEXT,
+      status TEXT NOT NULL DEFAULT 'queued',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+}
+
 export function applySchemaUpgrades(database: DevFleetDatabase): void {
   for (const upgrade of COLUMN_UPGRADES) {
     if (!hasColumn(database, upgrade.table, upgrade.column)) {
       database.exec(upgrade.ddl);
     }
   }
+  ensureCollabTables(database);
   database.prepare(
     `UPDATE sub_tasks
      SET updated_at = COALESCE(NULLIF(updated_at, ''), created_at, datetime('now'))
@@ -46,4 +78,9 @@ export function applySchemaUpgrades(database: DevFleetDatabase): void {
   database.exec('CREATE INDEX IF NOT EXISTS idx_devices_bind_code ON devices(bind_code)');
   database.exec('CREATE INDEX IF NOT EXISTS idx_devices_token_hash ON devices(device_token_hash)');
   database.exec('CREATE INDEX IF NOT EXISTS idx_sub_tasks_updated_at ON sub_tasks(updated_at)');
+  database.exec('CREATE INDEX IF NOT EXISTS idx_collab_sessions_user_id ON collab_sessions(user_id)');
+  database.exec('CREATE INDEX IF NOT EXISTS idx_collab_sessions_device_id ON collab_sessions(device_id)');
+  database.exec('CREATE INDEX IF NOT EXISTS idx_collab_sessions_task_id ON collab_sessions(task_id)');
+  database.exec('CREATE INDEX IF NOT EXISTS idx_collab_messages_session_id ON collab_messages(session_id)');
+  database.exec('CREATE INDEX IF NOT EXISTS idx_collab_messages_sub_task_id ON collab_messages(sub_task_id)');
 }

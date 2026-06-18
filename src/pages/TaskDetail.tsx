@@ -22,10 +22,34 @@ function formatTime(t: string) {
 const statusConfig = {
   completed: { bg: 'bg-blue-500/15', text: 'text-blue-400', icon: <CheckCircle2 size={10} /> },
   failed: { bg: 'bg-red-500/15', text: 'text-red-400', icon: <XCircle size={10} /> },
+  merge_conflict: { bg: 'bg-amber-500/15', text: 'text-amber-400', icon: <AlertCircle size={10} /> },
   running: { bg: 'bg-green-500/15', text: 'text-green-400', icon: <Play size={10} /> },
   pending: { bg: 'bg-zinc-700/50', text: 'text-zinc-400', icon: <Terminal size={10} /> },
   merged: { bg: 'bg-purple-500/15', text: 'text-purple-400', icon: <GitMerge size={10} /> },
 };
+
+const taskStatusText = {
+  completed: '已完成',
+  failed: '失败',
+  merge_conflict: '合并冲突',
+  merged: '已合并',
+  running: '运行中',
+  pending: '待处理',
+};
+
+function parseConflictFiles(message: string): string[] {
+  const match = message.match(/冲突文件[:：]\s*([^\n。]+)/);
+  if (!match?.[1]) return [];
+  return match[1]
+    .split(/[,，]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .filter((item) => !/未能解析|未解析/.test(item));
+}
+
+function isMergeConflictMessage(message: string): boolean {
+  return /冲突文件|CONFLICT|merge conflict|Automatic merge failed|合并 .*失败/i.test(message);
+}
 
 export default function TaskDetail() {
   const { id = '' } = useParams();
@@ -42,6 +66,7 @@ export default function TaskDetail() {
   const [actionError, setActionError] = useState('');
   const [logView, setLogView] = useState<'timeline' | 'subs'>('timeline');
   const [retrying, setRetrying] = useState<string | null>(null);
+  const [conflictCopied, setConflictCopied] = useState(false);
   const timelineRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -139,10 +164,47 @@ export default function TaskDetail() {
       await mergeTask(id, result.commit);
       await fetchTask(id);
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : '合并失败');
+      const message = err instanceof Error ? err.message : '合并失败';
+      setActionError(message);
+      if (isMergeConflictMessage(message)) {
+        const branch = currentTask.subTasks.find((st) => message.includes(st.branch_name));
+        const files = parseConflictFiles(message);
+        await api(`/api/tasks/${id}/merge-conflict`, {
+          method: 'POST',
+          body: {
+            subtask_id: branch?.id,
+            branch_name: branch?.branch_name,
+            conflict_files: files,
+            detail: message,
+            source: 'desktop',
+            workspace_path: workspacePath.trim(),
+          },
+        }).catch(() => undefined);
+        await fetchTask(id);
+      }
     } finally {
       setMerging(false);
     }
+  };
+
+  const copyConflictPrompt = async () => {
+    if (!currentTask?.merge_conflict) return;
+    const conflict = currentTask.merge_conflict;
+    const prompt = [
+      `DevFleet 合并冲突处理`,
+      `任务: ${currentTask.title}`,
+      `仓库: ${currentTask.repo_url || '(本地仓库)'}`,
+      `目标分支: ${currentTask.branch}`,
+      `冲突分支: ${conflict.branch_name || '(未知)'}`,
+      `工作区: ${conflict.workspace_path || workspacePath.trim() || '(填写主设备本地仓库路径)'}`,
+      `冲突文件: ${conflict.conflict_files.length ? conflict.conflict_files.join(', ') : '(未解析到具体文件)'}`,
+      ``,
+      `请在主设备工作区解决冲突，完成后 commit，并把最终 merge commit SHA 回填到 DevFleet 任务。`,
+      `错误详情: ${conflict.detail}`,
+    ].join('\n');
+    await navigator.clipboard.writeText(prompt);
+    setConflictCopied(true);
+    window.setTimeout(() => setConflictCopied(false), 1500);
   };
 
   const copyMergePrompt = async () => {
@@ -215,7 +277,7 @@ export default function TaskDetail() {
             <h1 className="text-lg font-semibold text-white">{currentTask.title}</h1>
             <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${statusConfig[currentTask.status]?.bg || 'bg-zinc-700/50'} ${statusConfig[currentTask.status]?.text || 'text-zinc-400'} flex items-center gap-1`}>
               {statusConfig[currentTask.status]?.icon}
-              {currentTask.status === 'completed' ? '已完成' : currentTask.status === 'failed' ? '失败' : currentTask.status === 'merged' ? '已合并' : currentTask.status === 'running' ? '运行中' : '待处理'}
+              {taskStatusText[currentTask.status] || '待处理'}
             </span>
           </div>
           {currentTask.description && (
@@ -256,6 +318,40 @@ export default function TaskDetail() {
 
         {!allCompleted && currentTask.status !== 'merged' && (
           <p className="text-xs text-amber-400/80 mt-3">工作设备正在各自分支上改码并 push，全部完成后可在主设备合并。</p>
+        )}
+
+        {currentTask.merge_conflict && (
+          <div className="mt-4 p-4 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <div>
+                <p className="text-sm font-medium text-amber-300 flex items-center gap-2">
+                  <AlertCircle size={14} />
+                  合并冲突
+                </p>
+                <p className="text-xs text-zinc-400 mt-1">
+                  {currentTask.merge_conflict.branch_name || '未知分支'} · {formatTime(currentTask.merge_conflict.detected_at)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={copyConflictPrompt}
+                className="shrink-0 flex items-center gap-2 px-3 py-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-200 rounded-lg text-xs"
+              >
+                {conflictCopied ? <Check size={13} className="text-green-400" /> : <Clipboard size={13} />}
+                复制处理信息
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-1.5 mb-3">
+              {currentTask.merge_conflict.conflict_files.length > 0
+                ? currentTask.merge_conflict.conflict_files.map((file) => (
+                  <span key={file} className="px-2 py-1 bg-zinc-950/70 border border-zinc-800 rounded text-[11px] font-mono text-amber-200">
+                    {file}
+                  </span>
+                ))
+                : <span className="text-[11px] text-zinc-500">未解析到具体冲突文件</span>}
+            </div>
+            <p className="text-xs text-zinc-300 whitespace-pre-wrap">{currentTask.merge_conflict.detail}</p>
+          </div>
         )}
 
         {allCompleted && currentTask.status !== 'merged' && (

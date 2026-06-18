@@ -57,7 +57,8 @@ function avgProgress(task: TaskLike): number {
 }
 
 export function derivePipelineSteps(task: TaskLike): PipelineStep[] {
-  const failed = task.status === 'failed' || anySubFailed(task);
+  const mergeConflict = task.status === 'merge_conflict';
+  const failed = task.status === 'failed' || mergeConflict || anySubFailed(task);
   const progress = avgProgress(task);
 
   const dispatchDone = task.subTasks.length > 0;
@@ -78,6 +79,7 @@ export function derivePipelineSteps(task: TaskLike): PipelineStep[] {
   const waitDone =
     task.status === 'completed' ||
     task.status === 'merged' ||
+    task.status === 'merge_conflict' ||
     task.subTasks.every((st) => st.status === 'completed');
   const mergeDone = task.status === 'merged' || Boolean(task.merge_commit_sha);
 
@@ -98,7 +100,7 @@ export function derivePipelineSteps(task: TaskLike): PipelineStep[] {
           ? 'active'
           : 'pending',
     wait: waitDone ? 'done' : traeDone || progress >= 40 ? 'active' : 'pending',
-    merge: mergeDone ? 'done' : waitDone ? 'active' : 'pending',
+    merge: mergeConflict ? 'failed' : mergeDone ? 'done' : waitDone ? 'active' : 'pending',
   };
 
   if (failed && !mergeDone && waitDone) {

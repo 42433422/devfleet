@@ -29,6 +29,7 @@ interface Device {
   id: string;
   name: string;
   status: 'online' | 'offline' | 'connecting';
+  linkHealth?: { healthy: boolean; reason: string; lastReason?: string };
   devTool: 'codex' | 'trae' | 'cursor' | 'claude_code';
   tools: DeviceTool[];
 }
@@ -36,10 +37,38 @@ interface Device {
 interface Task {
   id: string;
   title: string;
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'merged';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'merge_conflict' | 'merged';
   repo_url: string;
   branch: string;
   subTasks: SubTask[];
+}
+
+interface CollabMessage {
+  id: string;
+  session_id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  sub_task_id?: string;
+}
+
+interface CollabSession {
+  id: string;
+  title: string;
+  status: 'open' | 'paused' | 'closed';
+  device_id: string;
+  device_name?: string;
+  device_status: 'online' | 'offline' | 'connecting';
+  task_id: string;
+  task_status?: Task['status'];
+  repo_url: string;
+  branch: string;
+  turn_count?: number;
+  queued_count?: number;
+  running_count?: number;
+  active_message_id?: string;
+  context_summary?: string;
+  messages: CollabMessage[];
 }
 
 const server = new McpServer({ name: 'devfleet', version: '1.0.0' });
@@ -193,6 +222,69 @@ server.registerTool('devfleet_call_remote_codex', {
   });
 });
 
+server.registerTool('devfleet_start_collab_session', {
+  title: '创建远端 Codex 持续协作会话',
+  description: '在指定工作设备上创建一个持续协作会话。后续 devfleet_send_collab_message 会带会话历史派发给同一台设备 Codex。',
+  inputSchema: {
+    device_id: z.string().min(1).describe('目标工作设备 ID（通常是 Win32，来自 devfleet_list_devices）'),
+    title: z.string().default('远端 Codex 协作').describe('会话标题'),
+    repo_url: z.string().optional().describe('Git 仓库地址；留空则使用工作设备本地目录'),
+    branch: z.string().default('main').describe('基础分支'),
+  },
+}, async (input) => result(await api('/api/collab/sessions', {
+  method: 'POST',
+  body: JSON.stringify(input),
+})));
+
+server.registerTool('devfleet_list_collab_sessions', {
+  title: '列出远端 Codex 协作会话',
+  description: '列出当前用户的远端 Codex 协作会话，包含目标设备在线状态、任务状态、排队/运行轮次和最近上下文摘要。',
+}, async () => result(await api('/api/collab/sessions')));
+
+server.registerTool('devfleet_get_collab_session', {
+  title: '读取远端 Codex 协作会话',
+  description: '读取一个远端 Codex 协作会话的完整消息历史。主设备 AI 重启或断线后应先调用它恢复上下文，再继续发送消息。',
+  inputSchema: {
+    session_id: z.string().min(1).describe('devfleet_start_collab_session 返回的会话 ID'),
+  },
+}, async ({ session_id }) => result(await api(
+  `/api/collab/sessions/${encodeURIComponent(session_id)}`,
+)));
+
+server.registerTool('devfleet_send_collab_message', {
+  title: '向远端 Codex 协作会话发送消息',
+  description: '把一条带上下文的消息发送到远端 Codex 会话。设备离线时消息会排队；设备在线时会作为顺序子任务派发。',
+  inputSchema: {
+    session_id: z.string().min(1).describe('devfleet_start_collab_session 返回的会话 ID'),
+    content: z.string().min(1).describe('要交给远端 Codex 的本轮消息/任务'),
+    wait: z.boolean().default(true).describe('是否等待本轮远端消息完成或失败'),
+    timeout_seconds: z.number().int().min(5).max(3600).default(900).describe('等待本轮消息完成的超时时间'),
+  },
+}, async (input) => {
+  const body = await api<{ session: CollabSession; message: CollabMessage }>('/api/collab/sessions/'
+    + encodeURIComponent(input.session_id)
+    + '/messages', {
+    method: 'POST',
+    body: JSON.stringify({ content: input.content }),
+  });
+  if (!input.wait) return result(body);
+  const session = await waitForCollabMessage(input.session_id, body.message.id, input.timeout_seconds || 900);
+  return result({ session, message_id: body.message.id });
+});
+
+server.registerTool('devfleet_wait_collab_message', {
+  title: '等待远端 Codex 协作消息完成',
+  description: '等待指定会话中的某一轮消息完成或失败。用于 send wait=false 后异步恢复，也用于主设备 AI 断线重连后继续等待远端 Codex。',
+  inputSchema: {
+    session_id: z.string().min(1).describe('协作会话 ID'),
+    message_id: z.string().min(1).describe('devfleet_send_collab_message 返回的消息 ID'),
+    timeout_seconds: z.number().int().min(5).max(3600).default(900).describe('等待本轮消息完成的超时时间'),
+  },
+}, async ({ session_id, message_id, timeout_seconds }) => {
+  const session = await waitForCollabMessage(session_id, message_id, timeout_seconds || 900);
+  return result({ session, message_id });
+});
+
 server.registerTool('devfleet_get_task', {
   title: '查询排比 Para 任务',
   description: '查询任务、各设备子任务、进度、分支和日志。',
@@ -231,6 +323,20 @@ async function waitForTask(taskId: string, timeoutSeconds: number): Promise<Task
     await new Promise((resolve) => setTimeout(resolve, 3000));
   }
   throw new Error(`等待任务超时。最后状态: ${task?.status || 'unknown'}`);
+}
+
+async function waitForCollabMessage(sessionId: string, messageId: string, timeoutSeconds: number): Promise<CollabSession> {
+  const deadline = Date.now() + timeoutSeconds * 1000;
+  let session: CollabSession | null = null;
+  while (Date.now() < deadline) {
+    session = (await api<{ session: CollabSession }>(
+      `/api/collab/sessions/${encodeURIComponent(sessionId)}`,
+    )).session;
+    const message = session.messages.find((item) => item.id === messageId);
+    if (message && ['completed', 'failed'].includes(message.status)) return session;
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+  }
+  throw new Error(`等待远端协作消息超时。最后状态: ${session?.messages.find((item) => item.id === messageId)?.status || 'unknown'}`);
 }
 
 async function ensureRemoteCodexDevice(deviceId: string): Promise<Device> {
@@ -272,8 +378,25 @@ async function mergeTaskBranches(task_id: string, workspace_path: string, push: 
     try {
       await git(workspace_path, ['merge', '--no-edit', `origin/${subTask.branch_name}`]);
     } catch (error) {
+      const status = await git(workspace_path, ['status', '--porcelain']).catch((statusError) =>
+        `无法读取冲突状态: ${statusError instanceof Error ? statusError.message : String(statusError)}`,
+      );
+      const conflicts = parseConflictFiles(status);
       await git(workspace_path, ['merge', '--abort']).catch(() => '');
-      throw error;
+      const detail = error instanceof Error ? error.message : String(error);
+      const conflictText = conflicts.length > 0 ? conflicts.join(', ') : '未能解析冲突文件';
+      await api(`/api/tasks/${encodeURIComponent(task_id)}/merge-conflict`, {
+        method: 'POST',
+        body: JSON.stringify({
+          subtask_id: subTask.id,
+          branch_name: subTask.branch_name,
+          conflict_files: conflicts,
+          detail,
+          source: 'mcp',
+          workspace_path,
+        }),
+      }).catch(() => undefined);
+      throw new Error(`合并 ${subTask.branch_name} 失败，已 abort。冲突文件: ${conflictText}\n${detail}`);
     }
   }
   if (push) await git(workspace_path, ['push', 'origin', task.branch]);
@@ -307,6 +430,19 @@ const normalizeRepo = (value: string) => {
     .replace(/\/$/, '')
     .toLowerCase();
 };
+
+function parseConflictFiles(status: string): string[] {
+  return status
+    .split('\n')
+    .map((line) => line.replace(/\r$/, ''))
+    .filter((line) => line.trim())
+    .filter((line) => {
+      const code = line.slice(0, 2);
+      return code.includes('U') || code === 'AA' || code === 'DD';
+    })
+    .map((line) => line.slice(3).trim())
+    .filter(Boolean);
+}
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

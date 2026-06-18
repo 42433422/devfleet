@@ -1,5 +1,6 @@
 import { useDevicesStore, type DeviceCapabilities, type DeviceStatus, type ToolStatus } from '@/store/devices';
 import { useTasksStore, type LogEntry, type SubTaskStatus, type Task } from '@/store/tasks';
+import { useCollabStore, type CollabMessage, type CollabSession } from '@/store/collab';
 import { getApiBaseUrl } from '@/lib/api';
 import { shouldUseViteDevProxy } from '@/lib/apiBase';
 import { apiBaseToWsBase } from '@/lib/serverAddress';
@@ -11,6 +12,8 @@ type WSMessage =
   | { type: 'task_status'; task_id: string; status: Task['status'] }
   | { type: 'task_merged'; task_id: string; commit_sha: string }
   | { type: 'device_dev_tool'; device_id: string; devTool: ToolStatus['toolName'] }
+  | { type: 'collab_session'; session: CollabSession }
+  | { type: 'collab_message'; session_id: string; message: CollabMessage }
   | { type: 'task_created'; task_id: string } & Partial<Pick<Task, 'title' | 'description' | 'status' | 'subTasks' | 'created_at' | 'repo_url' | 'branch'>>
   | { type: 'pong' };
 
@@ -39,6 +42,22 @@ class WebSocketClient {
   private lastCallbacks: WSCallbacks | undefined;
 
   connect(token: string, host?: string, callbacks?: WSCallbacks) {
+    const tokenChanged = this.lastToken && this.lastToken !== token;
+    if (tokenChanged) {
+      if (this.reconnectTimer !== null) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+      this.stopHeartbeat();
+      if (this.ws) {
+        this.ws.onclose = null;
+        this.ws.close();
+        this.ws = null;
+      }
+      this.isConnecting = false;
+      this.reconnectDelay = MIN_RECONNECT_MS;
+    }
+
     if (this.isConnecting || (this.ws && this.ws.readyState === WebSocket.OPEN)) {
       return;
     }
@@ -83,6 +102,7 @@ class WebSocketClient {
 
         const { updateDeviceStatus, updateToolStatus, updateDeviceDevTool } = useDevicesStore.getState();
         const { updateTaskProgress, updateTaskStatus, appendTaskLog, addTask, tasks } = useTasksStore.getState();
+        const { upsertSession, upsertMessage } = useCollabStore.getState();
 
         switch (data.type) {
           case 'device_status':
@@ -109,6 +129,12 @@ class WebSocketClient {
             break;
           case 'task_merged':
             updateTaskStatus(data.task_id, 'merged');
+            break;
+          case 'collab_session':
+            upsertSession(data.session);
+            break;
+          case 'collab_message':
+            upsertMessage(data.session_id, data.message);
             break;
           case 'task_created':
             if (data.task_id && !tasks.some((t) => t.id === data.task_id)) {

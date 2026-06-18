@@ -196,3 +196,9 @@ body {
     visibility: visible;
   }
 }
+
+@media (max-width: 640px) {
+  .devfleet-corner-stack {
+    display: none;
+  }
+}

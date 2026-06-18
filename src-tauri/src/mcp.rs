@@ -5,7 +5,9 @@ use serde::Serialize;
 use serde_json::{json, Map, Value};
 use tauri::{AppHandle, Manager};
 
-use crate::process_util::resolve_bundled_resource;
+use crate::process_util::{
+    lan_no_proxy_hosts_from_values, merge_no_proxy_entries, resolve_bundled_resource,
+};
 
 const SERVER_NAME: &str = "devfleet";
 
@@ -280,6 +282,7 @@ fn install_codex(options: &McpOptions<'_>, node: &str) -> Result<(), String> {
             .output();
     }
 
+    let no_proxy = mcp_no_proxy_value(options);
     let output = Command::new(&codex)
         .args([
             "mcp",
@@ -289,6 +292,10 @@ fn install_codex(options: &McpOptions<'_>, node: &str) -> Result<(), String> {
             &format!("DEVFLEET_API_URL={}", options.api_url),
             "--env",
             &format!("DEVFLEET_TOKEN={}", options.token),
+            "--env",
+            &format!("NO_PROXY={no_proxy}"),
+            "--env",
+            &format!("no_proxy={no_proxy}"),
             "--",
             node,
             options.mcp_path,
@@ -299,14 +306,22 @@ fn install_codex(options: &McpOptions<'_>, node: &str) -> Result<(), String> {
 }
 
 fn json_server_config(options: &McpOptions<'_>, node: &str) -> Value {
+    let no_proxy = mcp_no_proxy_value(options);
     json!({
         "command": node,
         "args": [options.mcp_path],
         "env": {
             "DEVFLEET_API_URL": options.api_url,
             "DEVFLEET_TOKEN": options.token,
+            "NO_PROXY": no_proxy.clone(),
+            "no_proxy": no_proxy,
         }
     })
+}
+
+fn mcp_no_proxy_value(options: &McpOptions<'_>) -> String {
+    let hosts = lan_no_proxy_hosts_from_values(&[options.api_url]);
+    merge_no_proxy_entries(hosts.iter().map(String::as_str))
 }
 
 fn install_claude(options: &McpOptions<'_>, node: &str) -> Result<(), String> {
@@ -368,7 +383,16 @@ fn config_matches(config: &Value, options: &McpOptions<'_>) -> bool {
         .and_then(|value| value.get("DEVFLEET_TOKEN"))
         .and_then(Value::as_str)
         == Some(options.token);
-    node_ok && path_ok && api_ok && token_ok
+    let expected_no_proxy = mcp_no_proxy_value(options);
+    let no_proxy_ok = env
+        .and_then(|value| value.get("NO_PROXY"))
+        .and_then(Value::as_str)
+        == Some(expected_no_proxy.as_str());
+    let lower_no_proxy_ok = env
+        .and_then(|value| value.get("no_proxy"))
+        .and_then(Value::as_str)
+        == Some(expected_no_proxy.as_str());
+    node_ok && path_ok && api_ok && token_ok && no_proxy_ok && lower_no_proxy_ok
 }
 
 fn merge_json_config(path: &Path, server: &Value) -> Result<(), String> {
@@ -701,7 +725,9 @@ mod tests {
             "args": ["/tmp/devfleet.mjs"],
             "env": {
                 "DEVFLEET_API_URL": "http://localhost:3001/",
-                "DEVFLEET_TOKEN": "secret"
+                "DEVFLEET_TOKEN": "secret",
+                "NO_PROXY": mcp_no_proxy_value(&options),
+                "no_proxy": mcp_no_proxy_value(&options)
             }
         });
         assert!(config_matches(&config, &options));

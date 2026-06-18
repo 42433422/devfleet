@@ -146,6 +146,24 @@ test('账号、设备和任务的 MVP 主流程', async () => {
     assert.equal(afterReport.task.subTasks[0].status, 'running');
     assert.ok(afterReport.task.subTasks[0].logs.some((log) => log.content.includes('Trae Agent 已读取任务')));
 
+    const logOnlyReport = await fetch(`${baseUrl}/api/devices/me/task-report`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${activation.deviceToken}`,
+      },
+      body: JSON.stringify({
+        task_id: created.task.id,
+        subtask_id: created.task.subTasks[0].id,
+        content: '断线后补发的普通执行日志',
+      }),
+    });
+    assert.equal(logOnlyReport.ok, true);
+    const afterLogOnly = await request<{ task: { subTasks: Array<{ progress: number; status: string; logs: Array<{ content: string }> }> } }>(`/api/tasks/${created.task.id}`);
+    assert.equal(afterLogOnly.task.subTasks[0].progress, 80);
+    assert.equal(afterLogOnly.task.subTasks[0].status, 'running');
+    assert.ok(afterLogOnly.task.subTasks[0].logs.some((log) => log.content.includes('断线后补发')));
+
     for (const subTask of created.task.subTasks) {
       await request(`/api/tasks/${created.task.id}/subtasks/${subTask.id}/progress`, {
         method: 'POST',
@@ -156,12 +174,33 @@ test('账号、设备和任务的 MVP 主流程', async () => {
     const completed = await request<{ task: { status: string } }>(`/api/tasks/${created.task.id}`);
     assert.equal(completed.task.status, 'completed');
 
+    const conflict = await request<{
+      task: {
+        status: string;
+        merge_conflict: { branch_name: string; conflict_files: string[]; detail: string } | null;
+      };
+    }>(`/api/tasks/${created.task.id}/merge-conflict`, {
+      method: 'POST',
+      body: JSON.stringify({
+        subtask_id: created.task.subTasks[0].id,
+        branch_name: 'devfleet/trae/sub-1',
+        conflict_files: ['README.md', 'src/app.ts'],
+        detail: 'CONFLICT (content): Merge conflict in README.md',
+        source: 'test',
+        workspace_path: '/tmp/devfleet/repo',
+      }),
+    });
+    assert.equal(conflict.task.status, 'merge_conflict');
+    assert.deepEqual(conflict.task.merge_conflict?.conflict_files, ['README.md', 'src/app.ts']);
+    assert.equal(conflict.task.merge_conflict?.branch_name, 'devfleet/trae/sub-1');
+
     await request(`/api/tasks/${created.task.id}/merge`, {
       method: 'POST',
       body: JSON.stringify({ merge_commit_sha: '0123456789abcdef0123456789abcdef01234567' }),
     });
-    const merged = await request<{ task: { status: string } }>(`/api/tasks/${created.task.id}`);
+    const merged = await request<{ task: { status: string; merge_conflict: unknown } }>(`/api/tasks/${created.task.id}`);
     assert.equal(merged.task.status, 'merged');
+    assert.equal(merged.task.merge_conflict, null);
 
     await request(`/api/tasks/${created.task.id}`, { method: 'DELETE' });
     const tasks = await request<{ tasks: unknown[] }>('/api/tasks');
