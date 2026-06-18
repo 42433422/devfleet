@@ -7,9 +7,11 @@ import {
   disconnectDeviceSocket,
   getDeviceLinkHealth,
   hasDevice,
+  reconcileRemoteCommandTimeout,
+  reconcileRemoteCommandTimeoutsForDevice,
   sendBindingIdentity,
   sendBindingIdentityToUser,
-  sendToDevice,
+  sendRemoteCommandToDevice,
 } from '../websocket/manager.js';
 import { parseCapabilities } from '../lib/capabilities.js';
 import { reconcileTask, dispatchReadySubs, handleSubTaskFailure } from '../lib/dispatch.js';
@@ -89,37 +91,6 @@ function clampRemoteTimeout(value: unknown): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 300;
   return Math.max(MIN_REMOTE_TIMEOUT_SECONDS, Math.min(MAX_REMOTE_TIMEOUT_SECONDS, Math.floor(parsed)));
-}
-
-function dispatchRemoteCommand(command: RemoteCommand): RemoteCommand | undefined {
-  const startedAt = command.started_at || new Date().toISOString();
-  const running = db.remoteCommands.update(command.id, {
-    status: 'running',
-    started_at: startedAt,
-    error: undefined,
-  });
-  if (!running) return undefined;
-  const sent = sendToDevice(command.device_id, {
-    type: 'execute_command',
-    command_id: running.id,
-    title: running.title,
-    shell: running.shell,
-    script: running.script,
-    cwd: running.cwd,
-    timeout_seconds: running.timeout_seconds,
-  });
-  if (!sent) {
-    return db.remoteCommands.update(running.id, {
-      status: 'pending',
-      error: '设备连接已断开，等待重连后补发',
-    });
-  }
-  broadcast(running.user_id, {
-    type: 'remote_command',
-    device_id: running.device_id,
-    command: serializeRemoteCommand(running),
-  });
-  return running;
 }
 
 router.post('/activate', async (req: Request, res: Response): Promise<void> => {
@@ -463,6 +434,7 @@ router.get('/:id/commands', async (req: Request, res: Response): Promise<void> =
     return;
   }
   const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 100));
+  reconcileRemoteCommandTimeoutsForDevice(id);
   const commands = db.remoteCommands.findAllByDeviceId(id, limit)
     .filter((command) => command.user_id === userId)
     .map(serializeRemoteCommand);
@@ -482,7 +454,7 @@ router.get('/:id/commands/:commandId', async (req: Request, res: Response): Prom
     res.status(404).json({ error: '远程命令不存在' });
     return;
   }
-  res.status(200).json({ command: serializeRemoteCommand(command) });
+  res.status(200).json({ command: serializeRemoteCommand(reconcileRemoteCommandTimeout(command)) });
 });
 
 router.post('/:id/commands', async (req: Request, res: Response): Promise<void> => {
@@ -535,7 +507,7 @@ router.post('/:id/commands', async (req: Request, res: Response): Promise<void> 
     level: 'info',
     content: `已下发远程命令：${command.title}`,
   });
-  const dispatched = dispatchRemoteCommand(db.remoteCommands.findById(command.id) || command);
+  const dispatched = sendRemoteCommandToDevice(db.remoteCommands.findById(command.id) || command);
   if (!dispatched) {
     res.status(500).json({ error: '远程命令创建后下发失败' });
     return;

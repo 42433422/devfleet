@@ -908,6 +908,14 @@ export const db = {
       ).all(deviceId) as Record<string, unknown>[];
       return rows.map(rowToRemoteCommand);
     },
+    findRunningByDeviceId(deviceId: string): RemoteCommand[] {
+      const rows = sql().prepare(
+        `SELECT * FROM remote_commands
+         WHERE device_id = ? AND status = 'running'
+         ORDER BY started_at ASC, created_at ASC`,
+      ).all(deviceId) as Record<string, unknown>[];
+      return rows.map(rowToRemoteCommand);
+    },
     findById(id: string): RemoteCommand | undefined {
       const row = sql().prepare('SELECT * FROM remote_commands WHERE id = ?').get(id) as Record<string, unknown> | undefined;
       return row ? rowToRemoteCommand(row) : undefined;

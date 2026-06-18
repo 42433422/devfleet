@@ -166,3 +166,76 @@ test('主设备可以向工作设备下发受控远程命令并接收结果', as
     await rm(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
+
+test('远程命令无设备结果时会按超时回收', async () => {
+  const tempDir = await mkdtemp(path.join(tmpdir(), 'devfleet-remote-command-timeout-'));
+  process.env.DEVFLEET_DB_FILE = path.join(tempDir, 'remote-command-timeout.db');
+  process.env.JWT_SECRET = 'remote-command-timeout-test-secret';
+
+  const { default: app } = await import('../api/app.js');
+  const { closeDatabase } = await import('../api/db/sqlite.js');
+  const { db } = await import('../api/db/store.js');
+  const { resetWebSocketStateForTest } = await import('../api/websocket/manager.js');
+  const server = http.createServer(app);
+  server.listen(0);
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+  let token = '';
+  const request = async <T>(url: string, options: RequestInit = {}) => {
+    const response = await fetch(`${baseUrl}${url}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...options.headers,
+      },
+    });
+    const body = await response.json() as T & { error?: string };
+    assert.equal(response.ok, true, body.error || `${response.status} ${url}`);
+    return body;
+  };
+
+  try {
+    const auth = await request<{ token: string; user: { id: string } }>('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'remote-command-timeout@example.com', password: 'secret123' }),
+    });
+    token = auth.token;
+
+    const binding = await request<{ bindCode: string }>('/api/devices/bind', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Timeout Device' }),
+    });
+    const activation = await request<{ device: { id: string }; deviceToken: string }>('/api/devices/activate', {
+      method: 'POST',
+      body: JSON.stringify({ bindCode: binding.bindCode, deviceName: 'Timeout Device' }),
+    });
+
+    const startedAt = new Date(Date.now() - 10_000).toISOString();
+    const stale = db.remoteCommands.create({
+      user_id: auth.user.id,
+      device_id: activation.device.id,
+      title: 'stale remote command',
+      shell: 'sh',
+      script: 'sleep 999',
+      timeout_seconds: 5,
+      status: 'running',
+      started_at: startedAt,
+      logs: [{ timestamp: startedAt, level: 'info', content: 'sent to old agent' }],
+    });
+
+    const response = await request<{ command: { status: string; error?: string; logs: Array<{ content: string }> } }>(
+      `/api/devices/${activation.device.id}/commands/${stale.id}`,
+    );
+    assert.equal(response.command.status, 'failed');
+    assert.match(response.command.error || '', /timed out after 5s/);
+    assert.ok(response.command.logs.some((log) => /timed out after 5s/.test(log.content)));
+  } finally {
+    resetWebSocketStateForTest();
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    closeDatabase();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await rm(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+});

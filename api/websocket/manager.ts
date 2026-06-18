@@ -42,8 +42,10 @@ interface WSMessage {
 const clients: Set<ClientWS> = new Set();
 const deviceWS = new Map<string, WebSocket>();
 const offlineTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const remoteCommandTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const HEARTBEAT_MS = Number(process.env.DEVFLEET_WS_HEARTBEAT_MS) || 30_000;
 const PONG_TIMEOUT_MS = Number(process.env.DEVFLEET_WS_PONG_TIMEOUT_MS) || 10_000;
+const REMOTE_COMMAND_TIMEOUT_GRACE_MS = Number(process.env.DEVFLEET_REMOTE_COMMAND_TIMEOUT_GRACE_MS) || 5_000;
 const DEVICE_LINK_HEALTHY_MS = Number(process.env.DEVFLEET_DEVICE_LINK_HEALTHY_MS)
   || (HEARTBEAT_MS * 2 + PONG_TIMEOUT_MS + 5_000);
 const DEVICE_LINK_STALE_MS = Number(process.env.DEVFLEET_DEVICE_LINK_STALE_MS) || (DEVICE_LINK_HEALTHY_MS * 2);
@@ -209,7 +211,73 @@ function serializeRemoteCommand(command: RemoteCommand) {
   };
 }
 
-function sendRemoteCommandToDevice(command: RemoteCommand): RemoteCommand | undefined {
+function remoteCommandDeadlineMs(command: RemoteCommand) {
+  const startedMs = Date.parse(command.started_at || command.updated_at || command.created_at);
+  const baseMs = Number.isFinite(startedMs) ? startedMs : Date.now();
+  return baseMs + command.timeout_seconds * 1000 + REMOTE_COMMAND_TIMEOUT_GRACE_MS;
+}
+
+function clearRemoteCommandTimer(commandId: string) {
+  const timer = remoteCommandTimers.get(commandId);
+  if (timer) {
+    clearTimeout(timer);
+    remoteCommandTimers.delete(commandId);
+  }
+}
+
+function remoteCommandTimeoutError(command: RemoteCommand) {
+  return `Remote command timed out after ${command.timeout_seconds}s without device result`;
+}
+
+export function reconcileRemoteCommandTimeout(command: RemoteCommand): RemoteCommand {
+  if (command.status !== 'running') {
+    clearRemoteCommandTimer(command.id);
+    return command;
+  }
+  if (Date.now() < remoteCommandDeadlineMs(command)) return command;
+
+  clearRemoteCommandTimer(command.id);
+  const completedAt = new Date().toISOString();
+  const error = remoteCommandTimeoutError(command);
+  const updated = db.remoteCommands.update(command.id, {
+    status: 'failed',
+    error,
+    completed_at: completedAt,
+    logs: [
+      ...command.logs,
+      { timestamp: completedAt, level: 'error', content: error },
+    ].slice(-500),
+  });
+  if (updated) {
+    broadcast(updated.user_id, {
+      type: 'remote_command_result',
+      device_id: updated.device_id,
+      command_id: updated.id,
+      command: serializeRemoteCommand(updated),
+    });
+    return updated;
+  }
+  return command;
+}
+
+function scheduleRemoteCommandTimeout(command: RemoteCommand) {
+  clearRemoteCommandTimer(command.id);
+  if (command.status !== 'running') return;
+  const delay = Math.max(0, remoteCommandDeadlineMs(command) - Date.now());
+  remoteCommandTimers.set(command.id, setTimeout(() => {
+    const latest = db.remoteCommands.findById(command.id);
+    if (latest) reconcileRemoteCommandTimeout(latest);
+  }, delay));
+}
+
+export function reconcileRemoteCommandTimeoutsForDevice(deviceId: string) {
+  for (const command of db.remoteCommands.findRunningByDeviceId(deviceId)) {
+    const updated = reconcileRemoteCommandTimeout(command);
+    if (updated.status === 'running') scheduleRemoteCommandTimeout(updated);
+  }
+}
+
+export function sendRemoteCommandToDevice(command: RemoteCommand): RemoteCommand | undefined {
   const startedAt = command.started_at || new Date().toISOString();
   const running = db.remoteCommands.update(command.id, {
     status: 'running',
@@ -217,6 +285,7 @@ function sendRemoteCommandToDevice(command: RemoteCommand): RemoteCommand | unde
     error: undefined,
   });
   if (!running) return undefined;
+  scheduleRemoteCommandTimeout(running);
   const sent = sendToDevice(running.device_id, {
     type: 'execute_command',
     command_id: running.id,
@@ -227,6 +296,7 @@ function sendRemoteCommandToDevice(command: RemoteCommand): RemoteCommand | unde
     timeout_seconds: running.timeout_seconds,
   });
   if (!sent) {
+    clearRemoteCommandTimer(running.id);
     return db.remoteCommands.update(running.id, {
       status: 'pending',
       error: '设备连接已断开，等待重连后补发',
@@ -241,6 +311,7 @@ function sendRemoteCommandToDevice(command: RemoteCommand): RemoteCommand | unde
 }
 
 function dispatchPendingRemoteCommandsForDevice(deviceId: string) {
+  reconcileRemoteCommandTimeoutsForDevice(deviceId);
   for (const command of db.remoteCommands.findPendingByDeviceId(deviceId)) {
     sendRemoteCommandToDevice(command);
   }
@@ -422,6 +493,7 @@ export function attachWebSocket(wss: WSServer) {
             markDeviceLinkHealthy(device.id, '远程命令结果上报');
             const command = db.remoteCommands.findById(msg.command_id);
             if (!command || command.user_id !== device.user_id || command.device_id !== device.id) return;
+            clearRemoteCommandTimer(command.id);
             const exitCode = typeof msg.exit_code === 'number' ? msg.exit_code : undefined;
             const status = msg.status === 'completed' || (msg.status !== 'failed' && exitCode === 0)
               ? 'completed'
@@ -609,5 +681,9 @@ export function resetWebSocketStateForTest() {
     clearTimeout(timer);
   }
   offlineTimers.clear();
+  for (const timer of remoteCommandTimers.values()) {
+    clearTimeout(timer);
+  }
+  remoteCommandTimers.clear();
   deviceLinks.clear();
 }
