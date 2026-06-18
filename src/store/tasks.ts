@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { api } from '@/lib/api';
 import type { ToolName } from './devices';
 
-export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'merged';
+export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'merge_conflict' | 'merged';
 export type SubTaskStatus = 'pending' | 'running' | 'completed' | 'failed';
 export type LogLevel = 'info' | 'warn' | 'error' | 'debug';
 
@@ -39,6 +39,17 @@ export interface SubTask {
   completed_at?: string;
 }
 
+export interface MergeConflictRecord {
+  status: 'open';
+  detected_at: string;
+  subtask_id?: string;
+  branch_name?: string;
+  conflict_files: string[];
+  detail: string;
+  source?: string;
+  workspace_path?: string;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -48,6 +59,7 @@ export interface Task {
   created_at: string;
   completed_at?: string;
   merge_commit_sha?: string;
+  merge_conflict?: MergeConflictRecord | null;
   repo_url: string;
   branch: string;
 }

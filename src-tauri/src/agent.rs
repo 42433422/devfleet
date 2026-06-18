@@ -1,4 +1,5 @@
 use crate::computer_use;
+use crate::process_util::merge_no_proxy_entries;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -14,7 +15,7 @@ use std::{
 };
 use tauri::{AppHandle, Manager, State};
 use tokio::{
-    io::AsyncReadExt,
+    io::{AsyncBufReadExt, BufReader},
     net::TcpStream,
     process::{ChildStderr, ChildStdout, Command},
     sync::mpsc,
@@ -132,10 +133,31 @@ struct AgentInner {
 struct PendingTaskReport {
     task_id: String,
     subtask_id: String,
-    progress: u8,
-    status: String,
+    progress: Option<u8>,
+    status: Option<String>,
     content: String,
     level: String,
+}
+
+#[derive(Clone)]
+struct TaskEventSink {
+    tx: mpsc::UnboundedSender<Value>,
+    inner: Arc<AgentInner>,
+}
+
+impl TaskEventSink {
+    fn new(tx: mpsc::UnboundedSender<Value>, inner: Arc<AgentInner>) -> Self {
+        Self { tx, inner }
+    }
+
+    fn send_or_queue(&self, payload: Value, fallback: PendingTaskReport) {
+        if self.tx.send(payload).is_ok() {
+            return;
+        }
+        if let Ok(mut queue) = self.inner.pending_task_reports.lock() {
+            queue.push_back(fallback);
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -400,7 +422,11 @@ impl AgentState {
             return Ok(());
         }
         let body = response.text().await.unwrap_or_default();
-        Err(format!("上报任务状态失败: HTTP {} {}", status, truncate(&body, 500)))
+        Err(format!(
+            "上报任务状态失败: HTTP {} {}",
+            status,
+            truncate(&body, 500)
+        ))
     }
 
     async fn flush_pending_task_reports(&self, config: &AgentConfig) {
@@ -442,8 +468,8 @@ impl AgentState {
         let report = PendingTaskReport {
             task_id: task.task_id.clone(),
             subtask_id: task.subtask_id.clone(),
-            progress,
-            status: status.to_string(),
+            progress: Some(progress),
+            status: Some(status.to_string()),
             content,
             level: level.to_string(),
         };
@@ -543,7 +569,7 @@ impl AgentState {
                       let task: ExecuteTask = serde_json::from_value(value).map_err(|error| error.to_string())?;
                       let state = self.clone();
                       let task_config = config.clone();
-                      let task_tx = outbound_tx.clone();
+                      let task_tx = TaskEventSink::new(outbound_tx.clone(), state.inner.clone());
                       tauri::async_runtime::spawn(async move {
                         state.execute_task(task_config, task, task_tx).await;
                       });
@@ -559,12 +585,7 @@ impl AgentState {
         }
     }
 
-    async fn execute_task(
-        &self,
-        config: AgentConfig,
-        task: ExecuteTask,
-        tx: mpsc::UnboundedSender<Value>,
-    ) {
+    async fn execute_task(&self, config: AgentConfig, task: ExecuteTask, tx: TaskEventSink) {
         let claimed = {
             let mut guard = match self.inner.running_task.lock() {
                 Ok(guard) => guard,
@@ -621,7 +642,7 @@ impl AgentState {
         &self,
         config: &AgentConfig,
         task: &ExecuteTask,
-        tx: &mpsc::UnboundedSender<Value>,
+        tx: &TaskEventSink,
     ) -> Result<String, String> {
         validate_task(task)?;
         if !task.repo_url.trim().is_empty() {
@@ -944,7 +965,8 @@ impl AgentState {
                 return Err("自动执行器没有产生代码变更".to_string());
             }
             GitCompletionMode::ReuseExistingCommit => {
-                let sha = final_head.ok_or_else(|| "自动执行器已提交，但无法读取最终 HEAD".to_string())?;
+                let sha = final_head
+                    .ok_or_else(|| "自动执行器已提交，但无法读取最终 HEAD".to_string())?;
                 send_log(
                     tx,
                     task,
@@ -1057,7 +1079,7 @@ impl AgentState {
         &self,
         config: &AgentConfig,
         task: &ExecuteTask,
-        tx: &mpsc::UnboundedSender<Value>,
+        tx: &TaskEventSink,
     ) -> Result<PathBuf, String> {
         let repo_url = task.repo_url.trim();
         let use_local_only = repo_url.is_empty();
@@ -1130,7 +1152,7 @@ impl AgentState {
         &self,
         dev_tool: &str,
         task_dir: &Path,
-        tx: &mpsc::UnboundedSender<Value>,
+        tx: &TaskEventSink,
         task: &ExecuteTask,
     ) {
         if dev_tool == "codex" {
@@ -2042,7 +2064,7 @@ async fn checkout_work_branch(
 
 async fn establish_trae_git_baseline(
     task_dir: &Path,
-    tx: &mpsc::UnboundedSender<Value>,
+    tx: &TaskEventSink,
     task: &ExecuteTask,
 ) -> Result<(), String> {
     run_command(
@@ -2164,7 +2186,7 @@ async fn resolve_merge_ref(cwd: &Path, branch_name: &str) -> Result<String, Stri
 async fn push_branch_if_remote(
     task_dir: &Path,
     branch: &str,
-    tx: &mpsc::UnboundedSender<Value>,
+    tx: &TaskEventSink,
     task: &ExecuteTask,
 ) -> Result<(), String> {
     match run_command(Some(task_dir), "git", &["remote", "get-url", "origin"]).await {
@@ -2326,7 +2348,7 @@ async fn run_trae_agent_cli(cwd: &Path, prompt: &str) -> Result<(String, String)
 async fn execute_trae_computer_use_fallback(
     task_dir: &Path,
     trae_prompt: &str,
-    tx: &mpsc::UnboundedSender<Value>,
+    tx: &TaskEventSink,
     task: &ExecuteTask,
 ) -> bool {
     send_log(
@@ -2540,6 +2562,14 @@ fn command_timeout_ms_env(name: &str, default_ms: u64) -> u64 {
         .unwrap_or(default_ms)
 }
 
+fn command_live_log_line_limit() -> u64 {
+    std::env::var("DEVFLEET_COMMAND_LIVE_LOG_LINES")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(120)
+}
+
 fn command_timeouts(explicit: Option<Duration>) -> (Duration, Duration) {
     let soft_ms = explicit
         .map(|value| value.as_millis() as u64)
@@ -2618,34 +2648,13 @@ fn no_proxy_hosts_from_args(args: &[&str]) -> Vec<String> {
 }
 
 fn append_no_proxy_env(command: &mut Command, hosts: &[String]) {
-    if hosts.is_empty() {
-        return;
-    }
-    let mut entries: Vec<String> = std::env::var("NO_PROXY")
-        .or_else(|_| std::env::var("no_proxy"))
-        .unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .filter(|entry| !entry.is_empty())
-        .map(str::to_string)
-        .collect();
-    for fixed in ["localhost", "127.0.0.1", "::1", ".local"] {
-        if !entries.iter().any(|entry| entry == fixed) {
-            entries.push(fixed.to_string());
-        }
-    }
-    for host in hosts {
-        if !entries.iter().any(|entry| entry == host) {
-            entries.push(host.clone());
-        }
-    }
-    let value = entries.join(",");
+    let value = merge_no_proxy_entries(hosts.iter().map(String::as_str));
     command.env("NO_PROXY", &value).env("no_proxy", value);
 }
 
 async fn run_logged_command(
     task: &ExecuteTask,
-    tx: &mpsc::UnboundedSender<Value>,
+    tx: &TaskEventSink,
     cwd: Option<&Path>,
     stage: &str,
     program: &str,
@@ -2660,7 +2669,18 @@ async fn run_logged_command(
         "info",
     );
     let started_at = std::time::Instant::now();
-    let output = run_command_timed(cwd, program, args, timeout).await;
+    let output = run_command_timed_observed(
+        cwd,
+        program,
+        args,
+        timeout,
+        Some(CommandOutputObserver::new(
+            task.clone(),
+            tx.clone(),
+            stage.to_string(),
+        )),
+    )
+    .await;
     let elapsed = started_at.elapsed().as_secs_f64();
 
     match &output {
@@ -2697,6 +2717,69 @@ async fn run_logged_command(
     }
 
     output
+}
+
+#[derive(Clone)]
+struct CommandOutputObserver {
+    task: ExecuteTask,
+    tx: TaskEventSink,
+    stage: String,
+    remaining_lines: Arc<AtomicU64>,
+    truncated_notified: Arc<AtomicBool>,
+}
+
+impl CommandOutputObserver {
+    fn new(task: ExecuteTask, tx: TaskEventSink, stage: String) -> Self {
+        Self {
+            task,
+            tx,
+            stage,
+            remaining_lines: Arc::new(AtomicU64::new(command_live_log_line_limit())),
+            truncated_notified: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn emit(&self, stream: &str, line: &str) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        let can_emit = self
+            .remaining_lines
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_sub(1)
+            })
+            .is_ok();
+        if can_emit {
+            let label = if stream == "stderr" {
+                "错误输出"
+            } else {
+                "输出"
+            };
+            send_log(
+                &self.tx,
+                &self.task,
+                &format!(
+                    "[pipeline:{}] {label}: {}",
+                    self.stage,
+                    truncate(trimmed, 1200)
+                ),
+                if stream == "stderr" { "warn" } else { "info" },
+            );
+            return;
+        }
+        if !self.truncated_notified.swap(true, Ordering::Relaxed) {
+            send_log(
+                &self.tx,
+                &self.task,
+                &format!(
+                    "[pipeline:{}] 实时输出过多，后续输出仅保留在最终摘要中",
+                    self.stage
+                ),
+                "warn",
+            );
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -2738,16 +2821,56 @@ fn kill_process_tree(pid: u32, hard: bool) -> bool {
     }
 }
 
-async fn collect_stream_output(mut stream: ChildStdout) -> String {
-    let mut buffer = Vec::new();
-    let _ = stream.read_to_end(&mut buffer).await;
-    String::from_utf8_lossy(&buffer).to_string()
+async fn collect_stream_output(
+    stream: ChildStdout,
+    observer: Option<CommandOutputObserver>,
+) -> String {
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    let mut output = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line).await {
+            Ok(0) => break,
+            Ok(_) => {
+                if let Some(observer) = &observer {
+                    observer.emit("stdout", &line);
+                }
+                output.push_str(&line);
+            }
+            Err(error) => {
+                output.push_str(&format!("\n[devfleet:stdout-read-error] {error}"));
+                break;
+            }
+        }
+    }
+    output
 }
 
-async fn collect_stream_output_err(mut stream: ChildStderr) -> String {
-    let mut buffer = Vec::new();
-    let _ = stream.read_to_end(&mut buffer).await;
-    String::from_utf8_lossy(&buffer).to_string()
+async fn collect_stream_output_err(
+    stream: ChildStderr,
+    observer: Option<CommandOutputObserver>,
+) -> String {
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    let mut output = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line).await {
+            Ok(0) => break,
+            Ok(_) => {
+                if let Some(observer) = &observer {
+                    observer.emit("stderr", &line);
+                }
+                output.push_str(&line);
+            }
+            Err(error) => {
+                output.push_str(&format!("\n[devfleet:stderr-read-error] {error}"));
+                break;
+            }
+        }
+    }
+    output
 }
 
 async fn run_cursor_agent(cwd: &Path, prompt: &str) -> Result<String, String> {
@@ -2870,6 +2993,16 @@ async fn run_command_timed(
     args: &[&str],
     timeout: Option<Duration>,
 ) -> Result<String, String> {
+    run_command_timed_observed(cwd, program, args, timeout, None).await
+}
+
+async fn run_command_timed_observed(
+    cwd: Option<&Path>,
+    program: &str,
+    args: &[&str],
+    timeout: Option<Duration>,
+    observer: Option<CommandOutputObserver>,
+) -> Result<String, String> {
     let (soft_timeout, hard_timeout) = command_timeouts(timeout);
     let command_line = format_command(program, args);
     let mut command = Command::new(program);
@@ -2903,14 +3036,14 @@ async fn run_command_timed(
         return Err(format!("执行 {command_line} 失败: 获取进程 ID 失败"));
     }
 
-    let stdout_handle = child
-        .stdout
-        .take()
-        .map(|stream| tokio::spawn(collect_stream_output(stream)));
-    let stderr_handle = child
-        .stderr
-        .take()
-        .map(|stream| tokio::spawn(collect_stream_output_err(stream)));
+    let stdout_handle = child.stdout.take().map(|stream| {
+        let observer = observer.clone();
+        tokio::spawn(collect_stream_output(stream, observer))
+    });
+    let stderr_handle = child.stderr.take().map(|stream| {
+        let observer = observer.clone();
+        tokio::spawn(collect_stream_output_err(stream, observer))
+    });
 
     let status = match time::timeout(soft_timeout, child.wait()).await {
         Ok(result) => result.map_err(|error| format!("执行 {command_line} 失败: {error}"))?,
@@ -3038,8 +3171,19 @@ pub async fn agent_merge_task(
         match run_command(Some(cwd), "git", &["merge", "--no-edit", &merge_ref]).await {
             Ok(_) => {}
             Err(error) => {
+                let status = run_command(Some(cwd), "git", &["status", "--porcelain"])
+                    .await
+                    .unwrap_or_else(|status_error| format!("无法读取冲突状态: {status_error}"));
+                let conflicts = parse_git_conflict_files(&status);
                 let _ = run_command(Some(cwd), "git", &["merge", "--abort"]).await;
-                return Err(format!("合并 {merge_ref} 失败: {error}"));
+                let conflict_text = if conflicts.is_empty() {
+                    "未能解析冲突文件".to_string()
+                } else {
+                    conflicts.join(", ")
+                };
+                return Err(format!(
+                    "合并 {merge_ref} 失败，已 abort。冲突文件: {conflict_text}\n{error}"
+                ));
             }
         }
     }
@@ -3059,6 +3203,27 @@ pub async fn agent_merge_task(
         merged_branches: subtask_branches,
         pushed: push,
     })
+}
+
+fn parse_git_conflict_files(status: &str) -> Vec<String> {
+    status
+        .lines()
+        .filter_map(|line| {
+            if line.len() < 4 {
+                return None;
+            }
+            let code = &line[..2];
+            if !(code.contains('U') || code == "AA" || code == "DD") {
+                return None;
+            }
+            let path = line[3..].trim();
+            if path.is_empty() {
+                return None;
+            }
+            let final_path = path.rsplit(" -> ").next().unwrap_or(path).trim();
+            Some(final_path.to_string())
+        })
+        .collect()
 }
 
 fn build_trae_project_mcp_json(api_base_url: &str, device_token: &str) -> String {
@@ -3123,17 +3288,46 @@ fn truncate(value: &str, max: usize) -> String {
     value.chars().take(max).collect()
 }
 
-fn send_log(tx: &mpsc::UnboundedSender<Value>, task: &ExecuteTask, content: &str, level: &str) {
-    let _ = tx.send(json!({ "type": "task_log", "task_id": task.task_id, "subtask_id": task.subtask_id, "content": content, "level": level }));
+fn send_log(tx: &TaskEventSink, task: &ExecuteTask, content: &str, level: &str) {
+    tx.send_or_queue(
+        json!({
+            "type": "task_log",
+            "task_id": task.task_id,
+            "subtask_id": task.subtask_id,
+            "content": content,
+            "level": level,
+        }),
+        PendingTaskReport {
+            task_id: task.task_id.clone(),
+            subtask_id: task.subtask_id.clone(),
+            progress: None,
+            status: None,
+            content: content.to_string(),
+            level: level.to_string(),
+        },
+    );
 }
 
-fn send_progress(
-    tx: &mpsc::UnboundedSender<Value>,
-    task: &ExecuteTask,
-    progress: u8,
-    status: &str,
-) {
-    let _ = tx.send(json!({ "type": "task_progress", "task_id": task.task_id, "subtask_id": task.subtask_id, "progress": progress, "status": status }));
+fn send_progress(tx: &TaskEventSink, task: &ExecuteTask, progress: u8, status: &str) {
+    let content = format!("设备进度补报: {progress}% ({status})");
+    tx.send_or_queue(
+        json!({
+            "type": "task_progress",
+            "task_id": task.task_id,
+            "subtask_id": task.subtask_id,
+            "progress": progress,
+            "status": status,
+            "content": content,
+        }),
+        PendingTaskReport {
+            task_id: task.task_id.clone(),
+            subtask_id: task.subtask_id.clone(),
+            progress: Some(progress),
+            status: Some(status.to_string()),
+            content,
+            level: if status == "failed" { "error" } else { "info" }.to_string(),
+        },
+    );
 }
 
 #[cfg(test)]
@@ -3151,6 +3345,22 @@ mod tests {
             work_branch: "devfleet/trae/sub-1".to_string(),
             tool: "trae".to_string(),
         }
+    }
+
+    fn test_inner() -> Arc<AgentInner> {
+        Arc::new(AgentInner {
+            config_path: PathBuf::from("agent-test.json"),
+            config: Mutex::new(None),
+            connected: Mutex::new(false),
+            tools: Mutex::new(Vec::new()),
+            running_task: Mutex::new(None),
+            running_dev_tool: Mutex::new(None),
+            last_error: Mutex::new(None),
+            pending_task_reports: Mutex::new(VecDeque::new()),
+            generation: AtomicU64::new(0),
+            loop_running: AtomicBool::new(false),
+            paused: AtomicBool::new(false),
+        })
     }
 
     #[test]
@@ -3224,6 +3434,86 @@ mod tests {
             }
         };
         assert!(third_claim);
+    }
+
+    #[test]
+    fn task_event_sink_queues_log_when_websocket_channel_is_closed() {
+        let inner = test_inner();
+        let (tx, rx) = mpsc::unbounded_channel::<Value>();
+        drop(rx);
+        let sink = TaskEventSink::new(tx, inner.clone());
+        let task = task("https://example.com/repo.git", "main");
+
+        send_log(&sink, &task, "Codex 已开始执行", "info");
+
+        let queue = inner.pending_task_reports.lock().unwrap();
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].task_id, "task-1");
+        assert_eq!(queue[0].subtask_id, "sub-1");
+        assert_eq!(queue[0].progress, None);
+        assert_eq!(queue[0].status, None);
+        assert_eq!(queue[0].content, "Codex 已开始执行");
+        assert_eq!(queue[0].level, "info");
+    }
+
+    #[test]
+    fn task_event_sink_queues_progress_when_websocket_channel_is_closed() {
+        let inner = test_inner();
+        let (tx, rx) = mpsc::unbounded_channel::<Value>();
+        drop(rx);
+        let sink = TaskEventSink::new(tx, inner.clone());
+        let task = task("https://example.com/repo.git", "main");
+
+        send_progress(&sink, &task, 40, "running");
+
+        let queue = inner.pending_task_reports.lock().unwrap();
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].progress, Some(40));
+        assert_eq!(queue[0].status.as_deref(), Some("running"));
+        assert!(queue[0].content.contains("40%"));
+        assert_eq!(queue[0].level, "info");
+    }
+
+    #[test]
+    fn command_output_observer_emits_realtime_task_log() {
+        let inner = test_inner();
+        let (tx, mut rx) = mpsc::unbounded_channel::<Value>();
+        let sink = TaskEventSink::new(tx, inner);
+        let observer = CommandOutputObserver::new(
+            task("https://example.com/repo.git", "main"),
+            sink,
+            "codex".to_string(),
+        );
+
+        observer.emit("stdout", "live line\n");
+        let payload = rx.try_recv().expect("stdout log payload");
+        assert_eq!(payload["type"], "task_log");
+        assert_eq!(payload["task_id"], "task-1");
+        assert_eq!(payload["subtask_id"], "sub-1");
+        assert_eq!(payload["level"], "info");
+        assert!(payload["content"]
+            .as_str()
+            .unwrap()
+            .contains("[pipeline:codex] 输出: live line"));
+
+        observer.emit("stderr", "warning line\n");
+        let payload = rx.try_recv().expect("stderr log payload");
+        assert_eq!(payload["level"], "warn");
+        assert!(payload["content"]
+            .as_str()
+            .unwrap()
+            .contains("[pipeline:codex] 错误输出: warning line"));
+    }
+
+    #[test]
+    fn parse_git_conflict_files_extracts_unmerged_paths() {
+        let files = parse_git_conflict_files(
+            "UU README.md\nAA src/app.ts\n M clean.txt\nR  old -> new.txt\n",
+        );
+        assert_eq!(
+            files,
+            vec!["README.md".to_string(), "src/app.ts".to_string()]
+        );
     }
 
     #[test]

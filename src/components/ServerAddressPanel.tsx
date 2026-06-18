@@ -97,12 +97,13 @@ export default function ServerAddressPanel({ compact = false, showTunnelInput = 
     }
     return resolveShareableApiUrl(lanIp);
   }, [builtin, lanIp, tunnelUrl]);
+  const tunnelEnabled = Boolean(builtin?.active || builtin?.desired);
 
   const toggleBuiltin = async () => {
     setBuiltinBusy(true);
     setBuiltinError('');
     try {
-      if (builtin?.active) {
+      if (tunnelEnabled) {
         syncBuiltinUrl(await tunnelApi.stop());
         setTunnelUrl(getPublicApiUrl());
       } else {
@@ -141,6 +142,8 @@ export default function ServerAddressPanel({ compact = false, showTunnelInput = 
 
   const shareHint = builtin?.active
     ? `内置穿透已开启（${builtin.provider === 'cloudflared' ? 'Cloudflare' : 'Localtunnel'}），可直接复制给其他设备`
+    : builtin?.desired
+      ? '公网通道暂不可用，服务端正在退避重连'
     : shareable.kind === 'tunnel'
       ? '已配置内网穿透 / 公网地址，其他设备优先使用此地址'
       : shareable.kind === 'lan'
@@ -214,12 +217,14 @@ export default function ServerAddressPanel({ compact = false, showTunnelInput = 
               disabled={builtinBusy || serverOnline === false}
               onClick={toggleBuiltin}
               className={`shrink-0 px-3 py-2 rounded-lg text-xs font-medium disabled:opacity-50 ${
-                builtin?.active
+                tunnelEnabled
                   ? 'bg-red-500/15 text-red-300 hover:bg-red-500/25'
                   : 'bg-brand text-black hover:bg-brand/90'
               }`}
             >
-              {builtinBusy ? '正在开启...' : builtin?.active ? '关闭' : '开启'}
+              {builtinBusy
+                ? tunnelEnabled ? '正在停止...' : '正在开启...'
+                : builtin?.active ? '关闭' : builtin?.desired ? '停止重连' : '开启'}
             </button>
           </div>
           {serverOnline === false && (
@@ -235,6 +240,21 @@ export default function ServerAddressPanel({ compact = false, showTunnelInput = 
           )}
           {builtin?.active && builtin.url && (
             <p className="font-mono text-xs text-brand break-all">{builtin.url}</p>
+          )}
+          {builtin?.desired && !builtin.active && (
+            <p className="text-[11px] text-amber-400 mt-2 flex items-center gap-1.5">
+              {builtin.restarting && <Loader2 size={12} className="animate-spin shrink-0" />}
+              链路不可用，正在自动重连
+              {builtin.nextRetryAt ? ` · 下次 ${formatClock(builtin.nextRetryAt)}` : ''}
+            </p>
+          )}
+          {builtin && (builtin.active || builtin.desired || builtin.restartCount > 0 || builtin.lastCheckedAt) && (
+            <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] text-zinc-500">
+              <span>重启 {builtin.restartCount} 次</span>
+              <span>失败 {builtin.failureCount} 次</span>
+              <span>检查 {formatClock(builtin.lastCheckedAt)}</span>
+              <span>健康 {formatClock(builtin.lastHealthyAt)}</span>
+            </div>
           )}
           {builtinError && <p className="text-[11px] text-red-400 mt-2">{builtinError}</p>}
           {!builtin?.active && builtin?.error && (
@@ -292,6 +312,17 @@ export default function ServerAddressPanel({ compact = false, showTunnelInput = 
       )}
     </div>
   );
+}
+
+function formatClock(value: string | null): string {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
 }
 
 function AddressRow({

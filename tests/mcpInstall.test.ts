@@ -23,6 +23,9 @@ test('DevFleet stdio 配置包含 API 地址与令牌', () => {
   assert.deepEqual(cfg.args, [sample.mcpPath]);
   assert.equal(cfg.env.DEVFLEET_API_URL, 'http://localhost:3001');
   assert.equal(cfg.env.DEVFLEET_TOKEN, 'test-token');
+  assert.match(cfg.env.NO_PROXY, /192\.168\.0\.0\/16/);
+  assert.match(cfg.env.NO_PROXY, /localhost/);
+  assert.equal(cfg.env.no_proxy, cfg.env.NO_PROXY);
 });
 
 test('Trae / Cursor 共用 mcpServers JSON 格式', () => {
@@ -76,4 +79,6 @@ test('Codex MCP 命令包含环境变量', () => {
   assert.match(cmd, /^codex mcp add devfleet/);
   assert.match(cmd, /DEVFLEET_API_URL=/);
   assert.match(cmd, /DEVFLEET_TOKEN="test-token"/);
+  assert.match(cmd, /NO_PROXY=/);
+  assert.match(cmd, /no_proxy=/);
 });

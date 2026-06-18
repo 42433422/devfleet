@@ -10,11 +10,13 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
 use crate::process_util::{
-    configure_embedded_server_command, resolve_bundled_node, resolve_bundled_resource,
-    resolve_node_executable,
+    configure_embedded_server_command, merge_no_proxy_entries, resolve_bundled_node,
+    resolve_bundled_resource, resolve_node_executable,
 };
 
 const EMBEDDED_API_PORT: u16 = 3001;
+#[cfg(not(debug_assertions))]
+const EMBEDDED_SERVER_CACHE_DIR: &str = "server";
 
 pub struct EmbeddedServer(pub Mutex<Option<Child>>);
 
@@ -518,6 +520,126 @@ fn validate_embedded_bundle(server_dir: &Path) -> Result<(), String> {
             return Err(format!("安装包缺少 {}", path.display()));
         }
     }
+    let addon = server_dir.join("node_modules/better-sqlite3/build/Release/better_sqlite3.node");
+    if !addon.is_file() {
+        return Err(format!("安装包缺少 {}", addon.display()));
+    }
+    Ok(())
+}
+
+#[cfg(not(debug_assertions))]
+fn server_bundle_cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    Ok(data_dir.join(EMBEDDED_SERVER_CACHE_DIR))
+}
+
+#[cfg(not(debug_assertions))]
+fn copy_file(path: &Path, target: &Path) -> Result<(), String> {
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    std::fs::copy(path, target)
+        .map_err(|error| {
+            format!(
+                "复制 {} 到 {} 失败：{error}",
+                path.display(),
+                target.display()
+            )
+        })
+        .map(|_| ())
+}
+
+#[cfg(not(debug_assertions))]
+fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), String> {
+    if source.is_file() {
+        return copy_file(source, target);
+    }
+    std::fs::create_dir_all(target).map_err(|error| error.to_string())?;
+    for entry in std::fs::read_dir(source).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        if source_path.is_dir() {
+            copy_dir_recursive(&source_path, &target_path)?;
+        } else {
+            copy_file(&source_path, &target_path)?;
+        }
+    }
+    Ok(())
+}
+
+fn prepare_embedded_server_bundle(
+    _app: &AppHandle,
+    packaged_script: &Path,
+    _force: bool,
+) -> Result<PathBuf, String> {
+    #[cfg(debug_assertions)]
+    {
+        return Ok(packaged_script.to_path_buf());
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        let source_dir = packaged_script.parent().ok_or("无效 server 目录")?;
+        let cache_dir = server_bundle_cache_dir(_app)?;
+
+        if _force || !cache_dir.exists() {
+            log::warn!(
+                "[DevFleet] 重建本地服务副本：{} -> {}",
+                source_dir.display(),
+                cache_dir.display()
+            );
+            let _ = std::fs::remove_dir_all(&cache_dir);
+            copy_dir_recursive(source_dir, &cache_dir)?;
+        }
+
+        if let Err(error) = validate_embedded_bundle(&cache_dir) {
+            log::warn!(
+                "[DevFleet] 本地服务副本不完整（{}），将自动重建: {error}",
+                cache_dir.display()
+            );
+            let _ = std::fs::remove_dir_all(&cache_dir);
+            copy_dir_recursive(source_dir, &cache_dir)?;
+            validate_embedded_bundle(&cache_dir)?;
+        }
+
+        let script = cache_dir.join("devfleet-server.cjs");
+        if !script.is_file() {
+            return Err(format!("服务副本缺少 {}", script.display()));
+        }
+        Ok(script)
+    }
+}
+
+fn probe_server_runtime(node: &str, server_dir: &Path) -> Result<(), String> {
+    let output = StdCommand::new(node)
+        .current_dir(server_dir)
+        .args([
+            "-e",
+            "require('better-sqlite3'); console.log('devfleet-better-sqlite3-ok')",
+        ])
+        .env_clear()
+        .env(
+            "NODE_PATH",
+            server_dir
+                .join("node_modules")
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .output()
+        .map_err(|error| error.to_string())?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        return Err(format!(
+            "服务运行时校验失败\nstdout: {stdout}\nstderr: {stderr}"
+        ));
+    }
+
     Ok(())
 }
 
@@ -577,13 +699,59 @@ fn log_last_server_error(app: &AppHandle) {
 }
 
 fn start_embedded_server(app: &AppHandle) -> Result<Child, String> {
-    let script = resolve_server_script(app).ok_or_else(|| macos_resource_install_hint(app))?;
-    let server_dir = script.parent().ok_or("无效 server 目录")?.to_path_buf();
+    let packaged_script =
+        resolve_server_script(app).ok_or_else(|| macos_resource_install_hint(app))?;
+    let mut script =
+        prepare_embedded_server_bundle(app, &packaged_script, false).unwrap_or_else(|error| {
+            log::warn!(
+                "[DevFleet] 使用内置资源直接启动（{}），将跳过本地副本自愈: {}",
+                &packaged_script.display(),
+                error
+            );
+            packaged_script.clone()
+        });
+    let mut server_dir = script.parent().ok_or("无效 server 目录")?.to_path_buf();
+
     validate_embedded_bundle(&server_dir)?;
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let db_file = data_dir.join("devfleet.db");
+    let mut node = resolve_embedded_node(&server_dir)?;
+
+    let mut node_probe_success = false;
+    for attempt in 0..2 {
+        match probe_server_runtime(&node, &server_dir) {
+            Ok(()) => {
+                node_probe_success = true;
+                break;
+            }
+            Err(error) => {
+                if attempt == 0 {
+                    log::warn!("[DevFleet] embedded runtime probe 失败，重建本地副本重试：{error}");
+                    match prepare_embedded_server_bundle(app, &packaged_script, true) {
+                        Ok(rebuilt_script) => {
+                            script = rebuilt_script;
+                            server_dir = script.parent().ok_or("无效 server 目录")?.to_path_buf();
+                            node = resolve_embedded_node(&server_dir)?;
+                            continue;
+                        }
+                        Err(rebuilt_error) => {
+                            return Err(format!(
+                                "服务运行时预检失败：{error}。重建副本失败：{rebuilt_error}"
+                            ));
+                        }
+                    }
+                }
+                return Err(format!("服务运行时预检失败：{error}"));
+            }
+        }
+    }
+
+    if !node_probe_success {
+        return Err("服务运行时预检失败：重试后仍未通过".into());
+    }
+
     let node_modules = server_dir.join("node_modules");
-    let node = resolve_embedded_node(&server_dir)?;
+
     log::info!("[DevFleet] embedded server db: {}", db_file.display());
     log::info!("[DevFleet] embedded server node: {node}");
 
@@ -597,6 +765,7 @@ fn start_embedded_server(app: &AppHandle) -> Result<Child, String> {
         command.stdout(Stdio::null()).stderr(Stdio::null());
     }
     configure_embedded_server_command(&mut command);
+    let no_proxy = merge_no_proxy_entries(std::iter::empty::<&str>());
     command
         .current_dir(&server_dir)
         .arg(&script)
@@ -606,7 +775,9 @@ fn start_embedded_server(app: &AppHandle) -> Result<Child, String> {
         .env("DEVFLEET_DESKTOP", "1")
         .env("DEVFLEET_DATA_DIR", data_dir.to_string_lossy().into_owned())
         .env("DEVFLEET_DB_FILE", db_file.to_string_lossy().into_owned())
-        .env("NODE_PATH", node_modules.to_string_lossy().into_owned());
+        .env("NODE_PATH", node_modules.to_string_lossy().into_owned())
+        .env("NO_PROXY", &no_proxy)
+        .env("no_proxy", no_proxy);
 
     command
         .spawn()

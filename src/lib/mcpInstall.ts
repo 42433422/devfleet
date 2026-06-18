@@ -14,14 +14,66 @@ export type DevfleetMcpOptions = {
   token?: string;
 };
 
+const DEFAULT_NO_PROXY_ENTRIES = [
+  'localhost',
+  '127.0.0.1',
+  '::1',
+  '.local',
+  '*.local',
+  '10.0.0.0/8',
+  '172.16.0.0/12',
+  '192.168.0.0/16',
+  '169.254.0.0/16',
+  'fc00::/7',
+  'fe80::/10',
+] as const;
+
+function isLanNoProxyHost(host: string): boolean {
+  const normalized = host.trim().replace(/^\[/, '').replace(/\]$/, '').toLowerCase();
+  if (!normalized || normalized === 'localhost' || normalized.endsWith('.local')) return true;
+  const parts = normalized.split('.').map((part) => Number.parseInt(part, 10));
+  if (parts.length === 4 && parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)) {
+    return parts[0] === 10
+      || parts[0] === 127
+      || (parts[0] === 169 && parts[1] === 254)
+      || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31)
+      || (parts[0] === 192 && parts[1] === 168);
+  }
+  return normalized === '::1'
+    || normalized.startsWith('fc')
+    || normalized.startsWith('fd')
+    || normalized.startsWith('fe80:');
+}
+
+function lanHostFromUrl(value: string): string | null {
+  try {
+    const host = new URL(value).hostname;
+    return isLanNoProxyHost(host) ? host : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildNoProxyValue(apiUrl: string): string {
+  const entries: string[] = [...DEFAULT_NO_PROXY_ENTRIES];
+  const host = lanHostFromUrl(apiUrl);
+  if (host && !entries.some((entry) => entry.toLowerCase() === host.toLowerCase())) {
+    entries.push(host);
+  }
+  return entries.join(',');
+}
+
 export function buildDevfleetStdioConfig(options: DevfleetMcpOptions): McpStdioConfig {
   const apiUrl = String(options.apiUrl || '').trim().replace(/\/$/, '');
+  const noProxy = buildNoProxyValue(apiUrl);
   return {
     command: 'node',
     args: [options.mcpPath],
     env: {
       DEVFLEET_API_URL: apiUrl,
       DEVFLEET_TOKEN: String(options.token || '').trim(),
+      NO_PROXY: noProxy,
+      no_proxy: noProxy,
     },
   };
 }
@@ -120,11 +172,12 @@ export function buildCursorInstallLinks(options: DevfleetMcpOptions) {
 export function buildCodexMcpCommand(options: DevfleetMcpOptions, platform: 'windows' | 'unix' = 'unix'): string {
   const apiUrl = String(options.apiUrl || '').trim().replace(/\/$/, '');
   const token = String(options.token || '').trim();
+  const noProxy = buildNoProxyValue(apiUrl);
   const mcpPath = options.mcpPath;
   const quote = platform === 'windows'
     ? (value: string) => `"${value.replace(/"/g, '\\"')}"`
     : (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
-  return `codex mcp add ${DEVFLEET_MCP_SERVER_NAME} --env DEVFLEET_API_URL=${quote(apiUrl)} --env DEVFLEET_TOKEN=${quote(token)} -- node ${quote(mcpPath)}`;
+  return `codex mcp add ${DEVFLEET_MCP_SERVER_NAME} --env DEVFLEET_API_URL=${quote(apiUrl)} --env DEVFLEET_TOKEN=${quote(token)} --env NO_PROXY=${quote(noProxy)} --env no_proxy=${quote(noProxy)} -- node ${quote(mcpPath)}`;
 }
 
 /** 按平台返回 MCP 包默认解压路径 */

@@ -26,6 +26,11 @@ export interface Device {
   id: string;
   name: string;
   status: DeviceStatus;
+  linkHealth?: {
+    healthy: boolean;
+    reason: string;
+    lastReason?: string;
+  };
   devTool: ToolName;
   tools: ToolStatus[];
   capabilities?: DeviceCapabilities;

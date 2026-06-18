@@ -10,17 +10,52 @@ export type TunnelStatus = {
   url: string | null;
   provider: TunnelProvider | null;
   error: string | null;
+  desired: boolean;
+  restarting: boolean;
+  restartCount: number;
+  failureCount: number;
+  lastStartedAt: string | null;
+  lastCheckedAt: string | null;
+  lastHealthyAt: string | null;
+  lastStoppedAt: string | null;
+  nextRetryAt: string | null;
 };
 
 type ActiveTunnel = {
+  id: number;
   url: string;
   provider: TunnelProvider;
+  failureCount: number;
   close: () => Promise<void>;
 };
+
+type DesiredTunnel = {
+  port: number;
+  preferred: TunnelProvider | 'auto';
+};
+
+const TUNNEL_HEALTH_INTERVAL_MS = readPositiveInt('DEVFLEET_TUNNEL_HEALTH_INTERVAL_MS', 15_000);
+const TUNNEL_HEALTH_TIMEOUT_MS = readPositiveInt('DEVFLEET_TUNNEL_HEALTH_TIMEOUT_MS', 8_000);
+const TUNNEL_MAX_FAILURES = readPositiveInt('DEVFLEET_TUNNEL_MAX_FAILURES', 2);
+const TUNNEL_RESTART_BASE_MS = readPositiveInt('DEVFLEET_TUNNEL_RESTART_BASE_MS', 2_000);
+const TUNNEL_RESTART_MAX_MS = readPositiveInt('DEVFLEET_TUNNEL_RESTART_MAX_MS', 60_000);
 
 let activeTunnel: ActiveTunnel | null = null;
 let starting: Promise<ActiveTunnel> | null = null;
 let lastError: string | null = null;
+let desiredTunnel: DesiredTunnel | null = null;
+let healthTimer: ReturnType<typeof setInterval> | null = null;
+let restartTimer: ReturnType<typeof setTimeout> | null = null;
+let nextRetryAt: string | null = null;
+let restarting = false;
+let restartCount = 0;
+let restartBackoffAttempt = 0;
+let lastStartedAt: string | null = null;
+let lastCheckedAt: string | null = null;
+let lastHealthyAt: string | null = null;
+let lastStoppedAt: string | null = null;
+let tunnelSequence = 0;
+const intentionalCloseIds = new Set<number>();
 let cloudflaredDownloadPromise: Promise<string> | null = null;
 
 export function getTunnelStatus(): TunnelStatus {
@@ -29,6 +64,15 @@ export function getTunnelStatus(): TunnelStatus {
     url: activeTunnel?.url ?? null,
     provider: activeTunnel?.provider ?? null,
     error: lastError,
+    desired: Boolean(desiredTunnel),
+    restarting: restarting || Boolean(restartTimer),
+    restartCount,
+    failureCount: activeTunnel?.failureCount ?? 0,
+    lastStartedAt,
+    lastCheckedAt,
+    lastHealthyAt,
+    lastStoppedAt,
+    nextRetryAt,
   };
 }
 
@@ -36,11 +80,55 @@ export async function startBuiltinTunnel(
   port: number,
   preferred: TunnelProvider | 'auto' = 'auto',
 ): Promise<TunnelStatus> {
+  desiredTunnel = { port, preferred };
+  clearRestartTimer();
+
   if (activeTunnel) return getTunnelStatus();
   if (starting) {
-    await starting;
+    try {
+      await starting;
+    } catch (error) {
+      scheduleTunnelRestart(formatError(error));
+      throw error;
+    }
     return getTunnelStatus();
   }
+
+  try {
+    await openBuiltinTunnel(port, preferred);
+    restartBackoffAttempt = 0;
+  } catch (error) {
+    scheduleTunnelRestart(formatError(error));
+    throw error;
+  }
+  return getTunnelStatus();
+}
+
+export async function stopBuiltinTunnel(): Promise<TunnelStatus> {
+  desiredTunnel = null;
+  restarting = false;
+  clearRestartTimer();
+
+  if (starting) {
+    try {
+      await starting;
+    } catch {
+      // ignore start failure while stopping
+    }
+  }
+  const wasActive = Boolean(activeTunnel);
+  await closeActiveTunnel();
+  if (wasActive) {
+    console.log('[DevFleet] 内置穿透已关闭');
+  }
+  return getTunnelStatus();
+}
+
+async function openBuiltinTunnel(
+  port: number,
+  preferred: TunnelProvider | 'auto',
+): Promise<ActiveTunnel> {
+  if (starting) return starting;
 
   starting = (async () => {
     lastError = null;
@@ -50,15 +138,23 @@ export async function startBuiltinTunnel(
 
     let lastFailure = '无法启动内置穿透';
     for (const provider of providers) {
+      const id = ++tunnelSequence;
       try {
         const tunnel = provider === 'cloudflared'
-          ? await startCloudflared(port)
-          : await startLocaltunnel(port);
-        activeTunnel = tunnel;
+          ? await startCloudflared(port, (reason) => handleUnexpectedClose(id, reason))
+          : await startLocaltunnel(port, (reason) => handleUnexpectedClose(id, reason));
+        activeTunnel = {
+          ...tunnel,
+          id,
+          failureCount: 0,
+        };
+        lastStartedAt = new Date().toISOString();
+        lastStoppedAt = null;
         console.log(`[DevFleet] 内置穿透已开启 (${tunnel.provider}): ${tunnel.url}`);
-        return tunnel;
+        startHealthWatch();
+        return activeTunnel;
       } catch (error) {
-        lastFailure = error instanceof Error ? error.message : String(error);
+        lastFailure = formatError(error);
         console.warn(`[DevFleet] ${provider} 穿透失败:`, lastFailure);
       }
     }
@@ -67,37 +163,165 @@ export async function startBuiltinTunnel(
   })();
 
   try {
-    await starting;
+    return await starting;
   } finally {
     starting = null;
   }
-  return getTunnelStatus();
 }
 
-export async function stopBuiltinTunnel(): Promise<TunnelStatus> {
-  if (starting) {
-    try {
-      await starting;
-    } catch {
-      // ignore start failure while stopping
-    }
+async function closeActiveTunnel(): Promise<void> {
+  const current = activeTunnel;
+  if (!current) {
+    stopHealthWatch();
+    return;
   }
-  if (activeTunnel) {
-    try {
-      await activeTunnel.close();
-    } catch (error) {
-      console.warn('[DevFleet] 关闭内置穿透失败:', error);
-    }
-    activeTunnel = null;
-    console.log('[DevFleet] 内置穿透已关闭');
+
+  activeTunnel = null;
+  stopHealthWatch();
+  markIntentionalClose(current.id);
+  try {
+    await current.close();
+  } catch (error) {
+    console.warn('[DevFleet] 关闭内置穿透失败:', error);
+  } finally {
+    lastStoppedAt = new Date().toISOString();
   }
-  return getTunnelStatus();
 }
 
-async function startLocaltunnel(port: number): Promise<ActiveTunnel> {
+function handleUnexpectedClose(id: number, reason: string): void {
+  if (intentionalCloseIds.delete(id)) return;
+  if (!activeTunnel || activeTunnel.id !== id) return;
+
+  lastError = reason;
+  activeTunnel = null;
+  stopHealthWatch();
+  lastStoppedAt = new Date().toISOString();
+  console.warn('[DevFleet] 内置穿透异常中断:', reason);
+  scheduleTunnelRestart(reason);
+}
+
+function markIntentionalClose(id: number): void {
+  intentionalCloseIds.add(id);
+  const timer = setTimeout(() => {
+    intentionalCloseIds.delete(id);
+  }, 10_000);
+  unrefTimer(timer);
+}
+
+function scheduleTunnelRestart(reason: string): void {
+  if (!desiredTunnel || restartTimer) return;
+
+  lastError = reason;
+  restarting = true;
+  const delay = Math.min(
+    TUNNEL_RESTART_MAX_MS,
+    TUNNEL_RESTART_BASE_MS * (2 ** Math.min(restartBackoffAttempt, 5)),
+  );
+  restartBackoffAttempt += 1;
+  nextRetryAt = new Date(Date.now() + delay).toISOString();
+
+  restartTimer = setTimeout(() => {
+    restartTimer = null;
+    nextRetryAt = null;
+    void restartDesiredTunnel(reason);
+  }, delay);
+  unrefTimer(restartTimer);
+}
+
+async function restartDesiredTunnel(reason: string): Promise<void> {
+  if (!desiredTunnel) {
+    restarting = false;
+    return;
+  }
+
+  restartCount += 1;
+  const desired = desiredTunnel;
+  console.warn(`[DevFleet] 正在重启内置穿透：${reason}`);
+
+  await closeActiveTunnel();
+  try {
+    await openBuiltinTunnel(desired.port, desired.preferred);
+    restartBackoffAttempt = 0;
+    restarting = false;
+  } catch (error) {
+    restarting = false;
+    scheduleTunnelRestart(formatError(error));
+  }
+}
+
+function clearRestartTimer(): void {
+  if (!restartTimer) return;
+  clearTimeout(restartTimer);
+  restartTimer = null;
+  nextRetryAt = null;
+}
+
+function startHealthWatch(): void {
+  stopHealthWatch();
+  const timer = setInterval(() => {
+    void checkTunnelHealth();
+  }, TUNNEL_HEALTH_INTERVAL_MS);
+  unrefTimer(timer);
+  healthTimer = timer;
+  void checkTunnelHealth();
+}
+
+function stopHealthWatch(): void {
+  if (!healthTimer) return;
+  clearInterval(healthTimer);
+  healthTimer = null;
+}
+
+async function checkTunnelHealth(): Promise<void> {
+  const current = activeTunnel;
+  if (!current || !desiredTunnel || restarting) return;
+
+  lastCheckedAt = new Date().toISOString();
+  try {
+    await fetchTunnelHealth(current.url);
+    if (!activeTunnel || activeTunnel.id !== current.id) return;
+    current.failureCount = 0;
+    lastHealthyAt = new Date().toISOString();
+    if (lastError?.startsWith('公网通道健康检查失败')) {
+      lastError = null;
+    }
+  } catch (error) {
+    if (!activeTunnel || activeTunnel.id !== current.id) return;
+    current.failureCount += 1;
+    lastError = `公网通道健康检查失败 (${current.failureCount}/${TUNNEL_MAX_FAILURES})：${formatError(error)}`;
+    console.warn('[DevFleet]', lastError);
+    if (current.failureCount >= TUNNEL_MAX_FAILURES) {
+      await closeActiveTunnel();
+      scheduleTunnelRestart(lastError);
+    }
+  }
+}
+
+async function fetchTunnelHealth(url: string): Promise<void> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TUNNEL_HEALTH_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${url.replace(/\/+$/, '')}/api/health`, {
+      signal: controller.signal,
+      headers: {
+        'Bypass-Tunnel-Reminder': 'true',
+      },
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const body = await res.json().catch(() => null) as { success?: boolean } | null;
+    if (body && body.success === false) throw new Error('服务端健康检查返回失败');
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function startLocaltunnel(port: number, onClose: (reason: string) => void): Promise<Omit<ActiveTunnel, 'id' | 'failureCount'>> {
   const tunnel: Tunnel = await localtunnel({ port });
 
   if (!tunnel.url) throw new Error('localtunnel 未返回公网地址');
+
+  tunnel.once('close', () => onClose('localtunnel 连接已关闭'));
+  tunnel.once('error', (error: Error) => onClose(`localtunnel 错误：${error.message}`));
 
   return {
     url: tunnel.url,
@@ -108,13 +332,16 @@ async function startLocaltunnel(port: number): Promise<ActiveTunnel> {
   };
 }
 
-async function startCloudflared(port: number): Promise<ActiveTunnel> {
+async function startCloudflared(port: number, onClose: (reason: string) => void): Promise<Omit<ActiveTunnel, 'id' | 'failureCount'>> {
   const binary = await resolveCloudflaredBinary();
   const proc = spawn(binary, ['tunnel', '--url', `http://127.0.0.1:${port}`], {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
   const url = await waitForCloudflaredUrl(proc);
+  proc.once('exit', (code, signal) => {
+    onClose(`cloudflared 退出 (${signal || code || 'unknown'})`);
+  });
   return {
     url,
     provider: 'cloudflared',
@@ -132,6 +359,24 @@ async function startCloudflared(port: number): Promise<ActiveTunnel> {
       });
     },
   };
+}
+
+function readPositiveInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function formatError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+function unrefTimer(timer: ReturnType<typeof setTimeout> | ReturnType<typeof setInterval>): void {
+  if (typeof timer === 'object' && timer && 'unref' in timer && typeof timer.unref === 'function') {
+    timer.unref();
+  }
 }
 
 function getDataDir(): string {

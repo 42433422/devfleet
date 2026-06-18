@@ -24,11 +24,16 @@ test('MCP 服务公开真实多设备调度工具', async () => {
       'devfleet_computer_use_start_trae_task',
       'devfleet_computer_use_submit_trae_task',
       'devfleet_dispatch_task',
+      'devfleet_get_collab_session',
       'devfleet_get_task',
+      'devfleet_list_collab_sessions',
       'devfleet_list_devices',
       'devfleet_merge_task',
       'devfleet_next_task',
       'devfleet_report_task_progress',
+      'devfleet_send_collab_message',
+      'devfleet_start_collab_session',
+      'devfleet_wait_collab_message',
       'devfleet_wait_for_task',
     ]);
   } finally {

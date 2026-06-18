@@ -10,6 +10,7 @@ import {
   reconcileTask,
   rescheduleDeviceTasks,
 } from '../lib/dispatch.js';
+import { syncCollabMessageForSubtask } from '../lib/collab.js';
 import type { ToolStatusItem } from '../db/store.js';
 
 type ClientWS = WebSocket & {
@@ -284,7 +285,15 @@ export function attachWebSocket(wss: WSServer) {
             const progress = typeof msg.progress === 'number' ? Math.max(0, Math.min(100, msg.progress)) : sub.progress;
             const status = msg.status || (progress === 100 ? 'completed' : 'running');
             if (status === 'failed') {
-              handleSubTaskFailure(device.user_id, task.id, sub.id, '设备上报失败');
+              const finalSubTask = handleSubTaskFailure(device.user_id, task.id, sub.id, '设备上报失败') || sub;
+              const collab = syncCollabMessageForSubtask(sub.id, finalSubTask.status, msg.content || '设备上报失败');
+              if (collab) {
+                broadcast(device.user_id, {
+                  type: 'collab_message',
+                  session_id: collab.session.id,
+                  message: collab.assistantMessage || collab.userMessage,
+                });
+              }
               reconcileTask(device.user_id, task.id);
               return;
             }
@@ -304,6 +313,18 @@ export function attachWebSocket(wss: WSServer) {
               progress: updated.progress,
               status: updated.status,
             });
+            const collab = syncCollabMessageForSubtask(
+              sub.id,
+              updated.status,
+              msg.content || (updated.status === 'completed' ? '远端设备上报完成' : undefined),
+            );
+            if (collab) {
+              broadcast(device.user_id, {
+                type: 'collab_message',
+                session_id: collab.session.id,
+                message: collab.assistantMessage || collab.userMessage,
+              });
+            }
             if (status === 'completed') {
               dispatchReadySubs(device.user_id, task.id);
             }

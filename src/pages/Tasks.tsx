@@ -10,6 +10,7 @@ const statusConfig: Record<Task['status'], { bg: string; text: string; icon: Rea
   running: { bg: 'bg-green-500/10', text: 'text-green-400', icon: <Play size={10} /> },
   completed: { bg: 'bg-blue-500/10', text: 'text-blue-400', icon: <CheckCircle2 size={10} /> },
   failed: { bg: 'bg-red-500/10', text: 'text-red-400', icon: <XCircle size={10} /> },
+  merge_conflict: { bg: 'bg-amber-500/10', text: 'text-amber-400', icon: <AlertCircle size={10} /> },
   merged: { bg: 'bg-purple-500/10', text: 'text-purple-400', icon: <GitMerge size={10} /> },
 };
 
@@ -18,6 +19,7 @@ const statusText: Record<Task['status'], string> = {
   running: '运行中',
   completed: '已完成',
   failed: '失败',
+  merge_conflict: '合并冲突',
   merged: '已合并',
 };
 

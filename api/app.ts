@@ -5,6 +5,8 @@ import authRoutes from './routes/auth.js';
 import devicesRoutes from './routes/devices.js';
 import tasksRoutes from './routes/tasks.js';
 import tunnelRoutes from './routes/tunnel.js';
+import modsRoutes from './routes/mods.js';
+import collabRoutes from './routes/collab.js';
 
 const app = express();
 if (process.env.DEVFLEET_AUTH_DEBUG === '1') {
@@ -76,7 +78,9 @@ app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/devices/activate', activationLimiter);
 app.use('/api/devices', devicesRoutes);
 app.use('/api/tasks', tasksRoutes);
+app.use('/api/collab', collabRoutes);
 app.use('/api/tunnel', tunnelRoutes);
+app.use('/api/mods', modsRoutes);
 
 app.get('/api/health', (req: Request, res: Response): void => {
   res.status(200).json({
