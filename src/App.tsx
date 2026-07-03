@@ -18,6 +18,16 @@ import SupportedToolsCorner from '@/components/SupportedToolsCorner';
 import { resetDevApiBasePick } from '@/lib/api';
 import { PRODUCT_NAME } from '@/lib/brand';
 
+async function getDesktopServerLogHint(): Promise<string> {
+  if (!isDesktopApp()) return 'devfleet-server.log';
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<string>('get_embedded_server_log_path');
+  } catch {
+    return '应用数据目录下的 devfleet-server.log';
+  }
+}
+
 function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen bg-bg-primary text-zinc-200">
@@ -48,8 +58,9 @@ function Protected({ children }: { children: React.ReactNode }) {
             if (!fixed) {
               const retry = await waitForServerReady({ maxWaitMs: 10_000, intervalMs: 500 });
               if (!retry) {
+                const logHint = await getDesktopServerLogHint();
                 throw new Error(
-                  `本机 ${PRODUCT_NAME} 服务未在 ${DEFAULT_API_BASE} 就绪。请完全退出后重新打开应用；若仍失败，查看 ~/Library/Application Support/com.devfleet.desktop/devfleet-server.log`,
+                  `本机 ${PRODUCT_NAME} 服务未在 ${DEFAULT_API_BASE} 就绪。请完全退出后重新打开应用；若仍失败，查看 ${logHint}`,
                 );
               }
             }

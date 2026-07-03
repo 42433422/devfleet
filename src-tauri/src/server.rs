@@ -223,12 +223,14 @@ fn child_exited(app: &AppHandle) -> bool {
         return false;
     };
     match child.try_wait() {
-        Ok(Some(_status)) => {
+        Ok(Some(status)) => {
+            log::warn!("[DevFleet] embedded API child exited: {status}");
             *guard = None;
             true
         }
         Ok(None) => false,
-        Err(_) => {
+        Err(error) => {
+            log::warn!("[DevFleet] embedded API child status check failed: {error}");
             *guard = None;
             true
         }
@@ -370,6 +372,7 @@ fn server_healthy() -> bool {
 fn health_payload() -> Option<serde_json::Value> {
     const HEALTH_URL: &str = "http://127.0.0.1:3001/api/health";
     let client = reqwest::blocking::Client::builder()
+        .no_proxy()
         .timeout(Duration::from_millis(2000))
         .build()
         .ok()?;
@@ -428,7 +431,13 @@ fn process_alive(pid: i32) -> bool {
             .args(["/FI", &format!("PID eq {pid}")])
             .output()
             .ok()
-            .map(|output| output.status.success())
+            .filter(|output| output.status.success())
+            .map(|output| {
+                let needle = pid.to_string();
+                String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .any(|line| line.split_whitespace().any(|part| part == needle))
+            })
             .unwrap_or(false)
     }
 }
@@ -663,6 +672,20 @@ fn resolve_embedded_node(server_dir: &Path) -> Result<String, String> {
     ))
 }
 
+fn embedded_server_host() -> String {
+    if let Ok(host) = std::env::var("DEVFLEET_EMBEDDED_HOST") {
+        let host = host.trim();
+        if !host.is_empty() {
+            return host.to_string();
+        }
+    }
+    if cfg!(target_os = "windows") {
+        "127.0.0.1".into()
+    } else {
+        "0.0.0.0".into()
+    }
+}
+
 fn open_server_log(data_dir: &Path) -> Option<File> {
     if let Err(error) = std::fs::create_dir_all(data_dir) {
         log::error!(
@@ -770,11 +793,12 @@ fn start_embedded_server(app: &AppHandle) -> Result<Child, String> {
     configure_embedded_server_command(&mut command);
     configure_embedded_server_environment(&mut command);
     let no_proxy = merge_no_proxy_entries(std::iter::empty::<&str>());
+    let host = embedded_server_host();
     command
         .current_dir(&server_dir)
         .arg(&script)
         .env("PORT", "3001")
-        .env("DEVFLEET_HOST", "0.0.0.0")
+        .env("DEVFLEET_HOST", &host)
         .env("DEVFLEET_DESKTOP", "1")
         .env("DEVFLEET_DATA_DIR", data_dir.to_string_lossy().into_owned())
         .env("DEVFLEET_DB_FILE", db_file.to_string_lossy().into_owned())
@@ -796,9 +820,7 @@ fn start_embedded_server(app: &AppHandle) -> Result<Child, String> {
             msg
         })
         .inspect(|_| {
-            log::info!(
-                "[DevFleet] starting embedded API server on http://0.0.0.0:3001 (LAN enabled)"
-            );
+            log::info!("[DevFleet] starting embedded API server on http://{host}:3001");
         })
 }
 

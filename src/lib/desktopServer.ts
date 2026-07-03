@@ -7,7 +7,7 @@ import { wsClient } from '@/lib/websocket';
 const invokeRestart = async () => {
   if (!isDesktopApp()) return;
   const { invoke } = await import('@tauri-apps/api/core');
-  await invoke('restart_embedded_server');
+  await invoke('restart_embedded_server_cmd');
 };
 
 /** 桌面端：探测本机 API，不可达时触发 Rust 侧重启 embedded server */
@@ -17,7 +17,7 @@ export async function recoverDesktopBackend(): Promise<boolean> {
   try {
     await invokeRestart();
   } catch (error) {
-    console.warn('[DevFleet] restart_embedded_server failed', error);
+    console.warn('[DevFleet] restart_embedded_server_cmd failed', error);
   }
   const ready = await waitForServerReady({ maxWaitMs: 20_000, intervalMs: 500 });
   if (ready) {
