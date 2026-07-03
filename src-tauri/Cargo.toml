@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "1.4.21"
+version = "1.4.22"
 description = "Paibi Para multi-device coding controller and worker agent"
 authors = ["PaibiPara"]
 license = "MIT"

@@ -59,6 +59,12 @@ pub fn cold_start_desktop_api(app: &AppHandle) -> Result<(), String> {
     enforce_single_instance(&data_dir);
     stop_child(app);
     force_clear_port_for_embedded(None);
+    if server_healthy() {
+        log::warn!(
+            "[DevFleet] embedded API already healthy after cold-start cleanup; reusing listener"
+        );
+        return Ok(());
+    }
 
     let child = start_embedded_server(app).map_err(|error| {
         store_cold_start_error(&error);
@@ -106,6 +112,12 @@ pub fn restart_embedded_server(app: &AppHandle) {
     log::info!("[DevFleet] manual embedded server restart requested");
     stop_child(app);
     force_clear_port_for_embedded(None);
+    if server_healthy() {
+        log::warn!(
+            "[DevFleet] embedded API already healthy after restart cleanup; reusing listener"
+        );
+        return;
+    }
     match start_embedded_server(app) {
         Ok(child) => {
             if let Some(state) = app.try_state::<EmbeddedServer>() {

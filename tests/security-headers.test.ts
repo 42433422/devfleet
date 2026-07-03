@@ -25,6 +25,12 @@ test('API 返回 CSP 头并拒绝未知 CORS Origin', async () => {
     const csp = health.headers.get('content-security-policy');
     assert.ok(csp?.includes("default-src 'none'"));
 
+    const webviewOrigin = await fetch(`${baseUrl}/api/health`, {
+      headers: { Origin: 'http://tauri.localhost' },
+    });
+    assert.equal(webviewOrigin.status, 200);
+    assert.equal(webviewOrigin.headers.get('access-control-allow-origin'), 'http://tauri.localhost');
+
     const blocked = await fetch(`${baseUrl}/api/health`, {
       headers: { Origin: 'https://evil.example.com' },
     });
