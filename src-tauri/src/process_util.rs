@@ -245,6 +245,56 @@ pub fn configure_embedded_server_command(command: &mut Command) {
     }
 }
 
+pub fn configure_embedded_server_environment(command: &mut Command) {
+    command.env_clear();
+    preserve_windows_process_environment(command);
+}
+
+#[cfg(target_os = "windows")]
+fn preserve_windows_process_environment(command: &mut Command) {
+    for key in WINDOWS_EMBEDDED_ENV_KEYS {
+        if let Ok(value) = std::env::var(key) {
+            command.env(key, value);
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn preserve_windows_process_environment(_command: &mut Command) {}
+
+#[cfg(target_os = "windows")]
+const WINDOWS_EMBEDDED_ENV_KEYS: &[&str] = &[
+    "ALLUSERSPROFILE",
+    "APPDATA",
+    "COMSPEC",
+    "CommonProgramFiles",
+    "CommonProgramFiles(x86)",
+    "CommonProgramW6432",
+    "LOCALAPPDATA",
+    "NUMBER_OF_PROCESSORS",
+    "OS",
+    "PATH",
+    "PATHEXT",
+    "PROCESSOR_ARCHITECTURE",
+    "PROCESSOR_IDENTIFIER",
+    "PROCESSOR_LEVEL",
+    "PROCESSOR_REVISION",
+    "ProgramData",
+    "ProgramFiles",
+    "ProgramFiles(x86)",
+    "ProgramW6432",
+    "PUBLIC",
+    "SystemDrive",
+    "SystemRoot",
+    "TEMP",
+    "TMP",
+    "USERDOMAIN",
+    "USERNAME",
+    "USERPROFILE",
+    "WINDIR",
+    "windir",
+];
+
 pub fn merge_no_proxy_entries<'a>(extra_entries: impl IntoIterator<Item = &'a str>) -> String {
     let mut entries: Vec<String> = ["NO_PROXY", "no_proxy"]
         .into_iter()
@@ -385,7 +435,9 @@ pub fn ensure_current_user_startup(app_name: &str) -> Result<(), String> {
 
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        return Err(format!("写入 Windows 自启动失败\nstdout: {stdout}\nstderr: {stderr}"));
+        return Err(format!(
+            "写入 Windows 自启动失败\nstdout: {stdout}\nstderr: {stderr}"
+        ));
     }
 
     #[cfg(not(target_os = "windows"))]

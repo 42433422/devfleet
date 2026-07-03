@@ -10,8 +10,9 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
 use crate::process_util::{
-    configure_embedded_server_command, merge_no_proxy_entries, resolve_bundled_node,
-    resolve_bundled_resource, resolve_node_executable,
+    configure_embedded_server_command, configure_embedded_server_environment,
+    merge_no_proxy_entries, resolve_bundled_node, resolve_bundled_resource,
+    resolve_node_executable,
 };
 
 const EMBEDDED_API_PORT: u16 = 3001;
@@ -615,13 +616,15 @@ fn prepare_embedded_server_bundle(
 }
 
 fn probe_server_runtime(node: &str, server_dir: &Path) -> Result<(), String> {
-    let output = StdCommand::new(node)
+    let mut command = StdCommand::new(node);
+    configure_embedded_server_command(&mut command);
+    configure_embedded_server_environment(&mut command);
+    let output = command
         .current_dir(server_dir)
         .args([
             "-e",
             "require('better-sqlite3'); console.log('devfleet-better-sqlite3-ok')",
         ])
-        .env_clear()
         .env(
             "NODE_PATH",
             server_dir
@@ -765,11 +768,11 @@ fn start_embedded_server(app: &AppHandle) -> Result<Child, String> {
         command.stdout(Stdio::null()).stderr(Stdio::null());
     }
     configure_embedded_server_command(&mut command);
+    configure_embedded_server_environment(&mut command);
     let no_proxy = merge_no_proxy_entries(std::iter::empty::<&str>());
     command
         .current_dir(&server_dir)
         .arg(&script)
-        .env_clear()
         .env("PORT", "3001")
         .env("DEVFLEET_HOST", "0.0.0.0")
         .env("DEVFLEET_DESKTOP", "1")
