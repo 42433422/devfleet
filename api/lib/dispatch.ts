@@ -24,6 +24,17 @@ function parseUpdatedAt(updatedAt?: string) {
   return Number.isNaN(ms) ? null : ms;
 }
 
+function isSelfMaintenanceSubTask(sub: SubTask): boolean {
+  const text = `${sub.title || ''}\n${sub.description || ''}`.toLowerCase();
+  return text.includes('self-maintenance') || text.includes('modstore self-maintenance');
+}
+
+export function comparePendingDispatchOrder(a: SubTask, b: SubTask): number {
+  const priority = Number(isSelfMaintenanceSubTask(a)) - Number(isSelfMaintenanceSubTask(b));
+  if (priority !== 0) return -priority;
+  return a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id);
+}
+
 export function parseDependsOn(value: unknown): string[] {
   if (Array.isArray(value)) return value.map(String);
   if (typeof value === 'string') {
@@ -166,7 +177,9 @@ export function dispatchReadySubs(userId: string, taskId: string): number {
 /** 设备 WebSocket 上线后，补发此前因离线而未 execute_task 的 pending 子任务。 */
 export function dispatchPendingForDevice(userId: string, deviceId: string): string[] {
   if (!hasDevice(deviceId)) return [];
-  const subs = db.subTasks.findAllByDeviceId(deviceId).filter((sub) => sub.status === 'pending');
+  const subs = db.subTasks.findAllByDeviceId(deviceId)
+    .filter((sub) => sub.status === 'pending')
+    .sort(comparePendingDispatchOrder);
   const touched = new Set<string>();
   for (const sub of subs) {
     const task = db.tasks.findById(sub.task_id);
