@@ -49,7 +49,11 @@ const TERMINAL_REMOTE_COMMAND_STATUSES = new Set<RemoteCommand['status']>([
   'cancelled',
 ]);
 const HEARTBEAT_MS = Number(process.env.DEVFLEET_WS_HEARTBEAT_MS) || 30_000;
-const PONG_TIMEOUT_MS = Number(process.env.DEVFLEET_WS_PONG_TIMEOUT_MS) || 10_000;
+export function resolvePongTimeoutMs(value: unknown = process.env.DEVFLEET_WS_PONG_TIMEOUT_MS): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 60_000;
+}
+const PONG_TIMEOUT_MS = resolvePongTimeoutMs();
 const REMOTE_COMMAND_TIMEOUT_GRACE_MS = Number(process.env.DEVFLEET_REMOTE_COMMAND_TIMEOUT_GRACE_MS) || 5_000;
 const DEVICE_LINK_HEALTHY_MS = Number(process.env.DEVFLEET_DEVICE_LINK_HEALTHY_MS)
   || (HEARTBEAT_MS * 2 + PONG_TIMEOUT_MS + 5_000);
@@ -94,6 +98,11 @@ function schedulePongTimeout(ws: ClientWS) {
 
 function markDeviceLinkHealthy(deviceId: string, reason: string) {
   const now = Date.now();
+  const socket = deviceWS.get(deviceId) as ClientWS | undefined;
+  if (socket?._pongTimer) {
+    clearTimeout(socket._pongTimer);
+    socket._pongTimer = undefined;
+  }
   const state = deviceLinks.get(deviceId);
   if (state) {
     state.lastSeenMs = now;

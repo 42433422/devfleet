@@ -12,6 +12,7 @@ import {
   reapStaleRunningSubtasks,
 } from '../api/lib/dispatch.js';
 import { splitTaskIntoSubs } from '../api/lib/utils.js';
+import { resolvePongTimeoutMs } from '../api/websocket/manager.js';
 
 test('parseCapabilities 解析 JSON 字符串', () => {
   const caps = parseCapabilities('{"node_version":"v22.0.0","docker":true,"gpu":false}');
@@ -80,6 +81,13 @@ test('self-maintenance 子任务优先于普通积压且同级保持 FIFO', () =
   assert.ok(comparePendingDispatchOrder(maintenance, normalOlder) < 0);
   assert.ok(comparePendingDispatchOrder(normalOlder, maintenance) > 0);
   assert.ok(comparePendingDispatchOrder(normalOlder, normalNewer) < 0);
+});
+
+test('WebSocket pong 超时容忍短时事件循环阻塞且保留显式覆盖', () => {
+  assert.equal(resolvePongTimeoutMs(undefined), 60_000);
+  assert.equal(resolvePongTimeoutMs(''), 60_000);
+  assert.equal(resolvePongTimeoutMs('invalid'), 60_000);
+  assert.equal(resolvePongTimeoutMs('15000'), 15_000);
 });
 
 test('run 超时的 running 子任务会被回收为重试/失败', async () => {
