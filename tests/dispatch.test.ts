@@ -6,6 +6,7 @@ import test from 'node:test';
 import { parseCapabilities, formatCapabilitiesSummary } from '../api/lib/capabilities.js';
 import {
   areDependenciesMet,
+  comparePendingDispatchOrder,
   isSubBlocked,
   parseDependsOn,
   reapStaleRunningSubtasks,
@@ -54,6 +55,31 @@ test('parseDependsOn 支持数组与 JSON 字符串', () => {
   assert.deepEqual(parseDependsOn(['a', 'b']), ['a', 'b']);
   assert.deepEqual(parseDependsOn('["x"]'), ['x']);
   assert.deepEqual(parseDependsOn('invalid'), []);
+});
+
+test('self-maintenance 子任务优先于普通积压且同级保持 FIFO', () => {
+  const normalOlder = {
+    id: 'normal-older',
+    title: '处理普通事故',
+    description: 'regular incident',
+    created_at: '2026-07-23T10:00:00Z',
+  } as never;
+  const normalNewer = {
+    id: 'normal-newer',
+    title: '处理普通事故 2',
+    description: 'regular incident',
+    created_at: '2026-07-23T10:01:00Z',
+  } as never;
+  const maintenance = {
+    id: 'maintenance',
+    title: 'Review the self-maintenance loop',
+    description: 'MODSTORE_REPORT_ONLY=1',
+    created_at: '2026-07-23T10:02:00Z',
+  } as never;
+
+  assert.ok(comparePendingDispatchOrder(maintenance, normalOlder) < 0);
+  assert.ok(comparePendingDispatchOrder(normalOlder, maintenance) > 0);
+  assert.ok(comparePendingDispatchOrder(normalOlder, normalNewer) < 0);
 });
 
 test('run 超时的 running 子任务会被回收为重试/失败', async () => {
