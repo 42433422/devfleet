@@ -89,6 +89,7 @@ jobs:
             - **自托管服务端**: 下载与系统匹配的 `devfleet-server-<platform>.zip`（已内置 Node.js 22）或使用仓库中的 Docker Compose
 
             ### 新功能
+            - Windows 后台探测和命令执行不再弹出控制台窗口
             - 主设备可向在线工作设备下发受控远程命令/脚本，回传日志、退出码和输出
             - MCP 新增 `devfleet_run_remote_command`，Codex 可直接让 Win32/Mac 工作设备执行本机 CLI
             - Agent 远程命令执行使用软/硬超时，避免 CLI 卡死长期占用设备

@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use crate::process_util::std_command;
 
 const TRAE_BUNDLE_NAMES: [&str; 4] = [
     "Trae CN.app",
@@ -241,7 +241,7 @@ end tell"#
 
 #[cfg(target_os = "macos")]
 fn run_osascript_capture(script: &str) -> Result<String, String> {
-    let output = Command::new("/usr/bin/osascript")
+    let output = std_command("/usr/bin/osascript")
         .arg("-e")
         .arg(script)
         .output()
@@ -289,7 +289,7 @@ fn wait_for_trae_workspace_window(
 
 #[cfg(target_os = "macos")]
 fn run_osascript(script: &str) -> Result<(), String> {
-    let output = Command::new("/usr/bin/osascript")
+    let output = std_command("/usr/bin/osascript")
         .arg("-e")
         .arg(script)
         .output()
@@ -332,7 +332,7 @@ fn run_powershell_script(
     workspace: &Path,
     prompt_file: &Path,
 ) -> Result<(), String> {
-    let output = Command::new("powershell.exe")
+    let output = std_command("powershell.exe")
         .arg("-NoProfile")
         .arg("-NonInteractive")
         .arg("-ExecutionPolicy")

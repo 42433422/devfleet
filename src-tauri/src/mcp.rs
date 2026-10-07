@@ -1,12 +1,11 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
-
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 use tauri::{AppHandle, Manager};
 
 use crate::process_util::{
     lan_no_proxy_hosts_from_values, merge_no_proxy_entries, resolve_bundled_resource,
+    std_command,
 };
 
 const SERVER_NAME: &str = "devfleet";
@@ -224,7 +223,7 @@ fn inspect_codex(options: &McpOptions<'_>) -> Result<Option<(bool, String)>, Str
     let Some(codex) = find_client_executable("codex") else {
         return Ok(None);
     };
-    let output = Command::new(&codex)
+    let output = std_command(&codex)
         .args(["mcp", "get", SERVER_NAME, "--json"])
         .output()
         .map_err(|error| format!("Codex 配置检测失败: {error}"))?;
@@ -272,18 +271,18 @@ fn inspect_json_paths(
 fn install_codex(options: &McpOptions<'_>, node: &str) -> Result<(), String> {
     let codex = find_client_executable("codex")
         .ok_or_else(|| "未检测到 Codex CLI，请先安装或登录 Codex".to_string())?;
-    let current = Command::new(&codex)
+    let current = std_command(&codex)
         .args(["mcp", "get", SERVER_NAME, "--json"])
         .output()
         .map_err(|error| format!("Codex 配置检测失败: {error}"))?;
     if current.status.success() {
-        let _ = Command::new(&codex)
+        let _ = std_command(&codex)
             .args(["mcp", "remove", SERVER_NAME])
             .output();
     }
 
     let no_proxy = mcp_no_proxy_value(options);
-    let output = Command::new(&codex)
+    let output = std_command(&codex)
         .args([
             "mcp",
             "add",
@@ -328,10 +327,10 @@ fn install_claude(options: &McpOptions<'_>, node: &str) -> Result<(), String> {
     let claude = find_client_executable("claude_code")
         .ok_or_else(|| "未检测到 Claude Code CLI，请先安装 Claude Code".to_string())?;
     let config = json_server_config(options, node).to_string();
-    let _ = Command::new(&claude)
+    let _ = std_command(&claude)
         .args(["mcp", "remove", SERVER_NAME, "--scope", "user"])
         .output();
-    let output = Command::new(&claude)
+    let output = std_command(&claude)
         .args(["mcp", "add-json", SERVER_NAME, &config, "--scope", "user"])
         .output()
         .map_err(|error| format!("无法执行 Claude Code CLI: {error}"))?;
@@ -582,7 +581,7 @@ fn find_executable(binary: &str) -> Option<String> {
 
     #[cfg(not(target_os = "windows"))]
     {
-        if let Ok(output) = Command::new("which")
+        if let Ok(output) = std_command("which")
             .arg(binary)
             .env("PATH", expanded_path())
             .output()
@@ -600,7 +599,7 @@ fn find_executable(binary: &str) -> Option<String> {
 
     #[cfg(target_os = "windows")]
     {
-        if let Ok(output) = Command::new("where").arg(binary).output() {
+        if let Ok(output) = std_command("where").arg(binary).output() {
             if output.status.success() {
                 if let Some(path) = String::from_utf8_lossy(&output.stdout).lines().next() {
                     let path = path.trim();

@@ -3,6 +3,19 @@ use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+/// Windows 上创建子进程时不分配控制台，避免周期探测把命令行窗口弹出来。
+pub fn std_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut command = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+}
+
+
 use tauri::{AppHandle, Manager};
 use url::Url;
 
@@ -186,7 +199,7 @@ fn macos_embedded_node_paths() -> Vec<String> {
 }
 
 fn node_module_version(node_path: &str) -> Option<u32> {
-    let output = Command::new(node_path)
+    let output = std_command(node_path)
         .arg("-pe")
         .arg("process.versions.modules")
         .output()
@@ -200,7 +213,7 @@ fn node_module_version(node_path: &str) -> Option<u32> {
 fn which_executable(binary: &str) -> Option<String> {
     #[cfg(target_os = "windows")]
     {
-        let output = Command::new("where").arg(binary).output().ok()?;
+        let output = std_command("where").arg(binary).output().ok()?;
         if !output.status.success() {
             return None;
         }
@@ -214,7 +227,7 @@ fn which_executable(binary: &str) -> Option<String> {
 
     #[cfg(not(target_os = "windows"))]
     {
-        let output = Command::new("which")
+        let output = std_command("which")
             .arg(binary)
             .env(
                 "PATH",
@@ -413,7 +426,7 @@ pub fn ensure_current_user_startup(app_name: &str) -> Result<(), String> {
         }
 
         let startup_value = format!("\"{}\"", exe.display());
-        let output = Command::new("reg")
+        let output = std_command("reg")
             .args([
                 "add",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",

@@ -1,6 +1,6 @@
 use std::net::UdpSocket;
 use std::path::Path;
-use std::process::Command as StdCommand;
+use crate::process_util::std_command;
 
 fn is_allowed_external_url(url: &str) -> bool {
     let lower = url.to_ascii_lowercase();
@@ -29,7 +29,7 @@ fn app_installed(name: &str) -> bool {
 }
 
 fn open_with_status(args: &[&str]) -> Result<(), String> {
-    let status = StdCommand::new("/usr/bin/open")
+    let status = std_command("/usr/bin/open")
         .args(args)
         .status()
         .map_err(|e| format!("无法调用系统 open 命令: {e}"))?;
@@ -105,7 +105,7 @@ fn open_with_app_dir(name: &str, url: &str) -> Result<(), String> {
 
 #[cfg(target_os = "windows")]
 fn open_on_windows(url: &str) -> Result<(), String> {
-    let status = StdCommand::new("cmd")
+    let status = std_command("cmd")
         .args(["/C", "start", "", url])
         .status()
         .map_err(|e| e.to_string())?;
@@ -121,7 +121,7 @@ fn open_on_windows(url: &str) -> Result<(), String> {
 
 #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 fn open_on_linux(url: &str) -> Result<(), String> {
-    let status = StdCommand::new("xdg-open")
+    let status = std_command("xdg-open")
         .arg(url)
         .status()
         .map_err(|e| e.to_string())?;

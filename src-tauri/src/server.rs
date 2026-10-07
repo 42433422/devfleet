@@ -1,7 +1,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command as StdCommand, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::thread;
@@ -12,7 +12,7 @@ use tauri::{AppHandle, Manager};
 use crate::process_util::{
     configure_embedded_server_command, configure_embedded_server_environment,
     merge_no_proxy_entries, resolve_bundled_node, resolve_bundled_resource,
-    resolve_node_executable,
+    resolve_node_executable, std_command,
 };
 
 const EMBEDDED_API_PORT: u16 = 3001;
@@ -283,7 +283,7 @@ fn child_pid(app: &AppHandle) -> Option<u32> {
 fn kill_stale_listeners_on_port(port: u16, except_pid: Option<u32>) {
     #[cfg(unix)]
     {
-        let output = StdCommand::new("lsof")
+        let output = std_command("lsof")
             .args(["-ti", &format!("tcp:{port}"), "-sTCP:LISTEN"])
             .output();
         let Ok(output) = output else {
@@ -312,7 +312,7 @@ fn kill_stale_listeners_on_port(port: u16, except_pid: Option<u32>) {
     }
     #[cfg(windows)]
     {
-        let output = StdCommand::new("netstat").args(["-ano"]).output();
+        let output = std_command("netstat").args(["-ano"]).output();
         let Ok(output) = output else {
             return;
         };
@@ -438,8 +438,7 @@ fn process_alive(pid: i32) -> bool {
     }
     #[cfg(windows)]
     {
-        use std::process::Command as Cmd;
-        Cmd::new("tasklist")
+        std_command("tasklist")
             .args(["/FI", &format!("PID eq {pid}")])
             .output()
             .ok()
@@ -461,7 +460,7 @@ fn terminate_process(pid: i32) {
     }
     #[cfg(windows)]
     {
-        let _ = StdCommand::new("taskkill")
+        let _ = std_command("taskkill")
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .output();
     }
@@ -478,7 +477,7 @@ fn purge_orphan_devfleet_api_processes(except_pid: Option<u32>) {
 fn purge_processes_matching(pattern: &str, except_pid: Option<u32>) {
     #[cfg(unix)]
     {
-        let output = StdCommand::new("pgrep").args(["-f", pattern]).output();
+        let output = std_command("pgrep").args(["-f", pattern]).output();
         let Ok(output) = output else {
             return;
         };
@@ -501,7 +500,7 @@ fn purge_processes_matching(pattern: &str, except_pid: Option<u32>) {
         let ps = format!(
             "Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -like '*{pattern}*' }} | Select-Object -ExpandProperty ProcessId"
         );
-        let output = StdCommand::new("powershell")
+        let output = std_command("powershell")
             .args(["-NoProfile", "-Command", &ps])
             .output();
         if let Ok(output) = output {
@@ -637,7 +636,7 @@ fn prepare_embedded_server_bundle(
 }
 
 fn probe_server_runtime(node: &str, server_dir: &Path) -> Result<(), String> {
-    let mut command = StdCommand::new(node);
+    let mut command = std_command(node);
     configure_embedded_server_command(&mut command);
     configure_embedded_server_environment(&mut command);
     let output = command
@@ -793,7 +792,7 @@ fn start_embedded_server(app: &AppHandle) -> Result<Child, String> {
     log::info!("[DevFleet] embedded server db: {}", db_file.display());
     log::info!("[DevFleet] embedded server node: {node}");
 
-    let mut command = StdCommand::new(&node);
+    let mut command = std_command(&node);
     if let Some(log_file) = open_server_log(&data_dir) {
         if let Ok(stdout) = log_file.try_clone() {
             command.stdout(Stdio::from(stdout));

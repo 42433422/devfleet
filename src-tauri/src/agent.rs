@@ -1,5 +1,5 @@
 use crate::computer_use;
-use crate::process_util::merge_no_proxy_entries;
+use crate::process_util::{merge_no_proxy_entries, std_command};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -7,7 +7,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     net::IpAddr,
     path::{Path, PathBuf},
-    process::{Command as StdCommand, Stdio},
+    process::Stdio,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
@@ -1905,7 +1905,7 @@ fn default_agent_workspace_root() -> PathBuf {
 }
 
 fn local_device_name() -> String {
-    StdCommand::new("hostname")
+    std_command("hostname")
         .output()
         .ok()
         .and_then(|output| String::from_utf8(output.stdout).ok())
@@ -1985,7 +1985,7 @@ fn scan_tools(current_task: Option<&str>, active_dev_tool: Option<&str>) -> Vec<
 }
 
 fn probe_capabilities() -> Value {
-    let node_version = StdCommand::new("node")
+    let node_version = std_command("node")
         .arg("-v")
         .output()
         .ok()
@@ -1993,7 +1993,7 @@ fn probe_capabilities() -> Value {
         .map(|version| version.trim().to_string())
         .filter(|version| !version.is_empty());
 
-    let docker_output = StdCommand::new("docker").arg("--version").output().ok();
+    let docker_output = std_command("docker").arg("--version").output().ok();
     let docker = docker_output
         .as_ref()
         .map(|output| output.status.success())
@@ -2019,7 +2019,7 @@ fn probe_capabilities() -> Value {
 fn detect_gpu() -> (bool, Option<String>) {
     #[cfg(target_os = "macos")]
     {
-        if let Ok(output) = StdCommand::new("system_profiler")
+        if let Ok(output) = std_command("system_profiler")
             .args(["SPDisplaysDataType"])
             .output()
         {
@@ -2038,7 +2038,7 @@ fn detect_gpu() -> (bool, Option<String>) {
 
     #[cfg(not(target_os = "macos"))]
     {
-        if let Ok(output) = StdCommand::new("nvidia-smi")
+        if let Ok(output) = std_command("nvidia-smi")
             .args(["--query-gpu=name", "--format=csv,noheader"])
             .output()
         {
@@ -2056,11 +2056,11 @@ fn detect_gpu() -> (bool, Option<String>) {
 
 fn process_list() -> String {
     #[cfg(target_os = "windows")]
-    let output = StdCommand::new("tasklist")
+    let output = std_command("tasklist")
         .args(["/FO", "CSV", "/NH"])
         .output();
     #[cfg(not(target_os = "windows"))]
-    let output = StdCommand::new("ps").args(["-A", "-o", "comm="]).output();
+    let output = std_command("ps").args(["-A", "-o", "comm="]).output();
     output
         .map(|result| String::from_utf8_lossy(&result.stdout).to_lowercase())
         .unwrap_or_default()
@@ -2142,7 +2142,7 @@ fn find_executable(tool: &str) -> Option<String> {
     };
     #[cfg(target_os = "windows")]
     {
-        if let Ok(output) = StdCommand::new("where").arg(binary).output() {
+        if let Ok(output) = std_command("where").arg(binary).output() {
             if output.status.success() {
                 if let Some(path) = String::from_utf8_lossy(&output.stdout).lines().next() {
                     return Some(path.trim().to_string());
@@ -2174,7 +2174,7 @@ fn find_executable(tool: &str) -> Option<String> {
         if let Some(path) = user_local_bin_executable(binary) {
             return Some(path);
         }
-        if let Ok(output) = StdCommand::new("which").arg(binary).output() {
+        if let Ok(output) = std_command("which").arg(binary).output() {
             if output.status.success() {
                 return Some(String::from_utf8_lossy(&output.stdout).trim().to_string());
             }
@@ -2241,7 +2241,7 @@ fn launch_tool_for(tool: &str, workspace: &Path) -> Result<(), String> {
         find_executable(tool)
     }
     .ok_or_else(|| format!("未找到 {tool} 可执行文件"))?;
-    StdCommand::new(executable)
+    std_command(executable)
         .arg(workspace)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -3138,13 +3138,13 @@ fn kill_process_tree_unix(pid: u32, hard: bool) -> bool {
     let pid_s = pid.to_string();
     let signal = if hard { "KILL" } else { "TERM" };
 
-    let _ = StdCommand::new("pkill")
+    let _ = std_command("pkill")
         .arg(format!("-{signal}"))
         .arg("-P")
         .arg(&pid_s)
         .status();
 
-    let _ = StdCommand::new("kill")
+    let _ = std_command("kill")
         .arg(format!("-{signal}"))
         .arg(&pid_s)
         .status();
@@ -3154,7 +3154,7 @@ fn kill_process_tree_unix(pid: u32, hard: bool) -> bool {
 #[cfg(windows)]
 fn kill_process_tree_windows(pid: u32, _hard: bool) -> bool {
     let pid_s = pid.to_string();
-    let status = StdCommand::new("taskkill")
+    let status = std_command("taskkill")
         .args(["/PID", &pid_s, "/T", "/F"])
         .status()
         .ok();
@@ -3278,7 +3278,7 @@ async fn run_codex_agent(cwd: &Path, prompt: &str) -> Result<String, String> {
 fn find_binary_in_path(binary: &str) -> Option<String> {
     #[cfg(target_os = "windows")]
     {
-        if let Ok(output) = StdCommand::new("where").arg(binary).output() {
+        if let Ok(output) = std_command("where").arg(binary).output() {
             if output.status.success() {
                 if let Some(path) = String::from_utf8_lossy(&output.stdout).lines().next() {
                     let trimmed = path.trim().to_string();
@@ -3295,7 +3295,7 @@ fn find_binary_in_path(binary: &str) -> Option<String> {
         if let Some(path) = user_local_bin_executable(binary) {
             return Some(path);
         }
-        if let Ok(output) = StdCommand::new("which").arg(binary).output() {
+        if let Ok(output) = std_command("which").arg(binary).output() {
             if output.status.success() {
                 let trimmed = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if !trimmed.is_empty() {
@@ -3349,6 +3349,12 @@ async fn run_command_timed_observed(
     let (soft_timeout, hard_timeout) = command_timeouts(timeout);
     let command_line = format_command(program, args);
     let mut command = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
     command
         .args(args)
         .kill_on_drop(true)
